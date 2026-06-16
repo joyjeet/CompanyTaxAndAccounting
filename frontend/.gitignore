@@ -1,0 +1,14 @@
+# Build output
+dist/
+node_modules/
+
+# Editor / OS
+.DS_Store
+*.log
+
+# Local env
+.env
+.env.local
+
+# Test artifacts
+coverage/

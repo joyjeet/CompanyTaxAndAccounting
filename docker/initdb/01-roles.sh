@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Run by the official postgres image on first container start.
+# Creates an owner role (for migrations) and an app_user role (for runtime).
+# Both are NOSUPERUSER NOBYPASSRLS so RLS is enforced for the runtime app.
+set -euo pipefail
+
+: "${POSTGRES_DB:?POSTGRES_DB must be set}"
+: "${POSTGRES_OWNER_USER:?POSTGRES_OWNER_USER must be set}"
+: "${POSTGRES_OWNER_PASSWORD:?POSTGRES_OWNER_PASSWORD must be set}"
+: "${POSTGRES_APP_USER:?POSTGRES_APP_USER must be set}"
+: "${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD must be set}"
+
+psql -v ON_ERROR_STOP=1 \
+     --username "$POSTGRES_USER" \
+     --dbname "postgres" <<EOSQL
+DO \$\$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${POSTGRES_OWNER_USER}') THEN
+        CREATE ROLE "${POSTGRES_OWNER_USER}"
+            WITH LOGIN PASSWORD '${POSTGRES_OWNER_PASSWORD}' NOSUPERUSER NOBYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${POSTGRES_APP_USER}') THEN
+        CREATE ROLE "${POSTGRES_APP_USER}"
+            WITH LOGIN PASSWORD '${POSTGRES_APP_PASSWORD}' NOSUPERUSER NOBYPASSRLS;
+    END IF;
+END
+\$\$;
+
+ALTER DATABASE "${POSTGRES_DB}" OWNER TO "${POSTGRES_OWNER_USER}";
+GRANT CONNECT ON DATABASE "${POSTGRES_DB}" TO "${POSTGRES_OWNER_USER}";
+GRANT CONNECT ON DATABASE "${POSTGRES_DB}" TO "${POSTGRES_APP_USER}";
+EOSQL
+
+psql -v ON_ERROR_STOP=1 \
+     --username "$POSTGRES_USER" \
+     --dbname "$POSTGRES_DB" <<EOSQL
+GRANT USAGE ON SCHEMA public TO "${POSTGRES_APP_USER}";
+GRANT CREATE ON SCHEMA public TO "${POSTGRES_OWNER_USER}";
+
+-- Future tables created by the owner are accessible to the app role.
+ALTER DEFAULT PRIVILEGES FOR ROLE "${POSTGRES_OWNER_USER}" IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${POSTGRES_APP_USER}";
+ALTER DEFAULT PRIVILEGES FOR ROLE "${POSTGRES_OWNER_USER}" IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO "${POSTGRES_APP_USER}";
+EOSQL
+
+echo "Roles ${POSTGRES_OWNER_USER} and ${POSTGRES_APP_USER} ready."
