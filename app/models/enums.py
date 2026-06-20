@@ -66,6 +66,9 @@ class AuditAction(enum.StrEnum):
     ARTIFACT_FINALIZE = "artifact_finalize"
     AUDIT_PACKAGE_GENERATE = "audit_package_generate"
     ARTIFACT_DOWNLOAD = "artifact_download"
+    # Phase 7 — administrative / compliance actions.
+    TENANT_KEYS_DESTROY = "tenant_keys_destroy"
+    AUDIT_EXPORT = "audit_export"
 
 
 class OcrStatus(enum.StrEnum):
