@@ -42,6 +42,11 @@ from app.models.enums import (
     NormalBalance,
     OcrStatus,
     ReconciliationStatus,
+    TaxFormCode,
+    TaxFormSection,
+    TaxLineSign,
+    TaxMappingStatus,
+    TaxWorksheetStatus,
 )
 
 
@@ -480,3 +485,256 @@ class DraftClassification(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# --------------------------------------------------------------------------- #
+# Tax Module (Phase 5)
+# ---------------------------------------------------------------------------
+# tax_form / tax_form_line are SHARED reference data (not tenant-scoped). The
+# catalog is seeded by the 0005 migration from `app.domain.tax_catalog.CATALOG`.
+#
+# tax_account_mapping is TENANT-scoped: per (firm, client) we map each chart-
+# of-accounts row onto a tax-form line. Status is reviewer-driven (draft ->
+# approved/rejected). The only status that flows into a generated worksheet
+# is APPROVED.
+#
+# tax_worksheet / tax_worksheet_line are TENANT-scoped immutable snapshots: a
+# worksheet is COMPUTED from the ledger using the approved mappings for the
+# selected form, and is the artifact a reviewer signs off on before any tax
+# filing prep downstream. Worksheets are reproducible: the same period +
+# mappings always produce the same numbers (the engine does the arithmetic;
+# no LLM is involved).
+# --------------------------------------------------------------------------- #
+class TaxForm(Base):
+    __tablename__ = "tax_form"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_tax_form_code"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    code: Mapped[TaxFormCode] = mapped_column(
+        SAEnum(
+            TaxFormCode,
+            name="tax_form_code",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    jurisdiction: Mapped[str] = mapped_column(String(64), nullable=False)
+    catalog_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    lines: Mapped[list[TaxFormLine]] = relationship(
+        back_populates="form",
+        cascade="all, delete-orphan",
+        order_by="TaxFormLine.sequence",
+    )
+
+
+class TaxFormLine(Base):
+    __tablename__ = "tax_form_line"
+    __table_args__ = (
+        UniqueConstraint("form_id", "code", name="uq_tax_form_line_code"),
+        Index("ix_tax_form_line_form_id", "form_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    form_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tax_form.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(16), nullable=False)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    section: Mapped[TaxFormSection] = mapped_column(
+        SAEnum(
+            TaxFormSection,
+            name="tax_form_section",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    form: Mapped[TaxForm] = relationship(back_populates="lines")
+
+
+class TaxAccountMapping(Base):
+    """Per-client mapping of `chart_of_accounts.id` -> `tax_form_line.id`.
+
+    Reviewer-driven. Only APPROVED rows are consumed by worksheet generation.
+    """
+
+    __tablename__ = "tax_account_mapping"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_id", "form_id", "account_id", "status",
+            name="uq_tax_map_client_form_acct_status",
+        ),
+        Index("ix_tax_map_firm_id", "firm_id"),
+        Index("ix_tax_map_client_id", "client_id"),
+        Index("ix_tax_map_form_id", "form_id"),
+        Index("ix_tax_map_account_id", "account_id"),
+        Index("ix_tax_map_status", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    firm_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    client_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    form_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tax_form.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("chart_of_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    line_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tax_form_line.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    sign: Mapped[TaxLineSign] = mapped_column(
+        SAEnum(
+            TaxLineSign,
+            name="tax_line_sign",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=TaxLineSign.POSITIVE,
+    )
+    status: Mapped[TaxMappingStatus] = mapped_column(
+        SAEnum(
+            TaxMappingStatus,
+            name="tax_mapping_status",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=TaxMappingStatus.DRAFT,
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proposed_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    proposed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    reviewed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class TaxWorksheet(Base):
+    """Immutable snapshot: tax-form lines computed from ledger for a period."""
+
+    __tablename__ = "tax_worksheet"
+    __table_args__ = (
+        Index("ix_tax_ws_firm_id", "firm_id"),
+        Index("ix_tax_ws_client_id", "client_id"),
+        Index("ix_tax_ws_period_id", "period_id"),
+        Index("ix_tax_ws_form_id", "form_id"),
+        Index("ix_tax_ws_status", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    firm_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    client_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    period_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("accounting_period.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    form_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tax_form.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[TaxWorksheetStatus] = mapped_column(
+        SAEnum(
+            TaxWorksheetStatus,
+            name="tax_worksheet_status",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=TaxWorksheetStatus.COMPUTED,
+    )
+    catalog_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Aggregate totals for quick listing without joining all the lines.
+    total_income: Mapped[Decimal] = mapped_column(
+        Numeric(20, 4), nullable=False, default=Decimal("0")
+    )
+    total_cogs: Mapped[Decimal] = mapped_column(
+        Numeric(20, 4), nullable=False, default=Decimal("0")
+    )
+    total_deductions: Mapped[Decimal] = mapped_column(
+        Numeric(20, 4), nullable=False, default=Decimal("0")
+    )
+    taxable_income: Mapped[Decimal] = mapped_column(
+        Numeric(20, 4), nullable=False, default=Decimal("0")
+    )
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    generated_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    lines: Mapped[list[TaxWorksheetLine]] = relationship(
+        back_populates="worksheet",
+        cascade="all, delete-orphan",
+        order_by="TaxWorksheetLine.sequence",
+    )
+
+
+class TaxWorksheetLine(Base):
+    """One line of a generated worksheet: tax-form line + computed amount."""
+
+    __tablename__ = "tax_worksheet_line"
+    __table_args__ = (
+        Index("ix_tax_ws_line_worksheet_id", "worksheet_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    firm_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    client_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    worksheet_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tax_worksheet.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    form_line_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tax_form_line.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    line_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    line_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    section: Mapped[TaxFormSection] = mapped_column(
+        SAEnum(
+            TaxFormSection,
+            name="tax_form_section",
+            values_callable=lambda x: [e.value for e in x],
+            create_type=False,
+        ),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(nullable=False)
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 4), nullable=False, default=Decimal("0")
+    )
+    # JSON list of {account_id, code, name, signed_balance, sign, contribution}
+    # so a downstream renderer can show the supporting accounts per line.
+    contributing_accounts: Mapped[list[dict]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+
+    worksheet: Mapped[TaxWorksheet] = relationship(back_populates="lines")
