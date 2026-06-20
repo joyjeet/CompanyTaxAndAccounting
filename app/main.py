@@ -4,6 +4,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.middleware import (
+    RateLimitMiddleware,
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.api.routes import clients, documents, drafts, health, reports, tax
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -21,6 +26,16 @@ def create_app() -> FastAPI:
             "Phase 2: document ingestion + AI-drafted classification."
         ),
     )
+
+    # Middleware: order matters. Last-added is the outermost wrapper, so the
+    # actual execution order on a request is bottom-up here:
+    #   1. RequestContextMiddleware (innermost — sets ctx vars)
+    #   2. RateLimitMiddleware
+    #   3. SecurityHeadersMiddleware
+    #   4. CORS (outermost — handles preflight first)
+    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # CORS — only the explicitly configured frontend origins. Credentials
     # are NOT enabled because we use bearer tokens, not cookies.
@@ -40,6 +55,13 @@ def create_app() -> FastAPI:
     app.include_router(drafts.router)
     app.include_router(tax.router)
     app.include_router(reports.router)
+
+    # Admin routes (Phase 7) — crypto-shred + audit export. Gated on firm
+    # admin scope inside the router itself.
+    from app.api.routes import admin, audit_export
+
+    app.include_router(admin.router)
+    app.include_router(audit_export.router)
 
     # Dev-only routes: only mount when the server is in non-prod test-mode.
     # The router itself also performs a runtime check.
