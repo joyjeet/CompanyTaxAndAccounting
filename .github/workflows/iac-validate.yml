@@ -1,0 +1,75 @@
+name: IaC Validate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/iac-validate.yml'
+
+permissions:
+  id-token: write   # for federated OIDC auth to Azure (optional what-if step)
+  contents: read
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep
+        run: |
+          curl -Lo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64
+          chmod +x ./bicep
+          sudo mv ./bicep /usr/local/bin/bicep
+          bicep --version
+
+      - name: Build main.bicep
+        run: bicep build infra/main.bicep --stdout > /dev/null
+
+      - name: Build all param files
+        run: |
+          for f in infra/params/*.bicepparam; do
+            echo "==> $f"
+            bicep build-params --file "$f" --stdout > /dev/null
+          done
+
+      - name: PSRule for Azure (best-practice + CIS scan)
+        uses: microsoft/ps-rule@v3
+        with:
+          modules: 'PSRule.Rules.Azure'
+          inputPath: 'infra/'
+          option: '.ps-rule/ps-rule.yaml'
+          outputFormat: Sarif
+          outputPath: ps-rule-results.sarif
+        continue-on-error: true
+
+      - name: Upload PSRule SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ps-rule-results.sarif
+        continue-on-error: true
+
+  what-if:
+    # Optional: requires Azure OIDC federated credential. Disabled by default
+    # because it needs subscription-level secrets that we do not assume in CI.
+    if: ${{ vars.AZURE_WHATIF_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: What-if dev
+        run: |
+          az deployment sub what-if \
+            --location eastus2 \
+            --template-file infra/main.bicep \
+            --parameters infra/params/dev.bicepparam \
+            --parameters postgresAdminPassword="$(openssl rand -base64 32)"

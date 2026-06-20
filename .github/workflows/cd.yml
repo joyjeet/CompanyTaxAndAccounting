@@ -1,0 +1,137 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options: ['staging', 'prod']
+
+# Trust boundary: production deploy requires the protected
+# `prod` environment in GitHub repo settings, which enforces
+# a manual approval gate from designated reviewers.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: cd-${{ github.event.inputs.target_env || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      api_image: ${{ steps.image.outputs.api_image }}
+      worker_image: ${{ steps.image.outputs.worker_image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set image refs
+        id: image
+        run: |
+          SHA="${GITHUB_SHA::12}"
+          REG="${{ vars.ACR_NAME }}.azurecr.io"
+          echo "api_image=${REG}/ctaa-api:${SHA}" >> "$GITHUB_OUTPUT"
+          echo "worker_image=${REG}/ctaa-worker:${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: ACR login
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.api_image }}
+          provenance: true
+          sbom: true
+
+      # Worker uses the same image — entrypoint differs at runtime.
+      - name: Re-tag worker
+        run: |
+          docker pull "${{ steps.image.outputs.api_image }}"
+          docker tag "${{ steps.image.outputs.api_image }}" "${{ steps.image.outputs.worker_image }}"
+          docker push "${{ steps.image.outputs.worker_image }}"
+
+  deploy-staging:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+    if: ${{ github.event_name == 'push' || github.event.inputs.target_env == 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy staging
+        run: |
+          PG_PWD=$(az keyvault secret show \
+            --vault-name "${{ vars.BOOTSTRAP_KV }}" \
+            --name pg-admin-pwd-staging \
+            --query value -o tsv)
+          az deployment sub create \
+            --location eastus2 \
+            --name "ctaa-staging-${{ github.run_id }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/params/staging.bicepparam \
+            --parameters \
+              apiImage="${{ needs.build-and-push.outputs.api_image }}" \
+              workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              postgresAdminPassword="$PG_PWD"
+      - name: Run migrations
+        run: |
+          az containerapp job start \
+            --name "ca-ctaa-staging-eus-migrate" \
+            --resource-group "rg-ctaa-staging-eus" || \
+            echo "Migration job not found — first deploy. Skipping."
+
+  deploy-prod:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment:
+      name: prod
+    if: ${{ github.event.inputs.target_env == 'prod' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy prod
+        run: |
+          PG_PWD=$(az keyvault secret show \
+            --vault-name "${{ vars.BOOTSTRAP_KV }}" \
+            --name pg-admin-pwd-prod \
+            --query value -o tsv)
+          az deployment sub create \
+            --location eastus2 \
+            --name "ctaa-prod-${{ github.run_id }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/params/prod.bicepparam \
+            --parameters \
+              apiImage="${{ needs.build-and-push.outputs.api_image }}" \
+              workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              postgresAdminPassword="$PG_PWD"
+      - name: Run migrations
+        run: |
+          az containerapp job start \
+            --name "ca-ctaa-prod-eus-migrate" \
+            --resource-group "rg-ctaa-prod-eus"
