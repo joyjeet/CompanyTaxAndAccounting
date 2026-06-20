@@ -223,6 +223,13 @@ def approve_mapping(
         p.status = TaxMappingStatus.SUPERSEDED
         p.reviewed_by = actor
         p.reviewed_at = now
+    # Flush the supersession FIRST so the unique constraint
+    # `uq_tax_map_client_form_acct_status` doesn't transiently see two
+    # APPROVED rows for the same (client, form, account) when we flip the
+    # new mapping below. Without this flush SQLAlchemy may emit the UPDATEs
+    # in either order and the constraint trips intermittently.
+    if prior:
+        sess.flush()
 
     m.status = TaxMappingStatus.APPROVED
     m.reviewed_by = actor

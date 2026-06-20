@@ -62,6 +62,10 @@ class AuditAction(enum.StrEnum):
     TAX_MAP_REJECT = "tax_map_reject"
     TAX_WORKSHEET_GENERATE = "tax_worksheet_generate"
     TAX_WORKSHEET_APPROVE = "tax_worksheet_approve"
+    ARTIFACT_GENERATE = "artifact_generate"
+    ARTIFACT_FINALIZE = "artifact_finalize"
+    AUDIT_PACKAGE_GENERATE = "audit_package_generate"
+    ARTIFACT_DOWNLOAD = "artifact_download"
 
 
 class OcrStatus(enum.StrEnum):
@@ -139,4 +143,42 @@ class TaxMappingStatus(enum.StrEnum):
 class TaxWorksheetStatus(enum.StrEnum):
     COMPUTED = "computed"
     APPROVED = "approved"
+    SUPERSEDED = "superseded"
+
+
+# --------------------------------------------------------------------------- #
+# Output / Reporting (Phase 6)
+# --------------------------------------------------------------------------- #
+class ArtifactKind(enum.StrEnum):
+    """What kind of report a `generated_artifact` row represents."""
+
+    PROFIT_AND_LOSS = "profit_and_loss"
+    BALANCE_SHEET = "balance_sheet"
+    CASH_FLOW = "cash_flow"
+    TAX_WORKSHEET = "tax_worksheet"
+    NARRATIVE = "narrative"
+    AUDIT_PACKAGE = "audit_package"
+
+
+class ArtifactFormat(enum.StrEnum):
+    """Wire / on-disk format of the artifact body."""
+
+    PDF = "pdf"
+    XLSX = "xlsx"
+    ZIP = "zip"
+    JSON = "json"
+    MARKDOWN = "markdown"
+
+
+class ArtifactStatus(enum.StrEnum):
+    """Reviewer lifecycle for a generated artifact.
+
+    Only FINALIZED artifacts are visible to client-portal users and are
+    eligible to be bundled into an audit-ready package. DRAFT artifacts may
+    be regenerated; FINALIZED artifacts are immutable (a new artifact must be
+    generated to replace one).
+    """
+
+    DRAFT = "draft"
+    FINALIZED = "finalized"
     SUPERSEDED = "superseded"

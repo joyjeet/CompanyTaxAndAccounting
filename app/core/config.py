@@ -90,6 +90,21 @@ class Settings(BaseSettings):
     # defaults to :5173. In prod, set this to the deployed frontend URL only.
     app_cors_origins: str = "http://localhost:5173"
 
+    # ------------------------------------------------------------------ #
+    # Output / Branding (Phase 6)
+    # ------------------------------------------------------------------ #
+    # Branding rendered on every PDF/XLSX header. The "firm" here is the
+    # operating firm (MMFC LLC by default); per-client branding overrides
+    # are intentionally NOT supported in v1 — every report carries the
+    # operating firm's letterhead so the source of work is unambiguous.
+    branding_firm_name: str = "MMFC LLC"
+    branding_firm_tagline: str = "Certified Public Accountants"
+    branding_firm_address: str = ""
+    # Path to an optional logo image (PNG / JPG). Empty = no logo.
+    branding_firm_logo_path: str = ""
+    # ISO 4217 currency code displayed alongside money figures.
+    branding_currency: str = "USD"
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

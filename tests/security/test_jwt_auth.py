@@ -99,9 +99,12 @@ def test_wrong_issuer_rejected(provider: TestTokenIdentityProvider) -> None:
 
 def test_tampered_signature_rejected(provider: TestTokenIdentityProvider) -> None:
     token = mint_test_token(sub="alice", firm_id=uuid4(), role="firm_staff")
-    # Flip the last char of the signature segment.
+    # Flip the FIRST char of the signature segment. The last base64 char
+    # of an HS256 signature carries only 4 significant bits — the trailing
+    # bits are padding and a 1-bit flip there decodes to the same bytes and
+    # verifies successfully. Mutating the first char avoids this.
     head, payload, sig = token.split(".")
-    bad = sig[:-1] + ("A" if sig[-1] != "A" else "B")
+    bad = ("A" if sig[0] != "A" else "B") + sig[1:]
     tampered = ".".join([head, payload, bad])
     with pytest.raises(InvalidTokenError):
         provider.validate(token=tampered)

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import clients, documents, drafts, health, tax
+from app.api.routes import clients, documents, drafts, health, reports, tax
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -39,6 +39,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(drafts.router)
     app.include_router(tax.router)
+    app.include_router(reports.router)
 
     # Dev-only routes: only mount when the server is in non-prod test-mode.
     # The router itself also performs a runtime check.

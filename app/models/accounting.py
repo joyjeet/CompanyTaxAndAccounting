@@ -738,3 +738,116 @@ class TaxWorksheetLine(Base):
     )
 
     worksheet: Mapped[TaxWorksheet] = relationship(back_populates="lines")
+
+
+# --------------------------------------------------------------------------- #
+# Output / Reporting (Phase 6)
+# ---------------------------------------------------------------------------
+# A generated_artifact row records every polished, encrypted output the
+# platform produces from finalized ledger data: PDF/XLSX renders of P&L /
+# BS / CF, tax-worksheet renders, narrative documents, and zipped audit-ready
+# packages. Body bytes always live in the tenant blob store via the
+# encrypted-storage wrapper; the row carries the at-rest sha256 plus a
+# `plaintext_sha256` so reviewers can verify "the body the user downloads is
+# the body that was generated".
+#
+# Lifecycle: DRAFT -> FINALIZED -> SUPERSEDED.
+#   * Reviewers (firm staff) can generate as many DRAFT artifacts as they
+#     like; portal users never see DRAFT rows.
+#   * Finalization is an irreversible promotion; FINALIZED artifacts are
+#     immutable. Regeneration produces a NEW artifact and supersedes the
+#     prior one.
+#   * Audit-ready package generation REQUIRES the referenced statements +
+#     tax worksheet to all be FINALIZED / APPROVED for the period.
+# --------------------------------------------------------------------------- #
+from app.models.enums import (  # noqa: E402
+    ArtifactFormat,
+    ArtifactKind,
+    ArtifactStatus,
+)
+
+
+class GeneratedArtifact(Base):
+    __tablename__ = "generated_artifact"
+    __table_args__ = (
+        Index("ix_artifact_firm_id", "firm_id"),
+        Index("ix_artifact_client_id", "client_id"),
+        Index("ix_artifact_period_id", "period_id"),
+        Index("ix_artifact_kind_status", "kind", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    firm_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    client_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+
+    # Most artifacts hang off an accounting period; narrative + audit_package
+    # also reference a period. Tax worksheets reference period+form; we
+    # additionally record the worksheet id when applicable.
+    period_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("accounting_period.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    tax_worksheet_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tax_worksheet.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+
+    kind: Mapped[ArtifactKind] = mapped_column(
+        SAEnum(
+            ArtifactKind,
+            name="artifact_kind",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    format: Mapped[ArtifactFormat] = mapped_column(
+        SAEnum(
+            ArtifactFormat,
+            name="artifact_format",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    status: Mapped[ArtifactStatus] = mapped_column(
+        SAEnum(
+            ArtifactStatus,
+            name="artifact_status",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=ArtifactStatus.DRAFT,
+    )
+
+    # On-disk: encrypted bytes managed by EncryptedStorage. storage_uri is
+    # in the tenant-prefixed canonical form (see app/integrations/storage.py);
+    # encrypted_sha256 hashes the ciphertext that's actually at rest.
+    storage_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
+    encrypted_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # plaintext_sha256 hashes the cleartext body the renderer produced. This
+    # is what the audit-package manifest carries so a reader can verify
+    # tamper-freedom of the decrypted body without trusting the storage layer.
+    plaintext_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(nullable=False)
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Inputs that produced this artifact: e.g. {"period_start": "2026-01-01",
+    # "comparatives_period_id": "..."}. Used to rehydrate context downstream.
+    parameters: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
+
+    generated_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finalized_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    supersedes_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("generated_artifact.id", ondelete="SET NULL"),
+        nullable=True,
+    )
