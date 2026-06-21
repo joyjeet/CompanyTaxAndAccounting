@@ -1,4 +1,4 @@
-.PHONY: help install run dev test test-isolation lint typecheck migrate migrate-create migrate-down up down logs psql shell fmt frontend-install frontend-dev frontend-build frontend-test
+.PHONY: help install run dev test test-isolation lint typecheck migrate migrate-create migrate-down up down logs psql shell fmt seed-demo frontend-install frontend-dev frontend-build frontend-test
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -51,6 +51,9 @@ psql: ## Open a psql shell as the owner role
 
 shell: ## Open a bash shell in the app container
 	docker compose run --rm app bash
+
+seed-demo: ## Seed one demo firm + one client + COA + period and print IDs
+	docker compose run --rm app python -m scripts.seed_demo
 
 # ----- Frontend ---------------------------------------------------------- #
 frontend-install: ## Install frontend npm deps
