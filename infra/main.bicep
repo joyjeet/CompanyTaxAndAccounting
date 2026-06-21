@@ -66,6 +66,7 @@ param wafMode string = 'Prevention'
 param postgresHa string = 'ZoneRedundant'
 
 @allowed([
+  'Standard_B1ms'
   'Standard_B2s'
   'Standard_D2ds_v5'
   'Standard_D4ds_v5'
@@ -86,8 +87,31 @@ param apiMaxReplicas int = 10
 param workerMinReplicas int = 1
 param workerMaxReplicas int = 20
 
+@description('Provision Front Door + WAF in front of the ACA app. Set false to save cost on dev/smoke deploys.')
+param enableFrontDoor bool = true
+
+@description('Provision alert rules + action group. Set false on dev/smoke deploys to suppress noise.')
+param enableAlerts bool = true
+
+@description('Whether the ACA environment ingress is internal-only (VNet) or public. Set false on cost-thin deploys so the API has a public FQDN reachable without Front Door.')
+param containerEnvInternalOnly bool = true
+
+@description('3-6 char lowercase prefix used in every resource name. Default ctaa.')
+@minLength(3)
+@maxLength(6)
+param namePrefix string = 'ctaa'
+
+@description('Readiness probe path for the API container app. Defaults to /readyz (DB-aware). Set to /healthz in cost-thin deploys where the DB has not yet been bootstrapped — otherwise the replica stays out of rotation indefinitely.')
+param apiReadinessPath string = '/readyz'
+
+@description('ACR login server hostname used to pull images (e.g. ctaxsmoke.azurecr.io). When set, the UAMI must already have AcrPull on this registry. Empty = the container app pulls anonymously (public images only).')
+param acrLoginServer string = ''
+
+@description('ACR resource name. Required when `acrLoginServer` is set so we can create the AcrPull role assignment inside the same resource group.')
+param acrName string = ''
+
 var commonTags = {
-  app: 'ctaa'
+  app: namePrefix
   env: env
   costCenter: 'accounting-platform'
   dataClass: 'client-confidential'
@@ -100,7 +124,6 @@ var commonTags = {
 // Naming — inlined (subscription-scoped deployment cannot call a module that
 // runs at RG scope before the RG exists, so we compute names here directly).
 // ---------------------------------------------------------------------------
-var namePrefix = 'ctaa'
 var prefix = '${namePrefix}-${env}-${locationShort}'
 var u = uniqueString(subscription().id, env, locationShort, namePrefix)
 var names = {
@@ -145,6 +168,15 @@ module identity 'modules/identity.bicep' = {
     location: location
     uamiName: names.uami
     tags: commonTags
+  }
+}
+
+module acrPull 'modules/acrRoleAssignment.bicep' = if (!empty(acrName)) {
+  scope: rg
+  name: 'acrPull'
+  params: {
+    acrName: acrName
+    principalId: identity.outputs.uamiPrincipalId
   }
 }
 
@@ -233,7 +265,7 @@ module containerEnv 'modules/containerenv.bicep' = {
     tags: commonTags
     subnetId: network.outputs.snetAcaId
     workspaceName: names.logAnalytics
-    internalOnly: true
+    internalOnly: containerEnvInternalOnly
   }
   dependsOn: [ monitoring ]
 }
@@ -259,7 +291,10 @@ module apiApp 'modules/containerapp.bicep' = {
     storageAccountName: storage.outputs.storageName
     serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
     corsOrigins: corsOrigins
+    acrLoginServer: acrLoginServer
+    readinessPath: apiReadinessPath
   }
+  dependsOn: [ acrPull ]
 }
 
 module workerApp 'modules/containerapp.bicep' = {
@@ -282,10 +317,12 @@ module workerApp 'modules/containerapp.bicep' = {
     postgresDatabase: firmDatabases[0]
     storageAccountName: storage.outputs.storageName
     serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
+    acrLoginServer: acrLoginServer
   }
+  dependsOn: [ acrPull ]
 }
 
-module frontdoor 'modules/frontdoor.bicep' = {
+module frontdoor 'modules/frontdoor.bicep' = if (enableFrontDoor) {
   scope: rg
   name: 'frontdoor'
   params: {
@@ -298,7 +335,7 @@ module frontdoor 'modules/frontdoor.bicep' = {
   }
 }
 
-module alerts 'modules/alerts.bicep' = {
+module alerts 'modules/alerts.bicep' = if (enableAlerts) {
   scope: rg
   name: 'alerts'
   params: {
@@ -313,6 +350,6 @@ module alerts 'modules/alerts.bicep' = {
 
 output rgName string = rg.name
 output apiFqdn string = apiApp.outputs.fqdn
-output frontDoorEndpoint string = frontdoor.outputs.endpointHostName
+output frontDoorEndpoint string = enableFrontDoor ? frontdoor!.outputs.endpointHostName : ''
 output keyVaultUri string = keyvault.outputs.keyVaultUri
 output postgresFqdn string = postgres.outputs.serverFqdn

@@ -29,6 +29,15 @@ param corsOrigins string = ''
 @description('Service Bus queue name (worker scale target).')
 param queueName string = 'extraction-jobs'
 
+@description('ACR login server (e.g. ctaaprodeus.azurecr.io). When supplied, the container app is configured to pull from this ACR using the UAMI. The caller is responsible for granting AcrPull on the UAMI before deployment.')
+param acrLoginServer string = ''
+
+@description('Readiness probe HTTP path. Defaults to /readyz (which performs a DB SELECT 1). For smoke deploys where the DB credentials are not yet wired, set to /healthz to keep the replica in rotation regardless of DB state.')
+param readinessPath string = '/readyz'
+
+@description('Revision suffix. Defaults to a deterministic hash of the image + readiness path so that the suffix changes whenever those change, avoiding the "revision already exists" failure on redeploy. Override only when you need a human-friendly suffix.')
+param revisionSuffix string = take(uniqueString(image, readinessPath), 10)
+
 var commonEnv = [
   { name: 'APP_ENV',                     value: 'prod' }
   { name: 'APP_AUTH_MODE',               value: 'jwt' }
@@ -90,9 +99,15 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
       activeRevisionsMode: 'Single'
       ingress: apiIngress
       maxInactiveRevisions: 3
+      registries: empty(acrLoginServer) ? [] : [
+        {
+          server: acrLoginServer
+          identity: uamiId
+        }
+      ]
     }
     template: {
-      revisionSuffix: 'v1'
+      revisionSuffix: revisionSuffix
       containers: [
         {
           name: name
@@ -108,7 +123,7 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
             }
             {
               type: 'Readiness'
-              httpGet: { path: '/readyz', port: 8000 }
+              httpGet: { path: readinessPath, port: 8000 }
               initialDelaySeconds: 5
               periodSeconds: 15
             }

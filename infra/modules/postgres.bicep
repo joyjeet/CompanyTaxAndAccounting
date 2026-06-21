@@ -22,6 +22,7 @@ param workspaceId string
 param highAvailabilityMode string = 'ZoneRedundant'
 
 @allowed([
+  'Standard_B1ms'
   'Standard_B2s'
   'Standard_D2ds_v5'
   'Standard_D4ds_v5'
@@ -81,24 +82,28 @@ resource pgLogStatement 'Microsoft.DBforPostgreSQL/flexibleServers/configuration
   name: 'log_statement'
   parent: pg
   properties: { value: 'ddl', source: 'user-override' }
+  dependsOn: [ pgRequireSSL ]
 }
 
 resource pgLogConnections 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   name: 'log_connections'
   parent: pg
   properties: { value: 'on', source: 'user-override' }
+  dependsOn: [ pgLogStatement ]
 }
 
 resource pgRowSecurity 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   name: 'row_security'
   parent: pg
   properties: { value: 'on', source: 'user-override' }
+  dependsOn: [ pgLogConnections ]
 }
 
 resource dbs 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = [for d in firmDatabases: {
   name: d
   parent: pg
   properties: { charset: 'UTF8', collation: 'en_US.utf8' }
+  dependsOn: [ pgRowSecurity ]
 }]
 
 resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
