@@ -1,16 +1,20 @@
 # CTAA — Tester / QA User Manual
 
-This manual covers **how to spin up the app and log in to test it**. It is
-written for someone who has access to the repository and a Mac/Linux machine
-with Docker installed. It assumes no knowledge of the codebase internals.
+This manual covers **how to spin up the app and click through it as a tester**.
+It is written for someone with access to the repository and a Mac/Linux box.
+No knowledge of the codebase internals is assumed.
 
-> **Status note** — as of this writing the platform is in **early phase 7**.
-> The deterministic accounting engine, multi-tenant data model, RLS isolation,
-> backend API, dev/test auth, and a thin React UI are working. **Production
-> features that are NOT in this build yet:** OCR ingestion, LLM-assisted
-> draft classification, real PDF report generation, e-sign, real Entra ID
-> integration (only the dev-token path is wired). Anything you exercise here
-> is the foundation, not the finished product.
+> **Status note.** As of this writing the platform has the **full
+> Fluent UI v9** front-end wired against every backend endpoint — Dashboard,
+> Clients, Periods, Chart of Accounts, Documents, Journal Entries, Statements
+> (P&L / Balance Sheet / Cash Flow), Tax (Forms, Mappings, Worksheets),
+> Artifacts, Review Queue, and a separate Client Portal with its own
+> Dashboard / My Documents / My Reports. The deterministic accounting engine,
+> multi-tenant data model, RLS isolation, dev/test auth, and 170+ automated
+> tests are all green. **What is still mocked out in dev:** OCR ingestion
+> uses a fake extractor, LLM draft classification uses a mock classifier,
+> Entra ID is wired in code but the dev login path mints HS256 tokens via
+> `POST /auth/dev-token`. PDF artifacts are real; e-sign is not.
 
 ---
 
@@ -22,45 +26,38 @@ cd CompanyTaxAndAccounting
 cp .env.example .env
 cp frontend/.env.example frontend/.env
 
-make up               # Postgres + Redis + API   (http://localhost:8000)
-make migrate          # apply DB schema + RLS policies
-make seed-demo        # creates one firm + one client; prints the IDs
+make up                # Postgres + Redis + API   (http://localhost:8000)
+make migrate           # apply DB schema + RLS policies
+make seed-demo         # creates one firm + one client; prints the IDs
 make frontend-install
-make frontend-dev     # Vite dev server          (http://localhost:5173)
+make frontend-dev      # Vite dev server          (http://localhost:5173)
 ```
 
-Then open **http://localhost:5173** in your browser, paste the **firm_id**
-(and **client_id**, only if you pick `client_portal`) printed by
-`make seed-demo` into the dev login form, click **Sign in**, and you are
-authenticated.
+Paste the `firm_id` (and `client_id` if you pick `client_portal`) from
+`make seed-demo` into the **Dev sign-in** form at
+`http://localhost:5173/login` — or, easier, put them in `frontend/.env` as
+`VITE_DEV_DEFAULT_FIRM_ID` / `VITE_DEV_DEFAULT_CLIENT_ID` so the form is
+pre-populated. Click **Sign in** and you are in.
 
 ---
 
-## 1. What URL do I log in to?
+## 1. Where do I log in?
 
 | Environment | UI URL | API URL | Notes |
 |---|---|---|---|
-| **Local dev** (recommended for QA today) | `http://localhost:5173` | `http://localhost:8000` | Dev login form. Use this for end-to-end testing. |
-| **Azure smoke deployment** | _none deployed_ | `https://ca-ctax-dev-cus-api.grayisland-1d1659e2.centralus.azurecontainerapps.io` | API-only smoke. `GET /livez` and `GET /healthz` return 200. No UI, no DB wired, no login wired. For platform/IaC validation only. |
-
-A full Azure deployment with the React UI, real DB wiring, and Entra ID login
-is the next phase of work (Phase 7.5b). It is **not** in the current build.
+| **Local dev** (recommended for QA) | `http://localhost:5173` | `http://localhost:8000` | Dev login form. Use this for end-to-end testing. |
+| **Azure dev deployment** | _redeploying_ | _redeploying_ | The previous `rg-ctax-dev-cus` smoke deployment is being torn down and replaced with a full UI+DB stack. See `docs/deployment-runbook.md`. |
 
 ---
 
 ## 2. Prerequisites
 
 * macOS or Linux with **Docker** and **Docker Compose v2**.
-* **Node.js 20+** and **npm** on the host (for the Vite dev server).
+* **Node.js 20+** and **npm** for the Vite dev server.
 * Ports `5173` (UI), `8000` (API), `5432` (Postgres), `6379` (Redis) free.
 
-Verify:
-
 ```bash
-docker --version
-docker compose version
-node --version
-npm --version
+docker --version && docker compose version && node --version && npm --version
 ```
 
 ---
@@ -76,26 +73,23 @@ cp frontend/.env.example frontend/.env
 
 The `.env` defaults are safe for local dev: `APP_AUTH_MODE=test` enables the
 dev login form, no real secrets needed. The frontend `.env` defaults to
-`VITE_AUTH_MODE=dev` which matches.
+`VITE_AUTH_MODE=dev`.
 
 ---
 
 ## 4. Start the backend stack
 
 ```bash
-make up         # builds the API image, starts db + redis + app
+make up         # builds API image, starts db + redis + app
 make migrate    # creates schema, RLS policies, owner + app DB roles
 ```
 
-Sanity-check the API is up:
+Sanity-check the API:
 
 ```bash
-curl http://localhost:8000/livez
-# -> {"status":"alive"}
-curl http://localhost:8000/healthz
-# -> {"status":"ok"}
-curl http://localhost:8000/readyz
-# -> {"status":"ready","checks":{"db":"ok"}}      # 200 once migrations done
+curl http://localhost:8000/livez     # -> {"status":"alive"}
+curl http://localhost:8000/healthz   # -> {"status":"ok"}
+curl http://localhost:8000/readyz    # -> {"status":"ready","checks":{"db":"ok"}}
 ```
 
 OpenAPI / Swagger explorer:
@@ -119,21 +113,24 @@ Seeded demo data.
   firm_id   = 4f1a2c8d-...-9b
   client_id = c3e6f0aa-...-1f
   period_id = 8a2bd91e-...-44
-
-Use these in the frontend dev login form:
-  Firm ID:   4f1a2c8d-...-9b
-  Client ID: c3e6f0aa-...-1f  (only required for role=client_portal)
 ```
 
-**Copy these UUIDs.** You will paste them into the login form in step 7.
+**Copy `firm_id` and `client_id`.** Either:
 
-To wipe everything and re-seed, run:
+1. Paste them into the **Dev sign-in** form every time, **or**
+2. Add to `frontend/.env` so the form is pre-filled:
+
+   ```
+   VITE_DEV_DEFAULT_FIRM_ID=<firm_id from seed-demo>
+   VITE_DEV_DEFAULT_CLIENT_ID=<client_id from seed-demo>
+   ```
+
+   Restart `make frontend-dev` to pick them up.
+
+To wipe everything and re-seed:
 
 ```bash
-make down       # destroys containers + volumes (DB data gone)
-make up
-make migrate
-make seed-demo
+make down && make up && make migrate && make seed-demo
 ```
 
 ---
@@ -147,68 +144,126 @@ make frontend-install      # once per checkout
 make frontend-dev          # leave running
 ```
 
-Vite will print:
-
 ```
   VITE v5.x  ready in 612 ms
   ➜  Local:   http://localhost:5173/
 ```
 
-Open **http://localhost:5173** in your browser.
-
-The Vite dev server proxies `/api/*` to `http://localhost:8000`, so you do
-not need to configure CORS or change any base URL.
+Open **http://localhost:5173**.
 
 ---
 
 ## 7. Log in (dev mode)
 
-You will land on the **Dev sign-in** screen. Fill in:
+You land on **Dev sign-in**. Fill in:
 
-| Field | What to type |
+| Field | Value |
 |---|---|
-| **Subject** | any string, e.g. `qa-alice@example.com`. This is the user's identity for audit logs. |
-| **Role** | `firm_staff` for the firm reviewer experience, `client_portal` for the customer portal experience. |
-| **Firm ID** | the UUID printed by `make seed-demo`. |
-| **Client ID** | only needed if Role = `client_portal`. Paste the UUID from `make seed-demo`. |
+| **Subject** | any string, e.g. `qa-alice@example.com`. Recorded in audit logs. |
+| **Role** | `firm_staff` for the firm reviewer experience; `client_portal` for the customer portal experience. |
+| **Firm ID** | UUID from `make seed-demo`. Pre-filled if you set `VITE_DEV_DEFAULT_FIRM_ID`. |
+| **Client ID** | required only when Role = `client_portal`. Pre-filled if you set `VITE_DEV_DEFAULT_CLIENT_ID`. |
 
-Click **Sign in**. You should land on:
+Click **Sign in**. You land on:
 
-* `/review` (Review Queue) when role = **firm_staff**
-* `/portal` (Client Portal) when role = **client_portal**
+* `/` (**Dashboard**) when Role = `firm_staff`.
+* `/portal` (**Client Portal Home**) when Role = `client_portal`.
 
-If you want to switch personas, click **Sign out** on the top bar and fill
-the form again with the other role.
+To switch personas: click **Sign out** in the top bar.
 
 ---
 
-## 8. What you can do once logged in
+## 8. The Firm Staff app (Role = `firm_staff`)
 
-The UI is thin in this build. Functional paths:
+The left rail has five sections. Walk through them in order:
 
-### As `firm_staff`
+### 8.1 Dashboard (`/`)
 
-* **Review Queue** at `/review` — lists draft classifications waiting for
-  review. Empty after a fresh seed (no drafts yet — see "creating drafts"
-  below).
-* **Draft Detail** at `/drafts/<id>` — approve / reject a single draft
-  classification.
+Four KPI cards (Clients, Pending drafts, Documents, Artifacts) plus four
+list cards (Your clients, Recent documents, Pending drafts, Latest
+artifacts). All counts and rows are scoped to your firm by RLS.
 
-### As `client_portal`
+### 8.2 Clients (`/clients`)
 
-* **Client Portal** at `/portal` — currently scoped read-only views of the
-  signed-in client's own data. RLS guarantees they cannot see anything from
-  another client or firm.
+Table of every client in your firm. Click **+ New client** to create one
+(only firm-scope users can; portal users get 403). Click any client name to
+open its detail page.
 
-### Things you must do via API / Swagger, not the UI (yet)
+### 8.3 Client Detail (`/clients/{id}`) — eight tabs
 
-* List clients in the firm: `GET /clients` (firm_staff token only).
-* Upload a source document, draft a journal entry, post to the ledger,
-  generate a P&L / Balance Sheet — all live under `/docs` with examples.
-  Use the Bearer token shown in the browser's `localStorage` (key
-  `ctaa.auth.token`) or mint a fresh one with `POST /auth/dev-token`.
+| Tab | What to test |
+|---|---|
+| **Overview** | 4 stat cards (periods, accounts, documents, artifacts) + the most recent period. Confirm numbers match what you seed. |
+| **Periods** | Lists accounting periods. **+ New period** creates one (start ≤ end is enforced — try inverted dates → 400). A locked period blocks new journal entries. |
+| **Chart of accounts** | Lists all accounts ordered by code. **+ New account** lets you pick type (asset/liability/equity/revenue/expense) and normal balance (debit/credit). |
+| **Documents** | Drag/drop or pick a source document. Backend currently uses a mock OCR/classifier, so uploads complete instantly. Document kind badges show classifier output. |
+| **Journal entries** | Filter by period. **+ Post entry** opens a line editor that totals debits/credits live. **The Post button stays disabled until books balance.** Try an unbalanced entry → button disabled; force one in Swagger → 400. Posting to a locked period → 409. |
+| **Statements** | Pick a period, then tab between **Profit & loss**, **Balance sheet**, and **Cash flow**. Numbers are computed live by `StatementsService`. **Generate PDF artifact** creates a finalizable encrypted artifact in the Artifacts tab. |
+| **Tax** | Sub-tabs: **Forms** (read-only catalog), **Mappings** (account → tax line proposals; approve/reject), **Worksheets** (generate from approved mappings, then approve). |
+| **Artifacts** | Per-client list of generated artifacts (statements, worksheets, audit packages). **Finalize** locks the artifact; **Download** streams the encrypted bytes. |
 
-To get an API token without the UI:
+### 8.4 Review queue (`/review`)
+
+Lists all pending `draft_classification` rows across the firm. Click one to
+open `/drafts/{id}` where you can pick a client + period + accounts and
+**Promote** to a posted journal entry, or **Reject** with a reason. (Drafts
+only appear after the ingest pipeline runs — see `make seed-drafts` if
+available, or POST to `/documents` then trigger the classifier.)
+
+### 8.5 Artifacts (`/artifacts`)
+
+Firm-wide artifact library. Filter by kind (P&L, BS, CF, tax worksheet,
+audit package). Finalize / Download work identically to the per-client tab.
+
+### 8.6 Tax forms (`/tax/forms`)
+
+Read-only catalog of every tax form registered in `tax_form` /
+`tax_form_line`. Used as the source of truth for mappings.
+
+---
+
+## 9. The Client Portal (Role = `client_portal`)
+
+A separate three-page experience for end-customer users:
+
+| Page | Path | What to test |
+|---|---|---|
+| **Overview** | `/portal` | KPI cards (documents, artifacts, period status) + recent activity. Confirm you see only your own client's data. |
+| **My documents** | `/portal/documents` | Drag-drop or pick. Upload completes instantly via mock OCR. The table shows kind + status badges. |
+| **My reports** | `/portal/reports` | Lists only **finalized** artifacts for your client. Download streams the encrypted bytes. |
+
+Try cross-tenant: paste another client's UUID into a portal URL (e.g.
+`/portal/documents?client_id=<other>`) — the API still RLS-filters and you
+get no rows.
+
+---
+
+## 10. What to look for / acceptance criteria
+
+The properties to focus QA on:
+
+1. **Tenant isolation (RLS).** A `firm_staff` token for Firm A can never see
+   any row belonging to Firm B. Seed two firms (re-run `make seed-demo`
+   noting both firm IDs) and confirm Firm A → 0 Firm B rows on every list.
+2. **Portal scoping.** A `client_portal` token scoped to Client 1 sees only
+   their own client.
+3. **Books must balance.** Posting a journal entry where
+   `SUM(debits) != SUM(credits)` returns 400 and produces no rows.
+4. **Period lock.** Posting to a locked period returns 409.
+5. **Statements balance.** On the Balance Sheet tab, `Total assets ==
+   Total liabilities + Total equity` and the `balances` flag is `true`.
+6. **Audit trail.** Every state change writes an `audit_event` row. Check
+   with `make psql` → `SELECT count(*) FROM audit_event;` before and after.
+7. **Health endpoints** stay green during normal operation:
+   - `/livez` → 200 always (no deps).
+   - `/healthz` → 200 always (no deps).
+   - `/readyz` → 200 when DB reachable, 503 when DB unreachable.
+
+---
+
+## 11. Power-user: hit the API directly
+
+Mint a token without the UI:
 
 ```bash
 curl -X POST http://localhost:8000/auth/dev-token \
@@ -221,44 +276,27 @@ curl -X POST http://localhost:8000/auth/dev-token \
 # -> {"access_token":"eyJ...","token_type":"Bearer","expires_in":3600}
 ```
 
-Then:
+Then any endpoint:
 
 ```bash
 TOKEN=eyJ...
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/clients
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/statements/profit-and-loss?client_id=<id>&period_id=<id>"
 ```
 
----
-
-## 9. What to look for / acceptance criteria
-
-The properties the build is supposed to enforce — these are what to focus QA on:
-
-1. **Tenant isolation (RLS).** A `firm_staff` token for Firm A can never see
-   any row belonging to Firm B. Seed two firms (run `make seed-demo` twice,
-   note both firm IDs) and confirm a token for firm A returns 0 firm-B rows
-   from any list endpoint.
-2. **Portal scoping.** A `client_portal` token scoped to Client 1 sees only
-   their own client, never the firm's other clients.
-3. **Books must balance.** Posting a journal entry where
-   `SUM(debits) != SUM(credits)` must be rejected with a 400-class error.
-4. **Audit trail.** Every state change should produce an `audit_event` row.
-   Verify with `make psql` and `SELECT count(*) FROM audit_event;`.
-5. **Health endpoints** stay green during normal operation:
-   - `/livez` → 200 always (no deps).
-   - `/healthz` → 200 always (no deps).
-   - `/readyz` → 200 when DB reachable, 503 when DB unreachable.
+Full reference at `http://localhost:8000/docs` (Swagger UI).
 
 ---
 
-## 10. Reset / teardown
+## 12. Reset / teardown
 
 ```bash
 make down       # stops containers and DROPS the local Postgres volume
 ```
 
-That is destructive — you will lose all seeded data and need to re-run
-`make migrate && make seed-demo`. To stop without losing data:
+Destructive — re-run `make migrate && make seed-demo` afterwards. To stop
+without losing data:
 
 ```bash
 docker compose stop
@@ -266,29 +304,15 @@ docker compose stop
 
 ---
 
-## 11. Reporting bugs
+## 13. Reporting bugs
 
 Please include:
 
-* Output of `git rev-parse --short HEAD` (which commit you tested).
-* The `firm_id` / `client_id` / role you were signed in as.
-* The HTTP request that misbehaved (Swagger has a "Try it out" + copy
-  curl button on every endpoint).
+* Output of `git rev-parse --short HEAD` (commit you tested).
+* `firm_id` / `client_id` / role you were signed in as.
+* The HTTP request that misbehaved (Swagger has a "Try it out" + copy curl
+  button on every endpoint, or grab the request from the browser DevTools
+  Network panel).
 * The relevant slice of `docker compose logs app` around the time of the
-  error — the API logs are JSON-structured and include `firm_id`,
-  `client_id`, `request_id` on every line.
-
----
-
-## 12. Azure deployment URL (for IaC validation only)
-
-The thin smoke deployment is up at:
-
-```
-https://ca-ctax-dev-cus-api.grayisland-1d1659e2.centralus.azurecontainerapps.io
-```
-
-Only `/livez` and `/healthz` are useful there. `/readyz` will return 503 by
-design — the DB is intentionally un-wired in the cost-thin profile. This URL
-exists to prove the IaC stack stands up cleanly, **not** to log in or
-exercise features. Use the local stack (sections 3–10) for everything else.
+  error — API logs are JSON-structured and include `firm_id`, `client_id`,
+  `request_id` on every line.
