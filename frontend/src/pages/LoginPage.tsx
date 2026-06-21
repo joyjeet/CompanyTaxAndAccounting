@@ -1,17 +1,68 @@
+import {
+  Badge,
+  Body1,
+  Button,
+  Caption1,
+  Dropdown,
+  Field,
+  Input,
+  makeStyles,
+  Option,
+  shorthands,
+  Spinner,
+  Text,
+  tokens,
+} from "@fluentui/react-components";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
 import config from "../config";
 
-/**
- * Login screen.
- *
- * In dev mode we render a small form (sub / role / firm_id / client_id) so
- * the developer can hop between firm-staff and portal personas without
- * Entra ID. In msal mode we just trigger the redirect.
- */
+const useStyles = makeStyles({
+  shell: {
+    display: "grid",
+    placeItems: "center",
+    minHeight: "100vh",
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  card: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    ...shorthands.padding("32px", "32px"),
+    ...shorthands.borderRadius(tokens.borderRadiusLarge),
+    boxShadow: tokens.shadow16,
+    minWidth: "420px",
+    maxWidth: "520px",
+  },
+  brand: {
+    display: "flex",
+    alignItems: "center",
+    columnGap: "12px",
+    marginBottom: "16px",
+  },
+  brandMark: {
+    width: "36px",
+    height: "36px",
+    ...shorthands.borderRadius(tokens.borderRadiusMedium),
+    backgroundColor: tokens.colorBrandBackground,
+    color: tokens.colorNeutralForegroundOnBrand,
+    display: "grid",
+    placeItems: "center",
+    fontWeight: tokens.fontWeightBold,
+  },
+  form: {
+    display: "grid",
+    rowGap: "12px",
+    marginTop: "12px",
+  },
+  error: {
+    color: tokens.colorPaletteRedForeground1,
+    fontSize: tokens.fontSizeBase200,
+  },
+});
+
 export default function LoginPage() {
+  const styles = useStyles();
   const { client, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
@@ -29,33 +80,47 @@ export default function LoginPage() {
 
   if (config.authMode === "msal") {
     return (
-      <div className="content">
-        <div className="card">
-          <h2>Sign in</h2>
-          <p>You will be redirected to Microsoft to sign in.</p>
-          <button
-            className="primary"
-            onClick={() => client.login().catch((e) => setError(String(e)))}
-          >
-            Continue
-          </button>
-          {error && <p className="error">{error}</p>}
+      <div className={styles.shell}>
+        <div className={styles.card}>
+          <div className={styles.brand}>
+            <div className={styles.brandMark}>C</div>
+            <div>
+              <Text size={600} weight="semibold">CTAA</Text>
+              <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+                Company Tax &amp; Accounting
+              </Caption1>
+            </div>
+          </div>
+          <Body1>You will be redirected to Microsoft Entra ID.</Body1>
+          <div style={{ marginTop: 16 }}>
+            <Button
+              appearance="primary"
+              onClick={() => client.login().catch((e) => setError(String(e)))}
+            >
+              Continue
+            </Button>
+          </div>
+          {error && <p className={styles.error}>{error}</p>}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="content">
-      <div className="card" style={{ maxWidth: 540 }}>
-        <h2>Dev sign-in</h2>
-        <p className="muted">
-          This screen mints a test JWT against the backend's <code>/auth/dev-token</code>{" "}
-          endpoint. It is only available when the backend runs with{" "}
-          <code>APP_AUTH_MODE=test</code>.
-        </p>
+    <div className={styles.shell}>
+      <div className={styles.card}>
+        <div className={styles.brand}>
+          <div className={styles.brandMark}>C</div>
+          <div>
+            <Text size={600} weight="semibold">CTAA · Dev sign-in</Text>
+            <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+              Mints an HS256 test token via /auth/dev-token.
+            </Caption1>
+          </div>
+        </div>
+        <Badge appearance="tint" color="warning">APP_AUTH_MODE=test only</Badge>
         <form
-          className="form-grid"
+          className={styles.form}
           onSubmit={async (e) => {
             e.preventDefault();
             setError(null);
@@ -75,47 +140,37 @@ export default function LoginPage() {
             }
           }}
         >
-          <label htmlFor="sub">Subject</label>
-          <input id="sub" value={sub} onChange={(e) => setSub(e.target.value)} required />
-
-          <label htmlFor="role">Role</label>
-          <select
-            id="role"
-            value={role}
-            onChange={(e) => setRole(e.target.value as "firm_staff" | "client_portal")}
-          >
-            <option value="firm_staff">firm_staff (reviewer)</option>
-            <option value="client_portal">client_portal (portal user)</option>
-          </select>
-
-          <label htmlFor="firmId">Firm ID</label>
-          <input
-            id="firmId"
-            placeholder="UUID"
-            value={firmId}
-            onChange={(e) => setFirmId(e.target.value)}
-            required
-          />
-
-          <label htmlFor="clientId">
-            Client ID{role === "client_portal" ? " *" : " (optional)"}
-          </label>
-          <input
-            id="clientId"
-            placeholder={role === "client_portal" ? "UUID (required)" : "UUID (optional)"}
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
+          <Field label="Subject" required>
+            <Input value={sub} onChange={(_, d) => setSub(d.value)} />
+          </Field>
+          <Field label="Role" required>
+            <Dropdown
+              value={role === "firm_staff" ? "Firm staff" : "Client portal"}
+              selectedOptions={[role]}
+              onOptionSelect={(_, d) => d.optionValue && setRole(d.optionValue as typeof role)}
+            >
+              <Option value="firm_staff">Firm staff (reviewer)</Option>
+              <Option value="client_portal">Client portal (portal user)</Option>
+            </Dropdown>
+          </Field>
+          <Field label="Firm ID (UUID)" required>
+            <Input value={firmId} onChange={(_, d) => setFirmId(d.value)} />
+          </Field>
+          <Field
+            label={
+              role === "client_portal" ? "Client ID (required)" : "Client ID (optional)"
+            }
             required={role === "client_portal"}
-          />
-
-          <span />
-          <div>
-            <button className="primary" type="submit" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
+          >
+            <Input value={clientId} onChange={(_, d) => setClientId(d.value)} />
+          </Field>
+          <div style={{ marginTop: 8 }}>
+            <Button appearance="primary" type="submit" disabled={busy}>
+              {busy ? <Spinner size="tiny" /> : "Sign in"}
+            </Button>
           </div>
+          {error && <p className={styles.error}>{error}</p>}
         </form>
-        {error && <p className="error">{error}</p>}
       </div>
     </div>
   );
