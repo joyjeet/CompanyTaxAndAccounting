@@ -1,0 +1,181 @@
+"""Integration tests for the new firm-staff CRUD endpoints in `clients.py`:
+GET/POST /clients, /clients/{id}/periods, /clients/{id}/chart-of-accounts.
+"""
+from __future__ import annotations
+
+from datetime import date
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import create_app
+from app.security.auth import reset_identity_provider
+
+
+@pytest.fixture(autouse=True)
+def _reset_identity():
+    reset_identity_provider()
+    yield
+    reset_identity_provider()
+
+
+@pytest.fixture
+def client() -> TestClient:
+    return TestClient(create_app())
+
+
+def _auth(client: TestClient, role: str, firm_id, client_id=None) -> dict:
+    body = {"sub": "tester", "role": role, "firm_id": str(firm_id)}
+    if client_id is not None:
+        body["client_id"] = str(client_id)
+    resp = client.post("/auth/dev-token", json=body)
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+# --------------------------------------------------------------------------- #
+# GET /clients/{id}
+# --------------------------------------------------------------------------- #
+def test_get_client_firm_staff_ok(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.get(f"/clients/{world.a1.client_id}", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["id"] == str(world.a1.client_id)
+    assert r.json()["name"] == "ClientA1"
+
+
+def test_get_client_cross_firm_returns_404(client: TestClient, world) -> None:
+    # Firm A staff trying to read a firm B client → RLS hides → 404.
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.get(f"/clients/{world.b1.client_id}", headers=headers)
+    assert r.status_code == 404
+
+
+def test_get_client_portal_cannot_read_other_client(client: TestClient, world) -> None:
+    # Portal user for a1 tries to read a2 → 403.
+    headers = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    r = client.get(f"/clients/{world.a2.client_id}", headers=headers)
+    assert r.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# POST /clients
+# --------------------------------------------------------------------------- #
+def test_create_client_firm_staff_ok(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        "/clients",
+        headers=headers,
+        json={"name": "NewCo", "external_code": "NC-001"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == "NewCo"
+    assert body["firm_id"] == str(world.firm_a)
+
+
+def test_create_client_portal_forbidden(client: TestClient, world) -> None:
+    headers = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    r = client.post("/clients", headers=headers, json={"name": "X"})
+    assert r.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
+# Periods
+# --------------------------------------------------------------------------- #
+def test_list_periods_returns_seeded(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.get(f"/clients/{world.a1.client_id}/periods", headers=headers)
+    assert r.status_code == 200
+    periods = r.json()
+    assert len(periods) == 1
+    assert periods[0]["name"] == "2026"
+
+
+def test_create_period_ok(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        f"/clients/{world.a1.client_id}/periods",
+        headers=headers,
+        json={
+            "name": "2027",
+            "start_date": "2027-01-01",
+            "end_date": "2027-12-31",
+        },
+    )
+    assert r.status_code == 201
+    assert r.json()["name"] == "2027"
+
+
+def test_create_period_rejects_inverted_dates(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        f"/clients/{world.a1.client_id}/periods",
+        headers=headers,
+        json={
+            "name": "bad",
+            "start_date": "2027-12-31",
+            "end_date": "2027-01-01",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_list_periods_cross_firm_404(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.get(f"/clients/{world.b1.client_id}/periods", headers=headers)
+    assert r.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# COA
+# --------------------------------------------------------------------------- #
+def test_list_coa_returns_seeded(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.get(
+        f"/clients/{world.a1.client_id}/chart-of-accounts", headers=headers
+    )
+    assert r.status_code == 200
+    codes = {a["code"] for a in r.json()}
+    assert {"1000", "1100", "2000", "3000", "4000", "5000"}.issubset(codes)
+
+
+def test_create_coa_ok(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        f"/clients/{world.a1.client_id}/chart-of-accounts",
+        headers=headers,
+        json={
+            "code": "6000",
+            "name": "Marketing",
+            "account_type": "expense",
+            "normal_balance": "debit",
+        },
+    )
+    assert r.status_code == 201
+    assert r.json()["code"] == "6000"
+
+
+def test_create_coa_portal_forbidden(client: TestClient, world) -> None:
+    headers = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    r = client.post(
+        f"/clients/{world.a1.client_id}/chart-of-accounts",
+        headers=headers,
+        json={
+            "code": "9999",
+            "name": "X",
+            "account_type": "expense",
+            "normal_balance": "debit",
+        },
+    )
+    assert r.status_code == 403
+
+
+def test_portal_can_read_own_coa(client: TestClient, world) -> None:
+    headers = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    r = client.get(
+        f"/clients/{world.a1.client_id}/chart-of-accounts", headers=headers
+    )
+    assert r.status_code == 200
+    assert len(r.json()) >= 6

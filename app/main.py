@@ -9,7 +9,16 @@ from app.api.middleware import (
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
-from app.api.routes import clients, documents, drafts, health, reports, tax
+from app.api.routes import (
+    clients,
+    documents,
+    drafts,
+    health,
+    journal_entries,
+    reports,
+    statements_preview,
+    tax,
+)
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -53,6 +62,8 @@ def create_app() -> FastAPI:
     app.include_router(clients.router)
     app.include_router(documents.router)
     app.include_router(drafts.router)
+    app.include_router(journal_entries.router)
+    app.include_router(statements_preview.router)
     app.include_router(tax.router)
     app.include_router(reports.router)
 
