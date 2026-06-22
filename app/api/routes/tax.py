@@ -31,13 +31,18 @@ from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
 from app.domain.tax_service import (
+    AutoFillResult,
+    AutoProposeSummary,
     MappingProposal,
     TaxAccessForbiddenError,
     TaxMappingError,
     TaxWorksheetGenerationError,
     UnmappedAccountsError,
+    approve_all_drafts_for_form,
     approve_mapping,
     approve_worksheet,
+    auto_fill_worksheet,
+    auto_propose_for_form,
     generate_worksheet,
     propose_mapping,
     reject_mapping,
@@ -333,6 +338,103 @@ def reject(
 
 
 # --------------------------------------------------------------------------- #
+# Auto-mapping (heuristic) — one-button onboarding
+# --------------------------------------------------------------------------- #
+class AutoProposeIn(BaseModel):
+    form_code: TaxFormCode
+
+
+class AutoProposeOut(BaseModel):
+    form_code: str
+    proposed_mapping_ids: list[UUID]
+    skipped: list[dict]
+    already_existed: list[dict]
+
+
+class AutoFillIn(BaseModel):
+    period_id: UUID
+    form_code: TaxFormCode
+
+
+class AutoFillOut(BaseModel):
+    proposed_mapping_ids: list[UUID]
+    approved_mapping_ids: list[UUID]
+    skipped: list[dict]
+    already_existed: list[dict]
+    worksheet: WorksheetDetailOut
+
+
+def _serialize_auto_propose(s: AutoProposeSummary) -> AutoProposeOut:
+    return AutoProposeOut(
+        form_code=s.form_code.value,
+        proposed_mapping_ids=list(s.proposed),
+        skipped=[
+            {"code": code, "name": name, "reason": reason}
+            for code, name, reason in s.skipped
+        ],
+        already_existed=[
+            {"code": code, "name": name, "status": st}
+            for code, name, st in s.already_existed
+        ],
+    )
+
+
+@router.post(
+    "/mappings/auto-propose",
+    response_model=AutoProposeOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def auto_propose(
+    body: AutoProposeIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> AutoProposeOut:
+    """Walk the client's COA and write DRAFT mappings using a heuristic
+    (account-name keyword + code-range fallback). Idempotent — rows that
+    already have a DRAFT/APPROVED mapping on this form are skipped."""
+    _require_firm_with_client(identity)
+    assert identity.client_id is not None
+    try:
+        summary = auto_propose_for_form(
+            sess,
+            firm_id=identity.firm_id, client_id=identity.client_id,
+            actor=identity.subject, scope=identity.scope,
+            form_code=body.form_code,
+        )
+    except TaxAccessForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except TaxMappingError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    return _serialize_auto_propose(summary)
+
+
+@router.post(
+    "/mappings/approve-all",
+    response_model=list[UUID],
+)
+def approve_all(
+    body: AutoProposeIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> list[UUID]:
+    """Flip every DRAFT mapping for (client, form) to APPROVED in one call."""
+    _require_firm_with_client(identity)
+    assert identity.client_id is not None
+    try:
+        ids = approve_all_drafts_for_form(
+            sess,
+            firm_id=identity.firm_id, client_id=identity.client_id,
+            actor=identity.subject, scope=identity.scope,
+            form_code=body.form_code,
+        )
+    except TaxAccessForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except TaxMappingError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    return list(ids)
+
+
+# --------------------------------------------------------------------------- #
 # Worksheets (tenant)
 # --------------------------------------------------------------------------- #
 @router.post("/worksheets", response_model=WorksheetDetailOut, status_code=201)
@@ -462,4 +564,67 @@ def _serialize_worksheet(sess: Session, ws: TaxWorksheet) -> WorksheetDetailOut:
             )
             for ln in lines
         ],
+    )
+
+
+# --------------------------------------------------------------------------- #
+# One-click "auto-fill": propose -> approve-all -> generate (in one txn).
+# --------------------------------------------------------------------------- #
+@router.post(
+    "/auto-fill",
+    response_model=AutoFillOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def auto_fill(
+    body: AutoFillIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> AutoFillOut:
+    """First-run convenience: heuristic-propose mappings, approve them all,
+    then generate the worksheet for `period_id` + `form_code`. Returns the
+    worksheet so the UI can render it immediately."""
+    _require_firm_with_client(identity)
+    assert identity.client_id is not None
+    try:
+        result: AutoFillResult = auto_fill_worksheet(
+            sess,
+            firm_id=identity.firm_id, client_id=identity.client_id,
+            actor=identity.subject, scope=identity.scope,
+            period_id=body.period_id, form_code=body.form_code,
+        )
+    except TaxAccessForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except UnmappedAccountsError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": str(e),
+                "unmapped_accounts": [
+                    {"id": str(aid), "code": code, "name": name}
+                    for aid, code, name in e.accounts
+                ],
+            },
+        ) from e
+    except TaxMappingError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except TaxWorksheetGenerationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
+
+    ws_detail = _serialize_worksheet(sess, result.worksheet)
+    summary = result.auto_propose
+    return AutoFillOut(
+        proposed_mapping_ids=list(summary.proposed),
+        approved_mapping_ids=list(result.approved_mapping_ids),
+        skipped=[
+            {"code": code, "name": name, "reason": reason}
+            for code, name, reason in summary.skipped
+        ],
+        already_existed=[
+            {"code": code, "name": name, "status": st}
+            for code, name, st in summary.already_existed
+        ],
+        worksheet=ws_detail,
     )

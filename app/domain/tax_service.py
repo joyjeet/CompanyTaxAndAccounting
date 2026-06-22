@@ -288,6 +288,183 @@ def reject_mapping(
 
 
 # --------------------------------------------------------------------------- #
+# Auto-mapping orchestration
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True, slots=True)
+class AutoProposeSummary:
+    """Result of one auto-propose run for a (client, form)."""
+
+    form_code: TaxFormCode
+    proposed: tuple[UUID, ...]       # mapping_ids newly inserted
+    skipped: tuple[tuple[str, str, str], ...]   # (code, name, reason)
+    already_existed: tuple[tuple[str, str, str], ...]  # (code, name, status)
+
+
+def auto_propose_for_form(
+    sess: Session,
+    *,
+    firm_id: UUID,
+    client_id: UUID,
+    actor: str,
+    scope: AccessScope,
+    form_code: TaxFormCode,
+) -> AutoProposeSummary:
+    """Walk the client's COA and write DRAFT mappings for every P&L account
+    that does not already have an open DRAFT or APPROVED mapping on this form.
+
+    Uses `app.domain.tax_automap` for the heuristic (account-name keyword
+    rules + code-range fallback). Idempotent: re-running this on the same
+    client+form will skip accounts that already have an open mapping.
+    """
+    # Lazy import to break a potential domain<->domain import cycle.
+    from app.domain.tax_automap import auto_propose_mappings
+
+    if scope is not AccessScope.FIRM:
+        raise TaxAccessForbiddenError("Only firm staff may auto-propose tax mappings.")
+
+    form = get_form_by_code(sess, form_code)
+
+    # Load this client's full COA (RLS already constrains to firm+client when
+    # the caller went through db_session, but we re-filter for safety).
+    accounts = sess.execute(
+        select(ChartOfAccounts).where(
+            ChartOfAccounts.firm_id == firm_id,
+            ChartOfAccounts.client_id == client_id,
+        )
+    ).scalars().all()
+
+    lines = sess.execute(
+        select(TaxFormLine).where(TaxFormLine.form_id == form.id)
+    ).scalars().all()
+
+    # Existing DRAFT/APPROVED mappings to dedupe against.
+    existing = sess.execute(
+        select(TaxAccountMapping).where(
+            TaxAccountMapping.client_id == client_id,
+            TaxAccountMapping.form_id == form.id,
+            TaxAccountMapping.status.in_(
+                (TaxMappingStatus.DRAFT, TaxMappingStatus.APPROVED)
+            ),
+        )
+    ).scalars().all()
+    existing_by_account: dict[UUID, TaxAccountMapping] = {
+        m.account_id: m for m in existing
+    }
+    accounts_by_id: dict[UUID, ChartOfAccounts] = {a.id: a for a in accounts}
+
+    result = auto_propose_mappings(
+        form_code=form_code, accounts=accounts, lines=lines
+    )
+
+    proposed_ids: list[UUID] = []
+    already: list[tuple[str, str, str]] = []
+    for proposal in result.proposals:
+        if proposal.account_id in existing_by_account:
+            existing_m = existing_by_account[proposal.account_id]
+            acct = accounts_by_id.get(proposal.account_id)
+            already.append(
+                (
+                    (acct.code if acct else "") or "",
+                    (acct.name if acct else "") or "",
+                    existing_m.status.value,
+                )
+            )
+            continue
+        row = propose_mapping(
+            sess,
+            firm_id=firm_id, client_id=client_id, actor=actor, scope=scope,
+            form_id=form.id, proposal=proposal,
+        )
+        proposed_ids.append(row.id)
+
+    return AutoProposeSummary(
+        form_code=form_code,
+        proposed=tuple(proposed_ids),
+        skipped=result.skipped,
+        already_existed=tuple(already),
+    )
+
+
+def approve_all_drafts_for_form(
+    sess: Session,
+    *,
+    firm_id: UUID,
+    client_id: UUID,
+    actor: str,
+    scope: AccessScope,
+    form_code: TaxFormCode,
+) -> tuple[UUID, ...]:
+    """Bulk-approve every DRAFT mapping for (client, form). Returns the list
+    of mapping_ids that were flipped to APPROVED."""
+    if scope is not AccessScope.FIRM:
+        raise TaxAccessForbiddenError("Only firm staff may approve tax mappings.")
+
+    form = get_form_by_code(sess, form_code)
+    drafts = sess.execute(
+        select(TaxAccountMapping).where(
+            TaxAccountMapping.client_id == client_id,
+            TaxAccountMapping.form_id == form.id,
+            TaxAccountMapping.status == TaxMappingStatus.DRAFT,
+        )
+    ).scalars().all()
+
+    approved_ids: list[UUID] = []
+    for m in drafts:
+        approve_mapping(
+            sess,
+            firm_id=firm_id, client_id=client_id, actor=actor, scope=scope,
+            mapping_id=m.id,
+        )
+        approved_ids.append(m.id)
+    return tuple(approved_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class AutoFillResult:
+    auto_propose: AutoProposeSummary
+    approved_mapping_ids: tuple[UUID, ...]
+    worksheet: TaxWorksheet
+
+
+def auto_fill_worksheet(
+    sess: Session,
+    *,
+    firm_id: UUID,
+    client_id: UUID,
+    actor: str,
+    scope: AccessScope,
+    period_id: UUID,
+    form_code: TaxFormCode,
+) -> AutoFillResult:
+    """One-click: propose + approve all + generate.
+
+    For demo / first-run UX. The reviewer can still re-review any individual
+    mapping after the fact and re-generate the worksheet; the older worksheet
+    remains as an audit record (worksheets are immutable).
+    """
+    if scope is not AccessScope.FIRM:
+        raise TaxAccessForbiddenError("Only firm staff may auto-fill worksheets.")
+
+    summary = auto_propose_for_form(
+        sess, firm_id=firm_id, client_id=client_id, actor=actor, scope=scope,
+        form_code=form_code,
+    )
+    approved = approve_all_drafts_for_form(
+        sess, firm_id=firm_id, client_id=client_id, actor=actor, scope=scope,
+        form_code=form_code,
+    )
+    ws = generate_worksheet(
+        sess, firm_id=firm_id, client_id=client_id, actor=actor, scope=scope,
+        period_id=period_id, form_code=form_code,
+    )
+    return AutoFillResult(
+        auto_propose=summary,
+        approved_mapping_ids=approved,
+        worksheet=ws,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Worksheet engine
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True, slots=True)
@@ -583,13 +760,18 @@ def approve_worksheet(
 
 
 __all__ = [
+    "AutoFillResult",
+    "AutoProposeSummary",
     "MappingProposal",
     "TaxAccessForbiddenError",
     "TaxMappingError",
     "TaxWorksheetGenerationError",
     "UnmappedAccountsError",
+    "approve_all_drafts_for_form",
     "approve_mapping",
     "approve_worksheet",
+    "auto_fill_worksheet",
+    "auto_propose_for_form",
     "generate_worksheet",
     "get_form_by_code",
     "propose_mapping",

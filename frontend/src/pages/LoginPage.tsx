@@ -66,10 +66,25 @@ export default function LoginPage() {
   const { client, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
-  const [sub, setSub] = useState("dev-user@example.com");
+  // During dev/test we want the firm + client IDs pre-populated so the
+  // tester never has to paste UUIDs. Precedence:
+  //   1. localStorage (what the user last entered) — survives reloads
+  //   2. Vite build-time env (VITE_DEV_DEFAULT_*) — baked into the image
+  //   3. empty string
+  const lsFirm = typeof window !== "undefined"
+    ? window.localStorage.getItem("ctaa.dev.firmId") || ""
+    : "";
+  const lsClient = typeof window !== "undefined"
+    ? window.localStorage.getItem("ctaa.dev.clientId") || ""
+    : "";
+  const lsSub = typeof window !== "undefined"
+    ? window.localStorage.getItem("ctaa.dev.sub") || ""
+    : "";
+
+  const [sub, setSub] = useState(lsSub || "dev-user@example.com");
   const [role, setRole] = useState<"firm_staff" | "client_portal">("firm_staff");
-  const [firmId, setFirmId] = useState(config.dev.defaultFirmId);
-  const [clientId, setClientId] = useState(config.dev.defaultClientId);
+  const [firmId, setFirmId] = useState(lsFirm || config.dev.defaultFirmId);
+  const [clientId, setClientId] = useState(lsClient || config.dev.defaultClientId);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -126,11 +141,22 @@ export default function LoginPage() {
             setError(null);
             setBusy(true);
             try {
+              const trimmedFirm = firmId.trim();
+              const trimmedClient = clientId.trim();
+              // Persist so the next reload pre-fills the same values
+              // (useful when the same tester switches between roles).
+              try {
+                window.localStorage.setItem("ctaa.dev.firmId", trimmedFirm);
+                window.localStorage.setItem("ctaa.dev.clientId", trimmedClient);
+                window.localStorage.setItem("ctaa.dev.sub", sub);
+              } catch {
+                /* storage may be disabled (incognito) — ignore */
+              }
               await client.login({
                 sub,
                 role,
-                firmId: firmId.trim(),
-                clientId: clientId.trim() || undefined,
+                firmId: trimmedFirm,
+                clientId: trimmedClient || undefined,
               });
               navigate("/", { replace: true });
             } catch (err) {

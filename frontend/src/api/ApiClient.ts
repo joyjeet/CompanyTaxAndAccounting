@@ -26,6 +26,8 @@ import type {
   UploadOut,
   WorksheetDetailOut,
   WorksheetOut,
+  AutoProposeOut,
+  AutoFillOut,
 } from "../auth/types";
 
 export class ApiError extends Error {
@@ -356,5 +358,31 @@ export class ApiClient {
 
   approveWorksheet(id: string): Promise<WorksheetDetailOut> {
     return this.json<WorksheetDetailOut>(`/tax/worksheets/${id}/approve`, "POST", {});
+  }
+
+  /**
+   * Render an approved tax worksheet into an encrypted Artifact (PDF or
+   * JSON). The result lands in the Artifacts library where it can be
+   * finalized and downloaded.
+   */
+  renderTaxWorksheet(id: string, format: "pdf" | "json" = "pdf"): Promise<ArtifactOut> {
+    const q = new URLSearchParams({ format });
+    return this.json<ArtifactOut>(
+      `/reports/tax-worksheets/${id}/render?${q}`,
+      "POST",
+      {},
+    );
+  }
+
+  autoProposeMappings(body: { form_code: string }): Promise<AutoProposeOut> {
+    return this.json<AutoProposeOut>("/tax/mappings/auto-propose", "POST", body);
+  }
+
+  approveAllMappings(body: { form_code: string }): Promise<string[]> {
+    return this.json<string[]>("/tax/mappings/approve-all", "POST", body);
+  }
+
+  autoFillWorksheet(body: { period_id: string; form_code: string }): Promise<AutoFillOut> {
+    return this.json<AutoFillOut>("/tax/auto-fill", "POST", body);
   }
 }

@@ -18,6 +18,9 @@ build/
 htmlcov/
 .vscode/
 data/
+# IRS PDF templates are bundled with the app — not user data.
+!app/data/
+!app/data/**
 # Frontend build cache
 frontend/tsconfig.tsbuildinfo
 frontend/node_modules/

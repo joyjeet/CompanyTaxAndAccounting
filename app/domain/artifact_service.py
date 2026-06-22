@@ -390,12 +390,19 @@ def generate_tax_worksheet_artifact(
     if ws is None or ws.client_id != client_id:
         raise ArtifactNotFoundError("Tax worksheet not found in this tenant.")
     branding = BrandingContext.from_settings()
-    renderer = _renderer_for(fmt)
     payload = _serialize_worksheet_for_render(sess, ws)
     client_label = _client_name(sess, client_id)
-    body = renderer.render_tax_worksheet(
-        payload, client_name=client_label, branding=branding,
-    )
+
+    # PDF tax-worksheet artifacts use the official IRS template (filled
+    # AcroForm) instead of our generic ReportLab layout, so the output
+    # is visually identical to the form taxpayers expect to see.
+    if fmt is ArtifactFormat.PDF:
+        body = _render_irs_pdf(sess, ws, payload, client_label)
+    else:
+        renderer = _renderer_for(fmt)
+        body = renderer.render_tax_worksheet(
+            payload, client_name=client_label, branding=branding,
+        )
     return _store_and_register(
         sess,
         firm_id=firm_id, client_id=client_id, actor=actor,
@@ -409,6 +416,33 @@ def generate_tax_worksheet_artifact(
         },
         period_id=ws.period_id,
         tax_worksheet_id=ws.id,
+    )
+
+
+def _render_irs_pdf(
+    sess: Session,
+    ws: TaxWorksheet,
+    payload: dict[str, Any],
+    client_label: str,
+) -> bytes:
+    """Render a tax worksheet by filling the official IRS PDF template."""
+    # Imported lazily so missing pypdf or template files don't break other
+    # artifact paths.
+    from app.domain.irs_form_filler import IrsFormFiller, TaxFillerContext
+    from app.models.enums import TaxFormCode
+
+    form_code = TaxFormCode(payload["form_code"])
+    period = sess.get(AccountingPeriod, ws.period_id)
+    ctx = TaxFillerContext(
+        client_name=client_label,
+        period_start=period.start_date if period else None,
+        period_end=period.end_date if period else None,
+        # EIN / address are not yet stored on Client — leave blank rather
+        # than make up values. The IRS form will simply have those header
+        # boxes empty, exactly how a partially-completed return looks.
+    )
+    return IrsFormFiller().render(
+        form_code=form_code, worksheet=payload, ctx=ctx,
     )
 
 

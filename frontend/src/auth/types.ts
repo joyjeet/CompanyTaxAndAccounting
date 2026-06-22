@@ -338,3 +338,30 @@ export interface WorksheetLineOut {
 export interface WorksheetDetailOut extends WorksheetOut {
   lines: WorksheetLineOut[];
 }
+
+export interface AutoProposeSkipped {
+  code: string;
+  name: string;
+  reason: string;
+}
+
+export interface AutoProposeAlreadyExisted {
+  code: string;
+  name: string;
+  status: string;
+}
+
+export interface AutoProposeOut {
+  form_code: string;
+  proposed_mapping_ids: string[];
+  skipped: AutoProposeSkipped[];
+  already_existed: AutoProposeAlreadyExisted[];
+}
+
+export interface AutoFillOut {
+  proposed_mapping_ids: string[];
+  approved_mapping_ids: string[];
+  skipped: AutoProposeSkipped[];
+  already_existed: AutoProposeAlreadyExisted[];
+  worksheet: WorksheetDetailOut;
+}

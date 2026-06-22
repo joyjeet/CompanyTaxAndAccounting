@@ -21,7 +21,7 @@ import {
   useId,
   useToastController,
 } from "@fluentui/react-components";
-import { CheckmarkCircleRegular, SparkleRegular } from "@fluentui/react-icons";
+import { ArrowExportRegular, CheckmarkCircleRegular, SparkleRegular } from "@fluentui/react-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
@@ -77,6 +77,11 @@ export default function TaxTab({ clientId }: { clientId: string }) {
     () => new Map((accounts.data ?? []).map((a) => [a.id, a])),
     [accounts.data],
   );
+  // Resolve line UUIDs -> human-readable codes for whichever form is loaded.
+  const lineMap = useMemo(
+    () => new Map((formDetail.data?.lines ?? []).map((ln) => [ln.id, ln])),
+    [formDetail.data],
+  );
 
   const generate = useMutation({
     mutationFn: () =>
@@ -94,6 +99,104 @@ export default function TaxTab({ clientId }: { clientId: string }) {
     mutationFn: (id: string) => api.approveWorksheet(id),
     onSuccess: () => {
       dispatchToast(<Toast><ToastTitle>Worksheet approved</ToastTitle></Toast>, { intent: "success" });
+      qc.invalidateQueries({ queryKey: ["worksheets"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  // Render an approved worksheet into the Artifacts library as a PDF
+  // (encrypted at rest, finalize+download from the Artifacts tab).
+  const renderPdf = useMutation({
+    mutationFn: (id: string) => api.renderTaxWorksheet(id, "pdf"),
+    onSuccess: (art) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>
+            PDF rendered — see it in the Artifacts tab ({(art.size_bytes / 1024).toFixed(1)} KB)
+          </ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["artifacts"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  // --- Auto-mapping mutations ---------------------------------------- //
+  const autoPropose = useMutation({
+    mutationFn: () => api.autoProposeMappings({ form_code: formCode }),
+    onSuccess: (res) => {
+      const n = res.proposed_mapping_ids.length;
+      const ex = res.already_existed.length;
+      dispatchToast(
+        <Toast>
+          <ToastTitle>
+            Proposed {n} new mapping{n === 1 ? "" : "s"}
+            {ex > 0 ? ` (${ex} already existed)` : ""}
+          </ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["tax-mappings"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const approveAll = useMutation({
+    mutationFn: () => api.approveAllMappings({ form_code: formCode }),
+    onSuccess: (ids) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Approved {ids.length} draft mapping{ids.length === 1 ? "" : "s"}</ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["tax-mappings"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const approveOne = useMutation({
+    mutationFn: (id: string) => api.approveMapping(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tax-mappings"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const rejectOne = useMutation({
+    mutationFn: (id: string) => api.rejectMapping(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tax-mappings"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const autoFill = useMutation({
+    mutationFn: () =>
+      api.autoFillWorksheet({ period_id: periodId, form_code: formCode }),
+    onSuccess: (res) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>
+            Auto-fill done — taxable income {res.worksheet.taxable_income}
+          </ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["tax-mappings"] });
       qc.invalidateQueries({ queryKey: ["worksheets"] });
     },
     onError: (err: Error) => {
@@ -255,23 +358,57 @@ export default function TaxTab({ clientId }: { clientId: string }) {
               ),
             }}
             toolbar={
-              <Dropdown
-                placeholder="All forms"
-                value={formCode || "All forms"}
-                selectedOptions={formCode ? [formCode] : []}
-                onOptionSelect={(_, d) => setFormCode(d.optionValue ?? "")}
-              >
-                <Option value="">All forms</Option>
-                {(forms.data ?? []).map((f) => (
-                  <Option key={f.code} value={f.code}>{f.code}</Option>
-                ))}
-              </Dropdown>
+              <div className={styles.toolbar}>
+                <Dropdown
+                  placeholder="All forms"
+                  value={formCode || "All forms"}
+                  selectedOptions={formCode ? [formCode] : []}
+                  onOptionSelect={(_, d) => setFormCode(d.optionValue ?? "")}
+                >
+                  <Option value="">All forms</Option>
+                  {(forms.data ?? []).map((f) => (
+                    <Option key={f.code} value={f.code}>{f.code}</Option>
+                  ))}
+                </Dropdown>
+                <Button
+                  appearance="primary"
+                  icon={<SparkleRegular />}
+                  disabled={!formCode || autoPropose.isPending}
+                  onClick={() => autoPropose.mutate()}
+                  title={
+                    formCode
+                      ? `Auto-propose mappings from this client's chart of accounts onto ${formCode}.`
+                      : "Pick a form first."
+                  }
+                >
+                  Auto-propose from COA
+                </Button>
+                <Button
+                  appearance="secondary"
+                  disabled={
+                    !formCode ||
+                    approveAll.isPending ||
+                    !(mappings.data ?? []).some((m) => m.status === "proposed" || m.status === "draft")
+                  }
+                  onClick={() => approveAll.mutate()}
+                  title="Approve every DRAFT mapping for the selected form."
+                >
+                  Approve all drafts
+                </Button>
+              </div>
             }
           >
             {mappings.isLoading && <LoadingState />}
             {mappings.error && <ErrorState error={mappings.error} />}
             {mappings.data && mappings.data.length === 0 && (
-              <EmptyState title="No mappings yet" description="Propose mappings from the worksheet flow." />
+              <EmptyState
+                title="No mappings yet"
+                description={
+                  formCode
+                    ? `Click "Auto-propose from COA" to generate draft mappings for ${formCode}, then approve them.`
+                    : "Pick a form above, then click \"Auto-propose from COA\"."
+                }
+              />
             )}
             {mappings.data && mappings.data.length > 0 && (
               <Table size="small">
@@ -282,18 +419,29 @@ export default function TaxTab({ clientId }: { clientId: string }) {
                     <TableHeaderCell>Line</TableHeaderCell>
                     <TableHeaderCell>Sign</TableHeaderCell>
                     <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>Actions</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {mappings.data.map((m) => {
                     const a = accountMap.get(m.account_id);
+                    const ln = lineMap.get(m.line_id);
+                    const isDraft = m.status === "draft" || m.status === "proposed";
                     return (
                       <TableRow key={m.id}>
                         <TableCell>
                           {a ? <><code>{a.code}</code> {a.name}</> : <code>{shortId(m.account_id)}</code>}
                         </TableCell>
                         <TableCell><code>{shortId(m.form_id)}</code></TableCell>
-                        <TableCell><code>{shortId(m.line_id)}</code></TableCell>
+                        <TableCell>
+                          {ln ? (
+                            <>
+                              <code>{ln.code}</code> {ln.label}
+                            </>
+                          ) : (
+                            <code>{shortId(m.line_id)}</code>
+                          )}
+                        </TableCell>
                         <TableCell>{m.sign}</TableCell>
                         <TableCell>
                           <Badge
@@ -308,6 +456,29 @@ export default function TaxTab({ clientId }: { clientId: string }) {
                           >
                             {m.status}
                           </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {isDraft && (
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <Button
+                                appearance="primary"
+                                size="small"
+                                icon={<CheckmarkCircleRegular />}
+                                disabled={approveOne.isPending}
+                                onClick={() => approveOne.mutate(m.id)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                appearance="subtle"
+                                size="small"
+                                disabled={rejectOne.isPending}
+                                onClick={() => rejectOne.mutate(m.id)}
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          )}
                         </TableCell>
                       </TableRow>
                     );
@@ -382,6 +553,15 @@ export default function TaxTab({ clientId }: { clientId: string }) {
                 >
                   Generate
                 </Button>
+                <Button
+                  appearance="secondary"
+                  icon={<SparkleRegular />}
+                  disabled={!periodId || !formCode || autoFill.isPending}
+                  onClick={() => autoFill.mutate()}
+                  title="Heuristic-propose mappings, approve them all, and generate the worksheet in one step."
+                >
+                  Auto-fill (1-click)
+                </Button>
               </div>
             }
           >
@@ -434,6 +614,18 @@ export default function TaxTab({ clientId }: { clientId: string }) {
                             disabled={approve.isPending}
                           >
                             Approve
+                          </Button>
+                        )}
+                        {w.status === "approved" && (
+                          <Button
+                            appearance="primary"
+                            size="small"
+                            icon={<ArrowExportRegular />}
+                            onClick={() => renderPdf.mutate(w.id)}
+                            disabled={renderPdf.isPending}
+                            title="Render this worksheet as a signed PDF in the Artifacts library."
+                          >
+                            Render to PDF
                           </Button>
                         )}
                       </TableCell>
