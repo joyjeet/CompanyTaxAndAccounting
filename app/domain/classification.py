@@ -17,12 +17,13 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.audit import write_audit
 from app.integrations.llm import LLMClassifier
 from app.integrations.ocr import ExtractionResult
-from app.models.accounting import DraftClassification, SourceDocument
+from app.models.accounting import ChartOfAccounts, DraftClassification, SourceDocument
 from app.models.enums import AuditAction, DraftKind, DraftStatus
 
 HIGH_CONFIDENCE_THRESHOLD = Decimal("0.85")
@@ -62,10 +63,35 @@ def run_classification(
 
     extraction = _extraction_from_dict(doc.extracted)
 
+    # Fetch the client's active chart of accounts so the classifier can map
+    # vendors to the codes that actually exist for this firm/client. The
+    # classifier signature is the public contract — anything richer (e.g.,
+    # tax mappings) belongs in a higher-level enrichment step.
+    coa_rows = (
+        sess.execute(
+            select(ChartOfAccounts)
+            .where(
+                ChartOfAccounts.client_id == client_id,
+                ChartOfAccounts.is_active.is_(True),
+            )
+            .order_by(ChartOfAccounts.code)
+        )
+        .scalars()
+        .all()
+    )
+    coa_payload = [
+        {
+            "code": a.code,
+            "name": a.name,
+            "account_type": a.account_type.value,
+        }
+        for a in coa_rows
+    ]
+
     classification = classifier.classify(
         kind_hint=kind_hint,
         extraction=extraction,
-        chart_of_accounts=None,  # populated in a later phase
+        chart_of_accounts=coa_payload or None,
     )
 
     # Confidence is clamped into [0, 1] defensively.

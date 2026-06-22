@@ -17,6 +17,7 @@ import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
 import { useAuth } from "../auth/AuthContext";
+import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtDateTime, shortId } from "../lib/format";
@@ -64,9 +65,25 @@ export default function PortalHome() {
   return (
     <div>
       <div className={styles.header}>
-        <Text size={700} weight="semibold">
-          Welcome{identity ? `, ${identity.sub}` : ""}
-        </Text>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <Text size={700} weight="semibold">
+            Welcome{identity ? `, ${identity.sub}` : ""}
+          </Text>
+          <InfoHint
+            title="What you can do here"
+            body={
+              <>
+                This is your client portal. From here you can:
+                <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                  <li><b>Upload documents</b> (invoices, receipts, bank statements) for your firm to process.</li>
+                  <li><b>Download finalized reports</b> — financial statements, tax worksheets — once your firm publishes them.</li>
+                  <li>Track which documents have been received and processed.</li>
+                </ul>
+                Use the cards below as shortcuts.
+              </>
+            }
+          />
+        </div>
         <Body1 block style={{ color: tokens.colorNeutralForeground3 }}>
           Upload bookkeeping documents and review the financial statements your firm produces for you.
         </Body1>
@@ -96,7 +113,24 @@ export default function PortalHome() {
         </Link>
       </div>
 
-      <Section title="Recent activity">
+      <Section
+        title="Recent activity"
+        help={{
+          title: "What you're seeing",
+          body: (
+            <>
+              The latest documents you've sent to your accounting firm.
+              The OCR badge tells you where each one is in their workflow:
+              <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                <li><b>pending</b> — received, queued for processing</li>
+                <li><b>in_progress</b> — your firm's system is reading it</li>
+                <li><b>complete</b> — read successfully, now awaiting CPA review</li>
+                <li><b>failed</b> — we couldn't extract text; your firm will reach out</li>
+              </ul>
+            </>
+          ),
+        }}
+      >
         {docs.isLoading && <LoadingState />}
         {docs.error && <ErrorState error={docs.error} />}
         {docs.data && docs.data.length === 0 && (
@@ -127,7 +161,7 @@ export default function PortalHome() {
                 <Badge
                   appearance="tint"
                   color={
-                    d.ocr_status === "succeeded"
+                    d.ocr_status === "complete"
                       ? "success"
                       : d.ocr_status === "failed"
                         ? "danger"

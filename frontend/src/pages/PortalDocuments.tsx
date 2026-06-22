@@ -26,6 +26,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { useApi } from "../api/useApi";
+import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { fmtDateTime, shortId } from "../lib/format";
@@ -54,9 +55,9 @@ const useStyles = makeStyles({
 });
 
 const OCR_COLORS: Record<string, "success" | "warning" | "danger" | "informative"> = {
-  succeeded: "success",
+  complete: "success",
   failed: "danger",
-  running: "warning",
+  in_progress: "warning",
   pending: "informative",
 };
 
@@ -94,7 +95,28 @@ export default function PortalDocuments() {
     <div>
       <Toaster toasterId={toasterId} />
       <div className={styles.header}>
-        <Text size={700} weight="semibold">My documents</Text>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <Text size={700} weight="semibold">My documents</Text>
+          <InfoHint
+            title="How uploads work"
+            body={
+              <>
+                Files you drop here are sent securely to your accounting
+                team. Here's what happens after you upload:
+                <ol style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                  <li>The file is virus-scanned and a SHA-256 fingerprint is taken (duplicate uploads are recognized).</li>
+                  <li>The file is encrypted at rest in private storage.</li>
+                  <li>Text is extracted (OCR) and a draft classification is proposed.</li>
+                  <li>A CPA at your firm reviews and posts it to your books.</li>
+                </ol>
+                <br />
+                Tip: set the <b>Kind hint</b> field below to a more specific
+                value (e.g. <code>bank_statement</code>) when you know
+                what kind of document it is — that helps the classifier.
+              </>
+            }
+          />
+        </div>
         <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
           Drop files below to send them to your accounting team for processing.
         </Caption1>
@@ -147,7 +169,24 @@ export default function PortalDocuments() {
       </div>
 
       <div style={{ marginTop: 24 }}>
-        <Section title={`${docs.data?.length ?? 0} uploaded documents`}>
+        <Section
+          title={`${docs.data?.length ?? 0} uploaded documents`}
+          help={{
+            title: "Reading this list",
+            body: (
+              <>
+                Everything you've ever uploaded. The OCR badge tells you
+                where each file is in your firm's processing pipeline:
+                <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                  <li><b>pending</b> — received, queued</li>
+                  <li><b>in_progress</b> — being read</li>
+                  <li><b>complete</b> — read; your firm is reviewing</li>
+                  <li><b>failed</b> — we couldn't read it; your firm will reach out</li>
+                </ul>
+              </>
+            ),
+          }}
+        >
           {docs.isLoading && <LoadingState />}
           {docs.error && <ErrorState error={docs.error} />}
           {docs.data && docs.data.length === 0 && <EmptyState title="No uploads yet" />}

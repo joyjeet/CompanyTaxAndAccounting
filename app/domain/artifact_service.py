@@ -695,7 +695,15 @@ def list_artifacts(
     if kind is not None:
         q = q.where(GeneratedArtifact.kind == kind)
     if scope is AccessScope.CLIENT:
-        q = q.where(GeneratedArtifact.status == ArtifactStatus.FINALIZED)
+        # Portal users see in-progress (DRAFT) AND finalized work so they
+        # know their firm is preparing reports. SUPERSEDED is hidden (it's
+        # an old finalized doc that has been replaced). Download is still
+        # blocked for non-FINALIZED artifacts in `download_artifact`.
+        q = q.where(
+            GeneratedArtifact.status.in_(
+                [ArtifactStatus.DRAFT, ArtifactStatus.FINALIZED]
+            )
+        )
     q = q.order_by(GeneratedArtifact.generated_at.desc())
     return list(sess.execute(q).scalars().all())
 

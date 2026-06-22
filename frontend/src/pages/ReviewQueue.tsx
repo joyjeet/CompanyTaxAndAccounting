@@ -17,12 +17,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
+import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { shortId } from "../lib/format";
 
 const useStyles = makeStyles({
   header: { marginBottom: "16px" },
+  headerRow: { display: "flex", alignItems: "center", gap: "6px" },
 });
 
 export default function ReviewQueue() {
@@ -36,7 +38,33 @@ export default function ReviewQueue() {
   return (
     <div>
       <div className={styles.header}>
-        <Text size={700} weight="semibold">Review queue</Text>
+        <div className={styles.headerRow}>
+          <Text size={700} weight="semibold">Review queue</Text>
+          <InfoHint
+            title="What this queue is for"
+            body={
+              <>
+                Every uploaded document is processed by the OCR + classifier
+                pipeline, which produces a <b>draft journal entry</b>. This
+                queue is where firm staff <b>approve, edit, or reject</b>{" "}
+                those drafts before they become real, posted journal
+                entries that flow into the trial balance and financial
+                statements.
+                <br /><br />
+                The <b>Confidence</b> badge is the classifier's
+                self-reported certainty. Green = high confidence (safe to
+                approve as-is). Yellow = review the proposed account
+                mapping carefully. Red = the classifier is unsure; you
+                likely need to edit the line items before promoting.
+                <br /><br />
+                Click <b>Review</b> on a row to open the draft, see the
+                source document's extracted fields, edit the proposed
+                journal lines, and click <i>Promote to journal entry</i>{" "}
+                (or <i>Reject</i>).
+              </>
+            }
+          />
+        </div>
         <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
           AI-classified drafts awaiting human review and promotion to journal entries.
         </Caption1>

@@ -21,11 +21,18 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.integrations.registry import bootstrap_from_settings
 
 
 def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
+
+    # Wire production integrations from env (no-op for test/local defaults).
+    # Must happen before the first request so the registry has the right
+    # storage backend installed.
+    bootstrap_from_settings()
+
     app = FastAPI(
         title="CTAA — Company Tax and Accounting",
         version="0.1.0",
@@ -80,6 +87,13 @@ def create_app() -> FastAPI:
         from app.api.routes import auth_dev
 
         app.include_router(auth_dev.router)
+
+    # Demo / seed helpers: mounted whenever we're not in prod. Gated to
+    # firm-scope inside the router so portal users can't use it.
+    if settings.app_env != "prod":
+        from app.api.routes import dev
+
+        app.include_router(dev.router)
 
     return app
 

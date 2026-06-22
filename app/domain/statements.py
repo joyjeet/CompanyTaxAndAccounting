@@ -79,6 +79,20 @@ class BalanceSheet:
 
 
 @dataclass(frozen=True, slots=True)
+class TrialBalance:
+    """All accounts with cumulative debit / credit totals through `as_of`.
+
+    A valid double-entry book has `total_debits == total_credits`. This is
+    the most basic check an accountant runs before producing statements.
+    """
+    as_of: date
+    rows: list[AccountBalance]
+    total_debits: Decimal
+    total_credits: Decimal
+    balances: bool  # total_debits == total_credits
+
+
+@dataclass(frozen=True, slots=True)
 class CashFlowStatement:
     period_start: date
     period_end: date
@@ -167,6 +181,27 @@ class StatementsService:
         self.sess = sess
         self.firm_id = firm_id
         self.client_id = client_id
+
+    # ---- Trial balance ------------------------------------------------- #
+    def trial_balance(self, *, as_of: date) -> TrialBalance:
+        """Cumulative debit/credit totals per account through `as_of`.
+
+        Returns every account on the chart (even zero-balance ones) so
+        accountants can see the full picture before producing statements.
+        """
+        rows = _balances_for(
+            self.sess, firm_id=self.firm_id, client_id=self.client_id,
+            start=None, end=as_of, types=None,
+        )
+        total_d = sum((r.debit_total for r in rows), start=ZERO)
+        total_c = sum((r.credit_total for r in rows), start=ZERO)
+        return TrialBalance(
+            as_of=as_of,
+            rows=rows,
+            total_debits=total_d,
+            total_credits=total_c,
+            balances=(total_d == total_c),
+        )
 
     # ---- P&L ----------------------------------------------------------- #
     def profit_and_loss(self, *, period_start: date, period_end: date) -> ProfitAndLoss:

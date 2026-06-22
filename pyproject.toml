@@ -19,6 +19,22 @@ dependencies = [
     "cryptography>=43",
     "reportlab>=4.2",
     "openpyxl>=3.1",
+    # PDF text extraction for inbound bank statements / invoices in the
+    # demo/dev path (no Azure Doc Intelligence required).
+    "pypdf>=5.0",
+    # Azure SDKs — used in production wiring (Blob storage, Key Vault).
+    # Kept in the base set so the API image ships with them; the integration
+    # modules import them lazily so tests still run without Azure resources.
+    "azure-identity>=1.19",
+    "azure-storage-blob>=12.23",
+    # Azure OpenAI client. Imported lazily by `AzureOpenAICategorizer` /
+    # `AzureOpenAIClassifier` — tests and the in-process mock path never
+    # touch the network.
+    "openai>=1.50",
+    # Azure AI Document Intelligence. Imported lazily by
+    # `AzureDocumentIntelligenceExtractor` — tests and the in-process mock
+    # path never touch the network.
+    "azure-ai-documentintelligence>=1.0",
 ]
 
 [project.optional-dependencies]

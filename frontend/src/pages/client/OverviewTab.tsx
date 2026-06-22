@@ -54,7 +54,25 @@ export default function OverviewTab({ clientId }: { clientId: string }) {
   const latestPeriod = periods.data?.[0];
 
   return (
-    <Section title="At a glance">
+    <Section
+      title="At a glance"
+      help={{
+        title: "What you're seeing",
+        body: (
+          <>
+            A quick snapshot of this client's bookkeeping state:
+            <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+              <li><b>Periods</b> — accounting periods you've defined (e.g. months, quarters, years).</li>
+              <li><b>Accounts</b> — entries in the chart of accounts.</li>
+              <li><b>Journal entries</b> — posted double-entry transactions.</li>
+              <li><b>Artifacts</b> — generated documents (statements, tax forms) for this client.</li>
+            </ul>
+            Use the tabs above to drill into each area. <b>Latest period</b>
+            shows the period that statements default to.
+          </>
+        ),
+      }}
+    >
       <div className={styles.grid}>
         <div className={styles.stat}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Periods</Caption1>

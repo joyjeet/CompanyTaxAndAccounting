@@ -23,6 +23,7 @@ from app.domain.statements import (
     CashFlowStatement,
     ProfitAndLoss,
     StatementsService,
+    TrialBalance,
 )
 from app.models.accounting import AccountingPeriod, Client
 
@@ -76,6 +77,15 @@ class CashFlowOut(BaseModel):
     outflows: Decimal
 
 
+class TrialBalanceOut(BaseModel):
+    kind: Literal["trial_balance"] = "trial_balance"
+    as_of: str
+    rows: list[AccountBalanceOut]
+    total_debits: Decimal
+    total_credits: Decimal
+    balances: bool
+
+
 def _ab_out(b: AccountBalance) -> AccountBalanceOut:
     return AccountBalanceOut(
         account_id=b.account_id,
@@ -124,6 +134,16 @@ def _cf_out(cf: CashFlowStatement) -> CashFlowOut:
         net_change=cf.net_change,
         inflows=cf.inflows,
         outflows=cf.outflows,
+    )
+
+
+def _tb_out(tb: TrialBalance) -> TrialBalanceOut:
+    return TrialBalanceOut(
+        as_of=tb.as_of.isoformat(),
+        rows=[_ab_out(b) for b in tb.rows],
+        total_debits=tb.total_debits,
+        total_credits=tb.total_credits,
+        balances=tb.balances,
     )
 
 
@@ -215,3 +235,29 @@ def get_cf(
         cash_account_codes=codes,
     )
     return _cf_out(cf)
+
+
+@router.get(
+    "/trial-balance",
+    response_model=TrialBalanceOut,
+)
+def get_tb(
+    client_id: UUID = Query(...),
+    period_id: UUID = Query(...),
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> TrialBalanceOut:
+    """Cumulative debit/credit per account through the period end.
+
+    A trial balance is the accountant's first sanity check: every account
+    on the chart, with its total debits and total credits up to a given
+    date. The footer asserts `total_debits == total_credits`, which must
+    hold for any valid double-entry book.
+    """
+    _require_client_access(identity, client_id)
+    if sess.get(Client, client_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
+    period = _load_period(sess, client_id, period_id)
+    svc = StatementsService(sess, firm_id=identity.firm_id, client_id=client_id)
+    tb = svc.trial_balance(as_of=period.end_date)
+    return _tb_out(tb)

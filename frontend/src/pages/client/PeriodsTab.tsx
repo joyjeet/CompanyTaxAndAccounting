@@ -67,6 +67,25 @@ export default function PeriodsTab({ clientId }: { clientId: string }) {
       <Section
         title="Accounting periods"
         subtitle="Closed periods are locked against new postings."
+        help={{
+          title: "What is a period?",
+          body: (
+            <>
+              A <b>period</b> is a window of time the books are kept in —
+              typically a month, quarter, or fiscal year. Journal entries
+              are dated within a period and statements are generated
+              "as of" a period.
+              <br /><br />
+              When you <b>lock</b> a period (e.g. after closing the
+              month), the system rejects any new postings dated inside
+              it. This is how you prevent backdated changes once books
+              are closed.
+              <br /><br />
+              Tip: create the current fiscal year as your first period
+              and add monthly periods inside it as you go.
+            </>
+          ),
+        }}
         toolbar={
           <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
             <DialogTrigger disableButtonEnhancement>

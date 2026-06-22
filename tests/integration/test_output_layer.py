@@ -472,9 +472,15 @@ def test_portal_cannot_download_draft(world: SeededWorld) -> None:
                 firm_id=sc.firm_id, client_id=sc.client_id, actor="portal-user",
                 scope=AccessScope.CLIENT, artifact_id=art_id,
             )
-        # list_artifacts must hide drafts from portal.
+        # Portal users SEE pending (DRAFT) artifacts so they know their firm
+        # is preparing reports, but cannot download them until finalized.
         rows = list_artifacts(sess, scope=AccessScope.CLIENT)
-        assert all(r.status is ArtifactStatus.FINALIZED for r in rows)
+        assert any(r.id == art_id and r.status is ArtifactStatus.DRAFT for r in rows)
+        # SUPERSEDED is hidden from portal; DRAFT and FINALIZED are visible.
+        assert all(
+            r.status in {ArtifactStatus.DRAFT, ArtifactStatus.FINALIZED}
+            for r in rows
+        )
 
 
 def test_portal_can_download_after_finalize(world: SeededWorld) -> None:

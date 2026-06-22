@@ -1,0 +1,14 @@
+# Build artifacts and runtime junk that should not ship in the image.
+node_modules
+dist
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+tsconfig.tsbuildinfo
+.vscode
+.DS_Store
+README.md

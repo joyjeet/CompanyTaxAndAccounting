@@ -26,9 +26,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApi } from "../../api/useApi";
+import InfoHint from "../../components/InfoHint";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
 import { fmtMoney, shortId } from "../../lib/format";
+import { explainerFor } from "../../lib/taxFormExplainers";
 
 type TaxView = "forms" | "mappings" | "worksheets";
 
@@ -103,15 +105,61 @@ export default function TaxTab({ clientId }: { clientId: string }) {
     <div>
       <Toaster toasterId={toasterId} />
 
-      <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as TaxView)}>
-        <Tab value="forms">Forms</Tab>
-        <Tab value="mappings">Account mappings</Tab>
-        <Tab value="worksheets">Worksheets</Tab>
-      </TabList>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as TaxView)}>
+          <Tab value="forms">Forms</Tab>
+          <Tab value="mappings">Account mappings</Tab>
+          <Tab value="worksheets">Worksheets</Tab>
+        </TabList>
+        <InfoHint
+          title="How the Tax tab works"
+          body={
+            <>
+              The Tax tab takes you from <b>blank books → a signed tax
+              worksheet</b> in three steps:
+              <ol style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                <li>
+                  <b>Forms</b> — inspect the catalog (Form 1120, Schedule C,
+                  state forms, etc.) to see what lines a worksheet will
+                  compute.
+                </li>
+                <li>
+                  <b>Account mappings</b> — for each of your chart-of-accounts
+                  lines, approve which tax form line it rolls up to. Only
+                  approved mappings flow into a worksheet.
+                </li>
+                <li>
+                  <b>Worksheets</b> — pick a period + form and click Generate.
+                  The system aggregates posted journal entries through the
+                  approved mappings and produces an immutable, signed
+                  worksheet you can approve and ship to the artifact library.
+                </li>
+              </ol>
+            </>
+          }
+        />
+      </div>
 
       <div style={{ marginTop: 16 }}>
         {view === "forms" && (
-          <Section title="Available tax forms">
+          <Section
+            title="Available tax forms"
+            help={{
+              title: "Why this list exists",
+              body: (
+                <>
+                  This is the <b>catalog of tax forms</b> the system knows how
+                  to produce for this client (federal + state, by
+                  jurisdiction and catalog version).
+                  <br /><br />
+                  Click <b>Inspect</b> on a row to see every line on that
+                  form — useful when deciding how to map an account in the
+                  next tab. Nothing here changes your books; it's read-only
+                  reference data.
+                </>
+              ),
+            }}
+          >
             {forms.isLoading && <LoadingState />}
             {forms.error && <ErrorState error={forms.error} />}
             {forms.data && (
@@ -126,22 +174,30 @@ export default function TaxTab({ clientId }: { clientId: string }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {forms.data.map((f) => (
-                    <TableRow key={f.id}>
-                      <TableCell><code>{f.code}</code></TableCell>
-                      <TableCell>{f.label}</TableCell>
-                      <TableCell>{f.jurisdiction}</TableCell>
-                      <TableCell>{f.catalog_version}</TableCell>
-                      <TableCell>
-                        <Button
-                          appearance="subtle"
-                          onClick={() => setFormCode(f.code)}
-                        >
-                          Inspect
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {forms.data.map((f) => {
+                    const exp = explainerFor(f.code);
+                    return (
+                      <TableRow key={f.id}>
+                        <TableCell>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+                            <code>{f.code}</code>
+                            {exp && <InfoHint title={exp.title} body={exp.body} />}
+                          </span>
+                        </TableCell>
+                        <TableCell>{f.label}</TableCell>
+                        <TableCell>{f.jurisdiction}</TableCell>
+                        <TableCell>{f.catalog_version}</TableCell>
+                        <TableCell>
+                          <Button
+                            appearance="subtle"
+                            onClick={() => setFormCode(f.code)}
+                          >
+                            Inspect
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -179,6 +235,25 @@ export default function TaxTab({ clientId }: { clientId: string }) {
           <Section
             title="Account → tax-line mappings"
             subtitle="Approve mappings to make accounts eligible for worksheet generation."
+            help={{
+              title: "What you're doing here",
+              body: (
+                <>
+                  A tax worksheet has to know <i>which chart-of-accounts
+                  balance</i> rolls up to <i>which tax-form line</i> (e.g. is
+                  account <code>4000 Sales</code> Line 1a or Line 1b of Form
+                  1120?).
+                  <br /><br />
+                  Mappings start as <Badge appearance="tint" color="warning">proposed</Badge>{" "}
+                  — review each one and either approve it (it counts toward
+                  the worksheet) or reject it (excluded). Filter by form to
+                  focus on one return at a time.
+                  <br /><br />
+                  Tip: until at least one mapping is approved, generating a
+                  worksheet on the next tab will produce zeros.
+                </>
+              ),
+            }}
             toolbar={
               <Dropdown
                 placeholder="All forms"
@@ -247,6 +322,36 @@ export default function TaxTab({ clientId }: { clientId: string }) {
           <Section
             title="Tax worksheets"
             subtitle="Immutable snapshots of taxable income per period × form."
+            help={{
+              title: "What a worksheet is and what to do",
+              body: (
+                <>
+                  A <b>worksheet</b> is a point-in-time computation of
+                  taxable income for one accounting period and one tax form,
+                  built by walking your posted journal entries through the
+                  <i> approved</i> account → tax-line mappings.
+                  <br /><br />
+                  <b>To use this page:</b>
+                  <ol style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                    <li>Pick a <b>Period</b> (must be closed or in-progress).</li>
+                    <li>Pick a <b>Form</b> (e.g. <code>F1120</code>).</li>
+                    <li>
+                      Click <b>Generate</b>. The system snapshots Income,
+                      COGS, Deductions, and Taxable income.
+                    </li>
+                    <li>
+                      Review the numbers, then click <b>Approve</b>. Approval
+                      seals the worksheet and makes it eligible to be
+                      packaged into a signed PDF in the Artifacts tab.
+                    </li>
+                  </ol>
+                  Worksheets are <b>immutable</b> once generated — if a
+                  number looks wrong, fix the underlying journal entry or
+                  mapping and re-generate. The old worksheet stays as an
+                  audit record.
+                </>
+              ),
+            }}
             toolbar={
               <div className={styles.toolbar}>
                 <Dropdown

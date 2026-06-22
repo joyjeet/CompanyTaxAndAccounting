@@ -151,6 +151,27 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
       <Section
         title="Journal entries"
         subtitle="Double-entry postings, ordered by entry date."
+        help={{
+          title: "What is a journal entry?",
+          body: (
+            <>
+              A <b>journal entry</b> is a single bookkeeping transaction
+              recorded as two or more <i>lines</i> that hit different
+              accounts. The <b>total debits must equal total credits</b>
+              — the system refuses to post otherwise.
+              <br /><br />
+              Example: paying $100 for office supplies with cash =
+              <code> Debit Supplies 100 / Credit Cash 100</code>.
+              <br /><br />
+              Most entries are created automatically when you
+              <i> promote</i> a draft from the Review queue. Use
+              <b> Post entry</b> here only for manual adjustments
+              (corrections, accruals, year-end adjustments). Once
+              posted, entries are immutable; to undo, post a reversing
+              entry.
+            </>
+          ),
+        }}
         toolbar={
           <div style={{ display: "flex", columnGap: 12 }}>
             <Dropdown

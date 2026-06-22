@@ -1,0 +1,743 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.43.8.12551",
+      "templateHash": "12934067138657991249"
+    }
+  },
+  "parameters": {
+    "env": {
+      "type": "string",
+      "defaultValue": "demo",
+      "metadata": {
+        "description": "Short env name. Embedded in resource names."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "centralus",
+      "metadata": {
+        "description": "Azure region."
+      }
+    },
+    "locationShort": {
+      "type": "string",
+      "defaultValue": "cus",
+      "metadata": {
+        "description": "Short location code paired with `location`."
+      }
+    },
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "ctax",
+      "minLength": 3,
+      "maxLength": 6,
+      "metadata": {
+        "description": "3-6 char lowercase prefix used in every resource name."
+      }
+    },
+    "apiImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Container image for the API, including tag."
+      }
+    },
+    "uiImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Container image for the UI, including tag."
+      }
+    },
+    "acrLoginServer": {
+      "type": "string",
+      "metadata": {
+        "description": "ACR login server (e.g. ctaxdemo.azurecr.io). UAMI is granted AcrPull on this registry."
+      }
+    },
+    "acrName": {
+      "type": "string",
+      "metadata": {
+        "description": "ACR resource name (just the name, not the FQDN)."
+      }
+    },
+    "acrResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource group that holds the ACR. The ACR is shared across multiple demo deploys so it normally lives in a separate, longer-lived RG."
+      }
+    },
+    "postgresAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Postgres administrator password. Random per deploy, supplied by the deploy script."
+      }
+    },
+    "appTestJwtSecret": {
+      "type": "securestring",
+      "metadata": {
+        "description": "HS256 secret for the dev/test JWT mint endpoint. Random per deploy."
+      }
+    },
+    "expiresAt": {
+      "type": "string",
+      "metadata": {
+        "description": "ISO-8601 timestamp at which the auto-teardown sweeper should delete this RG."
+      }
+    }
+  },
+  "variables": {
+    "prefix": "[format('{0}-{1}-{2}', parameters('namePrefix'), parameters('env'), parameters('locationShort'))]",
+    "u": "[uniqueString(subscription().id, parameters('env'), parameters('locationShort'), parameters('namePrefix'), parameters('expiresAt'))]",
+    "commonTags": {
+      "app": "[parameters('namePrefix')]",
+      "env": "[parameters('env')]",
+      "ephemeral": "true",
+      "expiresAt": "[parameters('expiresAt')]",
+      "costCenter": "demo",
+      "managedBy": "bicep",
+      "owner": "platform-team"
+    },
+    "names": {
+      "rg": "[format('rg-{0}', variables('prefix'))]",
+      "logAnalytics": "[format('log-{0}', variables('prefix'))]",
+      "appInsights": "[format('appi-{0}', variables('prefix'))]",
+      "postgres": "[format('psql-{0}-{1}', variables('prefix'), variables('u'))]",
+      "containerEnv": "[format('cae-{0}', variables('prefix'))]",
+      "apiApp": "[format('ca-{0}-api', variables('prefix'))]",
+      "uiApp": "[format('ca-{0}-ui', variables('prefix'))]",
+      "uami": "[format('id-{0}-app', variables('prefix'))]"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-11-01",
+      "name": "[variables('names').rg]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "uamiMod",
+      "resourceGroup": "[variables('names').rg]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[variables('names').uami]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('commonTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.43.8.12551",
+              "templateHash": "12608180161146235164"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]"
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('name'))]"
+            },
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('name')), '2023-01-31').principalId]"
+            },
+            "clientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('name')), '2023-01-31').clientId]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('names').rg)]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('acrPull-{0}-{1}', parameters('env'), parameters('locationShort'))]",
+      "resourceGroup": "[parameters('acrResourceGroup')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "acrName": {
+            "value": "[parameters('acrName')]"
+          },
+          "principalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'uamiMod'), '2025-04-01').outputs.principalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.43.8.12551",
+              "templateHash": "8192828562280294585"
+            }
+          },
+          "parameters": {
+            "acrName": {
+              "type": "string"
+            },
+            "principalId": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName'))]",
+              "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('acrName')), parameters('principalId'), 'AcrPull')]",
+              "properties": {
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'uamiMod')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "demoStack",
+      "resourceGroup": "[variables('names').rg]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "tags": {
+            "value": "[variables('commonTags')]"
+          },
+          "names": {
+            "value": "[variables('names')]"
+          },
+          "apiImage": {
+            "value": "[parameters('apiImage')]"
+          },
+          "uiImage": {
+            "value": "[parameters('uiImage')]"
+          },
+          "acrLoginServer": {
+            "value": "[parameters('acrLoginServer')]"
+          },
+          "postgresAdminPassword": {
+            "value": "[parameters('postgresAdminPassword')]"
+          },
+          "appTestJwtSecret": {
+            "value": "[parameters('appTestJwtSecret')]"
+          },
+          "uamiId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'uamiMod'), '2025-04-01').outputs.id.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.43.8.12551",
+              "templateHash": "12503186482325437307"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "object"
+            },
+            "names": {
+              "type": "object"
+            },
+            "apiImage": {
+              "type": "string"
+            },
+            "uiImage": {
+              "type": "string"
+            },
+            "acrLoginServer": {
+              "type": "string"
+            },
+            "uamiId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the pre-created User Assigned Managed Identity that is granted AcrPull on the registry."
+              }
+            },
+            "postgresAdminPassword": {
+              "type": "securestring"
+            },
+            "appTestJwtSecret": {
+              "type": "securestring"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[parameters('names').logAnalytics]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": 30
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[parameters('names').appInsights]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "web",
+              "properties": {
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('names').logAnalytics)]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('names').logAnalytics)]"
+              ]
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+              "apiVersion": "2024-08-01",
+              "name": "[parameters('names').postgres]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard_B1ms",
+                "tier": "Burstable"
+              },
+              "properties": {
+                "version": "16",
+                "administratorLogin": "ctaa_owner",
+                "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
+                "storage": {
+                  "storageSizeGB": 32,
+                  "autoGrow": "Disabled"
+                },
+                "backup": {
+                  "backupRetentionDays": 7,
+                  "geoRedundantBackup": "Disabled"
+                },
+                "highAvailability": {
+                  "mode": "Disabled"
+                },
+                "network": {
+                  "publicNetworkAccess": "Enabled"
+                },
+                "authConfig": {
+                  "activeDirectoryAuth": "Disabled",
+                  "passwordAuth": "Enabled",
+                  "tenantId": "[subscription().tenantId]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/configurations",
+              "apiVersion": "2024-08-01",
+              "name": "[format('{0}/{1}', parameters('names').postgres, 'row_security')]",
+              "properties": {
+                "value": "on",
+                "source": "user-override"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('names').postgres)]"
+              ]
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+              "apiVersion": "2024-08-01",
+              "name": "[format('{0}/{1}', parameters('names').postgres, 'AllowAllAzureServicesAndResourcesWithinAzureIps')]",
+              "properties": {
+                "startIpAddress": "0.0.0.0",
+                "endIpAddress": "0.0.0.0"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('names').postgres)]",
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/configurations', parameters('names').postgres, 'row_security')]"
+              ]
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+              "apiVersion": "2024-08-01",
+              "name": "[format('{0}/{1}', parameters('names').postgres, 'ctaa')]",
+              "properties": {
+                "charset": "UTF8",
+                "collation": "en_US.utf8"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('names').postgres)]",
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', parameters('names').postgres, 'AllowAllAzureServicesAndResourcesWithinAzureIps')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-10-02-preview",
+              "name": "[parameters('names').containerEnv]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', parameters('names').logAnalytics), '2023-09-01').customerId]",
+                    "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', parameters('names').logAnalytics), '2023-09-01').primarySharedKey]"
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('names').logAnalytics)]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-10-02-preview",
+              "name": "[parameters('names').apiApp]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('uamiId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('names').containerEnv)]",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 8000,
+                    "transport": "auto",
+                    "allowInsecure": false,
+                    "traffic": [
+                      {
+                        "latestRevision": true,
+                        "weight": 100
+                      }
+                    ],
+                    "corsPolicy": {
+                      "allowedOrigins": [
+                        "*"
+                      ],
+                      "allowedMethods": [
+                        "GET",
+                        "POST",
+                        "PUT",
+                        "PATCH",
+                        "DELETE",
+                        "OPTIONS"
+                      ],
+                      "allowedHeaders": [
+                        "*"
+                      ],
+                      "allowCredentials": false
+                    }
+                  },
+                  "maxInactiveRevisions": 2,
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "identity": "[parameters('uamiId')]"
+                    }
+                  ],
+                  "secrets": [
+                    {
+                      "name": "database-url",
+                      "value": "[format('postgresql+psycopg://app_user:{0}@{1}:5432/ctaa?sslmode=require', parameters('postgresAdminPassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('names').postgres), '2024-08-01').fullyQualifiedDomainName)]"
+                    },
+                    {
+                      "name": "database-owner-url",
+                      "value": "[format('postgresql+psycopg://ctaa_owner:{0}@{1}:5432/ctaa?sslmode=require', parameters('postgresAdminPassword'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('names').postgres), '2024-08-01').fullyQualifiedDomainName)]"
+                    },
+                    {
+                      "name": "app-test-jwt-secret",
+                      "value": "[parameters('appTestJwtSecret')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "revisionSuffix": "[take(uniqueString(parameters('apiImage'), 'api'), 10)]",
+                  "containers": [
+                    {
+                      "name": "api",
+                      "image": "[parameters('apiImage')]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "command": [
+                        "/bin/sh",
+                        "-c"
+                      ],
+                      "args": [
+                        "python -m scripts.bootstrap_for_demo && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
+                      ],
+                      "env": [
+                        {
+                          "name": "APP_ENV",
+                          "value": "staging"
+                        },
+                        {
+                          "name": "APP_AUTH_MODE",
+                          "value": "test"
+                        },
+                        {
+                          "name": "APP_KEK_PROVIDER",
+                          "value": "local"
+                        },
+                        {
+                          "name": "APP_CORS_ORIGINS",
+                          "value": "*"
+                        },
+                        {
+                          "name": "APP_LOG_LEVEL",
+                          "value": "INFO"
+                        },
+                        {
+                          "name": "DATABASE_URL",
+                          "secretRef": "database-url"
+                        },
+                        {
+                          "name": "DATABASE_OWNER_URL",
+                          "secretRef": "database-owner-url"
+                        },
+                        {
+                          "name": "APP_TEST_JWT_SECRET",
+                          "secretRef": "app-test-jwt-secret"
+                        },
+                        {
+                          "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                          "value": "[reference(resourceId('Microsoft.Insights/components', parameters('names').appInsights), '2020-02-02').ConnectionString]"
+                        },
+                        {
+                          "name": "OTEL_SERVICE_NAME",
+                          "value": "[parameters('names').apiApp]"
+                        }
+                      ],
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": 8000
+                          },
+                          "initialDelaySeconds": 15,
+                          "periodSeconds": 30
+                        },
+                        {
+                          "type": "Readiness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": 8000
+                          },
+                          "initialDelaySeconds": 5,
+                          "periodSeconds": 15
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 2
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/components', parameters('names').appInsights)]",
+                "[resourceId('Microsoft.App/managedEnvironments', parameters('names').containerEnv)]",
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('names').postgres)]",
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', parameters('names').postgres, 'ctaa')]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-10-02-preview",
+              "name": "[parameters('names').uiApp]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('uamiId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[resourceId('Microsoft.App/managedEnvironments', parameters('names').containerEnv)]",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 8080,
+                    "transport": "auto",
+                    "allowInsecure": false,
+                    "traffic": [
+                      {
+                        "latestRevision": true,
+                        "weight": 100
+                      }
+                    ]
+                  },
+                  "maxInactiveRevisions": 2,
+                  "registries": [
+                    {
+                      "server": "[parameters('acrLoginServer')]",
+                      "identity": "[parameters('uamiId')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "revisionSuffix": "[take(uniqueString(parameters('uiImage'), 'ui'), 10)]",
+                  "containers": [
+                    {
+                      "name": "ui",
+                      "image": "[parameters('uiImage')]",
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": 8080
+                          },
+                          "initialDelaySeconds": 5,
+                          "periodSeconds": 30
+                        },
+                        {
+                          "type": "Readiness",
+                          "httpGet": {
+                            "path": "/healthz",
+                            "port": 8080
+                          },
+                          "initialDelaySeconds": 2,
+                          "periodSeconds": 10
+                        }
+                      ]
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 1,
+                    "maxReplicas": 1
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', parameters('names').containerEnv)]"
+              ]
+            }
+          ],
+          "outputs": {
+            "postgresFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('names').postgres), '2024-08-01').fullyQualifiedDomainName]"
+            },
+            "apiFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('names').apiApp), '2024-10-02-preview').configuration.ingress.fqdn]"
+            },
+            "uiFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', parameters('names').uiApp), '2024-10-02-preview').configuration.ingress.fqdn]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('acrResourceGroup')), 'Microsoft.Resources/deployments', format('acrPull-{0}-{1}', parameters('env'), parameters('locationShort')))]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('names').rg)]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'uamiMod')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[variables('names').rg]"
+    },
+    "postgresFqdn": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'demoStack'), '2025-04-01').outputs.postgresFqdn.value]"
+    },
+    "apiFqdn": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'demoStack'), '2025-04-01').outputs.apiFqdn.value]"
+    },
+    "uiFqdn": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'demoStack'), '2025-04-01').outputs.uiFqdn.value]"
+    },
+    "apiContainerAppName": {
+      "type": "string",
+      "value": "[variables('names').apiApp]"
+    },
+    "uiContainerAppName": {
+      "type": "string",
+      "value": "[variables('names').uiApp]"
+    },
+    "uamiClientId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('names').rg), 'Microsoft.Resources/deployments', 'uamiMod'), '2025-04-01').outputs.clientId.value]"
+    }
+  }
+}

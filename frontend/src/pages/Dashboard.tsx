@@ -152,7 +152,25 @@ export default function Dashboard() {
       </div>
 
       <div className={styles.sectionsGrid}>
-        <Section title="Your clients" subtitle="Tenant-scoped via RLS">
+        <Section
+          title="Your clients"
+          subtitle="Tenant-scoped via RLS"
+          help={{
+            title: "What you're seeing",
+            body: (
+              <>
+                Every client your firm has access to in this tenant.
+                Click a row to open the client workspace where you can
+                manage their chart of accounts, periods, documents,
+                journal entries, statements, and tax forms.
+                <br /><br />
+                Row-level security (RLS) in Postgres guarantees you only
+                see clients belonging to your firm — no cross-tenant leak
+                is possible even if the API has a bug.
+              </>
+            ),
+          }}
+        >
           {clients.isLoading && <LoadingState />}
           {clients.data && clients.data.length === 0 && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -181,7 +199,24 @@ export default function Dashboard() {
           )}
         </Section>
 
-        <Section title="Recent documents">
+        <Section
+          title="Recent documents"
+          help={{
+            title: "OCR processing",
+            body: (
+              <>
+                The 6 most-recently uploaded documents across all your
+                clients. The badge shows OCR status:
+                <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                  <li><b>pending</b> — queued, not started</li>
+                  <li><b>in_progress</b> — OCR running</li>
+                  <li><b>complete</b> — text extracted, draft created</li>
+                  <li><b>failed</b> — extraction failed, see Documents tab for details</li>
+                </ul>
+              </>
+            ),
+          }}
+        >
           {docs.isLoading && <LoadingState />}
           {docs.data && docs.data.length === 0 && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -201,7 +236,7 @@ export default function Dashboard() {
                   <Badge
                     appearance="tint"
                     color={
-                      d.ocr_status === "succeeded"
+                      d.ocr_status === "complete"
                         ? "success"
                         : d.ocr_status === "failed"
                           ? "danger"
@@ -216,7 +251,27 @@ export default function Dashboard() {
           )}
         </Section>
 
-        <Section title="Pending drafts" subtitle="AI-classified, awaiting your review">
+        <Section
+          title="Pending drafts"
+          subtitle="AI-classified, awaiting your review"
+          help={{
+            title: "What is a draft?",
+            body: (
+              <>
+                When a document is uploaded, the AI proposes a
+                <i> classification</i> (what kind of transaction it is and
+                which accounts it should hit). That proposal is held as a
+                <i> draft</i> until a CPA promotes it to a real journal
+                entry — or rejects it.
+                <br /><br />
+                The confidence badge is green ≥ 0.80 (safe to promote),
+                yellow 0.60–0.80 (review carefully), red &lt; 0.60
+                (probably needs hand-editing). Click a row to open the
+                draft and approve, edit, or reject.
+              </>
+            ),
+          }}
+        >
           {drafts.isLoading && <LoadingState />}
           {drafts.data && drafts.data.length === 0 && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -259,7 +314,26 @@ export default function Dashboard() {
           )}
         </Section>
 
-        <Section title="Latest artifacts" subtitle="Generated statements, tax worksheets, audit packages">
+        <Section
+          title="Latest artifacts"
+          subtitle="Generated statements, tax worksheets, audit packages"
+          help={{
+            title: "What is an artifact?",
+            body: (
+              <>
+                An artifact is a generated output (PDF / CSV / JSON) like
+                a profit-and-loss statement, balance sheet, cash-flow
+                statement, tax worksheet, or audit package.
+                <br /><br />
+                Artifacts start as <b>draft</b> (you can regenerate them).
+                When you <b>finalize</b>, the SHA-256 footer is locked and
+                the file becomes the official, immutable copy you can
+                share with the client. Only finalized artifacts are
+                visible to portal users.
+              </>
+            ),
+          }}
+        >
           {artifacts.isLoading && <LoadingState />}
           {artifacts.data && artifacts.data.length === 0 && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>

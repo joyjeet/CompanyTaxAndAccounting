@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Brand color CSS variables. The VALUES are written here by
+ * applyBrandColors() at boot from src/siteConfig.ts, so this block only
+ * sets safe defaults that match the config. Edit colors in siteConfig.ts,
+ * not here.
+ */
+:root {
+  --brand-primary: 30 39 97;
+  --brand-primary-dark: 21 28 71;
+  --brand-accent: 201 162 39;
+  --brand-accent-dark: 168 134 28;
+  --brand-surface: 255 255 255;
+  --brand-surface-alt: 247 248 251;
+  --brand-ink: 30 41 59;
+  --brand-ink-soft: 51 65 85;
+  --brand-ink-muted: 100 116 139;
+  --brand-border: 226 232 240;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-brand-surface text-brand-ink font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-serif text-brand-primary;
+    letter-spacing: -0.01em;
+  }
+  /* Visible focus ring for accessibility — never remove. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-accent ring-offset-2 ring-offset-brand-surface;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-container px-5 sm:px-8 lg:px-10;
+  }
+  .section {
+    @apply py-16 sm:py-20 lg:py-28;
+  }
+  .eyebrow {
+    @apply inline-block text-xs font-semibold uppercase tracking-[0.18em] text-brand-accent-dark;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-5 py-3 text-sm font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-primary {
+    @apply btn bg-brand-primary text-white hover:bg-brand-primary-dark;
+  }
+  .btn-accent {
+    @apply btn bg-brand-accent text-brand-primary hover:bg-brand-accent-dark hover:text-white;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-brand-primary hover:bg-brand-surface-alt;
+  }
+  .btn-outline {
+    @apply btn border border-brand-primary/20 bg-white text-brand-primary hover:border-brand-primary hover:bg-brand-surface-alt;
+  }
+  .card {
+    @apply rounded-xl border border-brand-border bg-white p-7 shadow-card;
+  }
+}

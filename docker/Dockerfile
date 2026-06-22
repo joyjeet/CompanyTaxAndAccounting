@@ -16,6 +16,9 @@ COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
 COPY tests ./tests
+# scripts/ ships in the image so deploy/bootstrap can run inside the container
+# via `az containerapp exec` (used by deploy_azure_customer.sh).
+COPY scripts ./scripts
 
 RUN pip install -e ".[dev]"
 

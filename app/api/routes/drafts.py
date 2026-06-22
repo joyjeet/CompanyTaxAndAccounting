@@ -26,6 +26,7 @@ from app.domain.promotion import (
     PromoteLineInput,
     PromotionForbiddenError,
     promote_draft,
+    promote_statement_draft,
     reject_draft,
 )
 from app.models.accounting import DraftClassification
@@ -137,6 +138,75 @@ def promote(
     except AlreadyPromotedError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     return PromoteOut(journal_entry_id=je_id)
+
+
+# --------------------------------------------------------------------------- #
+# Statement promote-all — one balanced JE per transaction in payload.transactions.
+class StatementPromoteIn(BaseModel):
+    period_id: UUID
+    cash_account_code: str = "1000"
+    # Optional remap: {"3": "4100", "7": "5200"} — transaction index -> code.
+    # Keyed as strings so JSON-from-the-wire stays clean.
+    account_overrides: dict[str, str] | None = None
+
+
+class StatementPromoteOut(BaseModel):
+    journal_entry_ids: list[UUID]
+    skipped: list[dict[str, str]]
+
+
+@router.post("/{draft_id}/promote-all", response_model=StatementPromoteOut)
+def promote_all(
+    draft_id: UUID,
+    body: StatementPromoteIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> StatementPromoteOut:
+    """Post every transaction in a bank-statement draft as its own JE."""
+    if identity.client_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="client_id must be present in identity to promote a draft.",
+        )
+    if identity.scope is not AccessScope.FIRM:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only firm-scope users can promote drafts.",
+        )
+
+    # Coerce string keys -> int.
+    overrides: dict[int, str] | None = None
+    if body.account_overrides:
+        overrides = {}
+        for k, v in body.account_overrides.items():
+            try:
+                overrides[int(k)] = v
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"account_overrides keys must be integers; got '{k}'.",
+                ) from None
+
+    try:
+        result = promote_statement_draft(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=identity.client_id,
+            actor=identity.subject,
+            scope=identity.scope,
+            draft_id=draft_id,
+            period_id=body.period_id,
+            cash_account_code=body.cash_account_code,
+            account_overrides=overrides,
+        )
+    except PromotionForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except AlreadyPromotedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    return StatementPromoteOut(
+        journal_entry_ids=result.journal_entry_ids,
+        skipped=result.skipped,
+    )
 
 
 # --------------------------------------------------------------------------- #

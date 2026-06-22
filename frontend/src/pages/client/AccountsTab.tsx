@@ -85,6 +85,25 @@ export default function AccountsTab({ clientId }: { clientId: string }) {
       <Section
         title="Chart of accounts"
         subtitle="Define the accounts used by journal entries and statements."
+        help={{
+          title: "What is a chart of accounts?",
+          body: (
+            <>
+              The chart of accounts (COA) is the list of every "bucket"
+              the business uses to record money. Every journal-entry line
+              must reference one account here.
+              <br /><br />
+              Each account has:
+              <ul style={{ marginTop: 6, marginBottom: 6, paddingLeft: 18 }}>
+                <li><b>Code</b> — short identifier (e.g. <code>1000</code> for Cash). Convention: 1xxx assets, 2xxx liabilities, 3xxx equity, 4xxx revenue, 5xxx+ expenses.</li>
+                <li><b>Type</b> — asset / liability / equity / revenue / expense. Determines which statement it appears on.</li>
+                <li><b>Normal balance</b> — whether debits (assets/expenses) or credits (liabilities/equity/revenue) increase it.</li>
+              </ul>
+              You typically set this up once per client and rarely touch
+              it after.
+            </>
+          ),
+        }}
         toolbar={
           <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
             <DialogTrigger disableButtonEnhancement>

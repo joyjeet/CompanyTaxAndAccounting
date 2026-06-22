@@ -30,7 +30,7 @@ import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
 import { fmtDate, fmtMoney } from "../../lib/format";
 
-type StatementTab = "pl" | "bs" | "cf";
+type StatementTab = "tb" | "pl" | "bs" | "cf";
 
 const useStyles = makeStyles({
   toolbar: {
@@ -61,7 +61,7 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
   const toasterId = useId("st-toaster");
   const { dispatchToast } = useToastController(toasterId);
 
-  const [tab, setTab] = useState<StatementTab>("pl");
+  const [tab, setTab] = useState<StatementTab>("tb");
   const [periodId, setPeriodId] = useState<string>("");
 
   const periods = useQuery({
@@ -73,6 +73,11 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
     },
   });
 
+  const tb = useQuery({
+    queryKey: ["tb", clientId, periodId],
+    queryFn: () => api.getTrialBalance(clientId, periodId),
+    enabled: !!periodId && tab === "tb",
+  });
   const pl = useQuery({
     queryKey: ["pl", clientId, periodId],
     queryFn: () => api.getProfitAndLoss(clientId, periodId),
@@ -131,7 +136,7 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
         <Button
           appearance="secondary"
           icon={<DocumentPdfRegular />}
-          disabled={!periodId || generate.isPending}
+          disabled={!periodId || generate.isPending || tab === "tb"}
           onClick={() => {
             const kind =
               tab === "pl" ? "profit_and_loss" : tab === "bs" ? "balance_sheet" : "cash_flow";
@@ -146,14 +151,113 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
       </div>
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as StatementTab)}>
+        <Tab value="tb">Trial balance</Tab>
         <Tab value="pl">Profit &amp; loss</Tab>
         <Tab value="bs">Balance sheet</Tab>
         <Tab value="cf">Cash flow</Tab>
       </TabList>
 
       <div style={{ marginTop: 16 }}>
+        {tab === "tb" && (
+          <Section
+            title="Trial balance"
+            subtitle="Cumulative debits and credits per account through the period end."
+            help={{
+              title: "What is a trial balance?",
+              body: (
+                <>
+                  A trial balance is the accountant's first sanity check
+                  before producing financial statements. It lists every
+                  account on the chart of accounts with its <i>total
+                  debits</i> and <i>total credits</i> from inception through
+                  the period end.
+                  <br /><br />
+                  In a valid double-entry book{" "}
+                  <b>total debits must equal total credits</b>. The footer
+                  shows a green badge when they do; a red badge means a
+                  journal entry was posted unbalanced (which the system
+                  should refuse — if you ever see this, file a bug).
+                  <br /><br />
+                  Numbers come from <i>posted</i> journal entries only;
+                  drafts and unposted entries are excluded.
+                </>
+              ),
+            }}
+            toolbar={
+              tb.data && (
+                <Badge appearance="tint" color={tb.data.balances ? "success" : "danger"}>
+                  {tb.data.balances ? "Debits = Credits" : "Out of balance"}
+                </Badge>
+              )
+            }
+          >
+            {tb.isLoading && <LoadingState />}
+            {tb.error && <ErrorState error={tb.error} />}
+            {tb.data && tb.data.rows.length === 0 && (
+              <EmptyState
+                title="No accounts have activity yet"
+                description="Post some journal entries (from approved drafts) and the balances will appear here."
+              />
+            )}
+            {tb.data && tb.data.rows.length > 0 && (
+              <Table size="small">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Code</TableHeaderCell>
+                    <TableHeaderCell>Account</TableHeaderCell>
+                    <TableHeaderCell>Type</TableHeaderCell>
+                    <TableHeaderCell className={styles.num}>Debit</TableHeaderCell>
+                    <TableHeaderCell className={styles.num}>Credit</TableHeaderCell>
+                    <TableHeaderCell className={styles.num}>Balance</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {tb.data.rows.map((r) => (
+                    <TableRow key={r.account_id}>
+                      <TableCell><code>{r.code}</code></TableCell>
+                      <TableCell>{r.name}</TableCell>
+                      <TableCell>{r.account_type}</TableCell>
+                      <TableCell className={styles.num}>{fmtMoney(r.debit_total)}</TableCell>
+                      <TableCell className={styles.num}>{fmtMoney(r.credit_total)}</TableCell>
+                      <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow className={styles.totalRow}>
+                    <TableCell colSpan={3}>
+                      <Text weight="bold">Totals</Text>
+                    </TableCell>
+                    <TableCell className={styles.num}>
+                      <Text weight="bold">{fmtMoney(tb.data.total_debits)}</Text>
+                    </TableCell>
+                    <TableCell className={styles.num}>
+                      <Text weight="bold">{fmtMoney(tb.data.total_credits)}</Text>
+                    </TableCell>
+                    <TableCell className={styles.num}></TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            )}
+          </Section>
+        )}
+
         {tab === "pl" && (
-          <Section title="Profit &amp; loss">
+          <Section
+            title="Profit &amp; loss"
+            help={{
+              title: "What this shows",
+              body: (
+                <>
+                  Revenue minus expenses for the selected period.
+                  <i> Positive net income</i> = the business made money this
+                  period; <i>negative</i> = it lost money.
+                  <br /><br />
+                  Click <b>Generate PDF artifact</b> to produce a signed,
+                  finalizable copy that you can finalize in the Artifacts
+                  tab and send to the client.
+                </>
+              ),
+            }}
+          >
             {pl.isLoading && <LoadingState />}
             {pl.error && <ErrorState error={pl.error} />}
             {pl.data && (
@@ -213,6 +317,22 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
         {tab === "bs" && (
           <Section
             title="Balance sheet"
+            help={{
+              title: "What this shows",
+              body: (
+                <>
+                  A snapshot of <b>Assets = Liabilities + Equity</b> as of
+                  the period end. The green badge confirms the books
+                  balance; the system asserts this on every computation, so
+                  a red badge here would mean something is seriously
+                  wrong upstream.
+                  <br /><br />
+                  Equity includes <i>Retained earnings (period)</i> — the
+                  cumulative net income from inception through the period
+                  end — so equity moves with net income automatically.
+                </>
+              ),
+            }}
             toolbar={
               bs.data && (
                 <Badge appearance="tint" color={bs.data.balances ? "success" : "danger"}>
@@ -288,7 +408,25 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
         )}
 
         {tab === "cf" && (
-          <Section title="Cash flow">
+          <Section
+            title="Cash flow"
+            help={{
+              title: "What this shows",
+              body: (
+                <>
+                  The direct change-in-cash for the selected period across
+                  the configured cash accounts (default: account{" "}
+                  <code>1000</code>). Opening cash + Inflows − Outflows =
+                  Closing cash, and the system asserts that equality.
+                  <br /><br />
+                  A full operating / investing / financing breakdown will
+                  arrive once statement classification is wired in; this
+                  view gives you the deterministic change-in-cash core
+                  that everything else builds on.
+                </>
+              ),
+            }}
+          >
             {cf.isLoading && <LoadingState />}
             {cf.error && <ErrorState error={cf.error} />}
             {cf.data && (

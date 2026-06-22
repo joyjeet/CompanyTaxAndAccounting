@@ -7,6 +7,8 @@ import {
 } from "@fluentui/react-components";
 import { type ReactNode } from "react";
 
+import InfoHint from "./InfoHint";
+
 const useStyles = makeStyles({
   root: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -20,6 +22,11 @@ const useStyles = makeStyles({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: "16px",
+  },
+  titleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
   },
   title: {
     fontSize: tokens.fontSizeBase400,
@@ -40,6 +47,11 @@ interface SectionProps {
   toolbar?: ReactNode;
   children: ReactNode;
   className?: string;
+  /**
+   * Optional explainer. Renders a small "i" icon next to the title that
+   * opens a Popover with the supplied body.
+   */
+  help?: { title?: string; body: ReactNode };
 }
 
 export default function Section({
@@ -48,6 +60,7 @@ export default function Section({
   toolbar,
   children,
   className,
+  help,
 }: SectionProps) {
   const styles = useStyles();
   return (
@@ -55,7 +68,12 @@ export default function Section({
       {(title || toolbar) && (
         <div className={styles.header}>
           <div>
-            {title && <Text className={styles.title}>{title}</Text>}
+            {title && (
+              <div className={styles.titleRow}>
+                <Text className={styles.title}>{title}</Text>
+                {help && <InfoHint title={help.title} body={help.body} />}
+              </div>
+            )}
             {subtitle && (
               <div className={styles.subtitle}>
                 {typeof subtitle === "string" ? subtitle : subtitle}

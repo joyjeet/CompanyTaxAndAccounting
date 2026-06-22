@@ -75,6 +75,23 @@ export default function ArtifactsTab({ clientId }: { clientId: string }) {
       <Section
         title="Artifacts library"
         subtitle="Encrypted at rest. Finalize to lock the SHA-256 footer; download to share."
+        help={{
+          title: "What is an artifact?",
+          body: (
+            <>
+              An artifact is a generated document for this client —
+              statements (P&amp;L, BS, CF), tax worksheets, audit
+              packages, narrative reports. Generate them from the
+              <b> Statements</b> and <b>Tax</b> tabs.
+              <br /><br />
+              <b>draft</b> = regeneratable, internal only. <b>finalized</b>
+              = SHA-256 locked, immutable, downloadable by the client in
+              their portal. Click <b>Finalize</b> when the artifact is
+              ready to ship; click <b>Download</b> to fetch a decrypted
+              copy.
+            </>
+          ),
+        }}
       >
         {artifacts.isLoading && <LoadingState />}
         {artifacts.error && <ErrorState error={artifacts.error} />}

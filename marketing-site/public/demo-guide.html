@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#1E2761" />
+    <title>CTAA Customer Demo Guide — MMFC LLC</title>
+    <meta
+      name="description"
+      content="Step-by-step guide for testing the CTAA bookkeeping and tax-preparation demo from MMFC LLC."
+    />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link
+      rel="preconnect"
+      href="https://fonts.googleapis.com"
+      crossorigin="anonymous"
+    />
+    <link
+      rel="preconnect"
+      href="https://fonts.gstatic.com"
+      crossorigin="anonymous"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --brand-primary: #1e2761;
+        --brand-primary-dark: #151c47;
+        --brand-accent: #c9a227;
+        --brand-accent-dark: #a8861c;
+        --brand-surface: #ffffff;
+        --brand-surface-alt: #f7f8fb;
+        --brand-ink: #1e293b;
+        --brand-ink-soft: #334155;
+        --brand-ink-muted: #64748b;
+        --brand-border: #e2e8f0;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        font-family:
+          Inter,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        color: var(--brand-ink);
+        background: var(--brand-surface-alt);
+        line-height: 1.65;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--brand-primary); text-decoration: underline; text-underline-offset: 2px; }
+      a:hover { color: var(--brand-accent-dark); }
+      a:focus-visible {
+        outline: 2px solid var(--brand-accent);
+        outline-offset: 2px;
+        border-radius: 3px;
+      }
+      .skip-link {
+        position: absolute;
+        left: -9999px;
+      }
+      .skip-link:focus {
+        left: 1rem;
+        top: 1rem;
+        background: var(--brand-primary);
+        color: #fff;
+        padding: 0.5rem 0.9rem;
+        border-radius: 0.375rem;
+        z-index: 50;
+      }
+      header.site {
+        background: var(--brand-primary);
+        color: #fff;
+        border-bottom: 4px solid var(--brand-accent);
+      }
+      header.site .inner {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 1.25rem 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        flex-wrap: wrap;
+      }
+      header.site img { height: 36px; width: 36px; }
+      header.site .firm {
+        font-family: "Source Serif 4", Georgia, serif;
+        font-size: 1.15rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      header.site .sep {
+        flex: 1;
+      }
+      header.site .home {
+        color: #fff;
+        font-size: 0.875rem;
+        opacity: 0.85;
+      }
+      header.site .home:hover { opacity: 1; color: var(--brand-accent); }
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 2.5rem 1.5rem 4rem;
+      }
+      .doc {
+        background: #fff;
+        border: 1px solid var(--brand-border);
+        border-radius: 1rem;
+        padding: clamp(1.75rem, 4vw, 3rem);
+        box-shadow:
+          0 4px 14px -4px rgba(30, 39, 97, 0.1),
+          0 2px 4px -2px rgba(30, 39, 97, 0.06);
+      }
+      h1, h2, h3, h4 {
+        font-family: "Source Serif 4", Georgia, serif;
+        color: var(--brand-primary);
+        letter-spacing: -0.01em;
+        line-height: 1.2;
+      }
+      h1 {
+        font-size: clamp(2rem, 4vw, 2.6rem);
+        margin: 0 0 1.25rem;
+      }
+      h2 {
+        font-size: clamp(1.45rem, 3vw, 1.75rem);
+        margin: 2.5rem 0 0.75rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--brand-border);
+      }
+      h3 {
+        font-size: 1.2rem;
+        margin: 1.75rem 0 0.5rem;
+      }
+      h4 {
+        font-size: 1rem;
+        margin: 1.25rem 0 0.4rem;
+      }
+      p { margin: 0 0 1rem; color: var(--brand-ink-soft); }
+      strong { color: var(--brand-ink); font-weight: 600; }
+      hr {
+        border: 0;
+        border-top: 1px solid var(--brand-border);
+        margin: 2.25rem 0;
+      }
+      ul, ol { padding-left: 1.4rem; margin: 0 0 1rem; color: var(--brand-ink-soft); }
+      li { margin: 0.3rem 0; }
+      code {
+        font-family:
+          ui-monospace,
+          SFMono-Regular,
+          "SF Mono",
+          Menlo,
+          Consolas,
+          monospace;
+        font-size: 0.875em;
+        background: var(--brand-surface-alt);
+        border: 1px solid var(--brand-border);
+        padding: 0.1em 0.4em;
+        border-radius: 0.3em;
+        color: var(--brand-primary);
+        word-break: break-word;
+      }
+      pre {
+        background: var(--brand-primary);
+        color: #f0f4ff;
+        border-radius: 0.6rem;
+        padding: 1rem 1.1rem;
+        overflow-x: auto;
+        font-size: 0.85rem;
+        line-height: 1.5;
+        margin: 0 0 1.25rem;
+      }
+      pre code {
+        background: transparent;
+        border: 0;
+        padding: 0;
+        color: inherit;
+      }
+      blockquote {
+        margin: 1.25rem 0;
+        padding: 0.9rem 1.1rem;
+        border-left: 4px solid var(--brand-accent);
+        background: rgba(201, 162, 39, 0.08);
+        color: var(--brand-ink);
+        border-radius: 0 0.5rem 0.5rem 0;
+      }
+      blockquote p:last-child { margin-bottom: 0; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0 0 1.25rem;
+        font-size: 0.93rem;
+      }
+      th, td {
+        text-align: left;
+        padding: 0.65rem 0.85rem;
+        border-bottom: 1px solid var(--brand-border);
+        vertical-align: top;
+      }
+      th {
+        background: var(--brand-surface-alt);
+        font-weight: 600;
+        color: var(--brand-primary);
+      }
+      tr:last-child td { border-bottom: 0; }
+      .cta-bar {
+        margin-top: 2rem;
+        padding: 1.25rem;
+        background: var(--brand-primary);
+        color: #fff;
+        border-radius: 0.75rem;
+        text-align: center;
+      }
+      .cta-bar a {
+        color: #fff;
+        font-weight: 600;
+        text-decoration: underline;
+      }
+      .cta-bar a:hover { color: var(--brand-accent); }
+      footer.site {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 0 1.5rem 3rem;
+        font-size: 0.825rem;
+        color: var(--brand-ink-muted);
+      }
+      footer.site a { color: var(--brand-ink-muted); }
+      @media print {
+        body { background: #fff; }
+        header.site, footer.site, .skip-link, .cta-bar { display: none; }
+        main { padding: 0; }
+        .doc { border: 0; box-shadow: none; padding: 0; }
+        pre { background: #f6f7fb; color: #1e2761; border: 1px solid #e2e8f0; }
+        a { color: inherit; text-decoration: none; }
+        h2 { page-break-before: auto; }
+        h1, h2, h3 { page-break-after: avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to main content</a>
+    <header class="site">
+      <div class="inner">
+        <img src="/logo-placeholder.svg" alt="MMFC LLC logo" />
+        <span class="firm">MMFC LLC</span>
+        <span class="sep"></span>
+        <a class="home" href="/">← Back to home</a>
+      </div>
+    </header>
+    <main id="content">
+      <article class="doc">
+<h1>CTAA — Customer Demo Guide</h1>
+<p>Welcome, and thank you for taking the time to evaluate <strong>CTAA — Company Tax
+and Accounting</strong>. This guide walks you through everything you need to log in
+to the hosted demo, click through the product end-to-end, and tell us what
+works and what doesn&#39;t.</p>
+<p>You do <strong>not</strong> need to install anything. Everything runs in your browser.</p>
+<hr>
+<h2>1. Quick facts</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Demo URL</strong></td>
+<td><a href="https://ca-ctax-demo-cus-ui.thankfulmushroom-8b2bd8cf.centralus.azurecontainerapps.io">https://ca-ctax-demo-cus-ui.thankfulmushroom-8b2bd8cf.centralus.azurecontainerapps.io</a></td>
+</tr>
+<tr>
+<td><strong>Available until</strong></td>
+<td><strong>2026-06-22 03:58 UTC</strong> (24 hours from deploy)</td>
+</tr>
+<tr>
+<td><strong>Login</strong></td>
+<td>Paste a UUID — no password required (see §3)</td>
+</tr>
+<tr>
+<td><strong>Supported browsers</strong></td>
+<td>Latest Chrome, Edge, Firefox, or Safari on desktop</td>
+</tr>
+<tr>
+<td><strong>What&#39;s pre-loaded</strong></td>
+<td>One firm, one client, one accounting period, a starter chart of accounts</td>
+</tr>
+<tr>
+<td><strong>What&#39;s mocked</strong></td>
+<td>OCR / document extraction (see §6.4)</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p><strong>24-hour expiry.</strong> The environment is automatically torn down at the
+time above to control cost. If you need more time, let us know and we
+will redeploy a fresh instance.</p>
+</blockquote>
+<hr>
+<h2>2. What CTAA does</h2>
+<p>CTAA is a multi-tenant tax and accounting platform built for small-to-mid
+sized accounting firms and their clients. In this demo you can play two
+roles:</p>
+<ul>
+<li><strong>Firm staff</strong> — the accountant view. Create clients, set up accounting
+periods, build a chart of accounts, upload source documents, post journal
+entries, generate financial statements (P&amp;L, Balance Sheet, Cash Flow),
+and prepare tax worksheets.</li>
+<li><strong>Client portal user</strong> — the end-customer view. Upload your own source
+documents, see only your own data, and download finalized reports your
+accountant has shared with you.</li>
+</ul>
+<p>You can switch between the two roles at any time using <strong>Sign out</strong> in the
+top bar.</p>
+<hr>
+<h2>3. How to log in</h2>
+<ol>
+<li><p>Open the demo URL: <strong><a href="https://ca-ctax-demo-cus-ui.thankfulmushroom-8b2bd8cf.centralus.azurecontainerapps.io">https://ca-ctax-demo-cus-ui.thankfulmushroom-8b2bd8cf.centralus.azurecontainerapps.io</a></strong></p>
+</li>
+<li><p>You land on the <strong>Sign in</strong> page.</p>
+</li>
+<li><p>Fill in the form:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Subject</strong></td>
+<td>Anything you like, e.g. <code>tester@example.com</code>. It is recorded in the audit log so we can trace your actions.</td>
+</tr>
+<tr>
+<td><strong>Role</strong></td>
+<td>Pick <strong><code>firm_staff</code></strong> for your first session.</td>
+</tr>
+<tr>
+<td><strong>Firm ID</strong></td>
+<td><code>9dc15cf3-fe12-45e8-ad8f-2700b96d4f54</code></td>
+</tr>
+<tr>
+<td><strong>Client ID</strong></td>
+<td>Leave blank for <code>firm_staff</code>.</td>
+</tr>
+</tbody></table>
+</li>
+<li><p>Click <strong>Sign in</strong>. You will land on the <strong>Dashboard</strong>.</p>
+</li>
+</ol>
+<p>To try the customer-facing portal later, sign out and sign back in with:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Role</strong></td>
+<td><code>client_portal</code></td>
+</tr>
+<tr>
+<td><strong>Firm ID</strong></td>
+<td><code>9dc15cf3-fe12-45e8-ad8f-2700b96d4f54</code></td>
+</tr>
+<tr>
+<td><strong>Client ID</strong></td>
+<td><code>38f2a46d-254e-4d9e-b948-a6c9c98d2ecb</code></td>
+</tr>
+</tbody></table>
+<p>There is no password — this demo uses a short-lived test token so you can
+get straight to clicking through the product.</p>
+<hr>
+<h2>4. The pre-loaded sample data</h2>
+<p>To save you time, the demo is seeded with:</p>
+<ul>
+<li><strong>One firm</strong> (the accounting firm you are logged into).</li>
+<li><strong>One client</strong> — your sample customer to work with.</li>
+<li><strong>One accounting period</strong> — open, ready to receive journal entries.</li>
+<li><strong>A starter chart of accounts</strong> — a handful of standard accounts
+(Cash, Accounts Receivable, Revenue, etc.) so you can post entries
+without setting them up from scratch.</li>
+</ul>
+<p>You can freely add more clients, periods, accounts, documents, and journal
+entries — the whole environment is yours for the next 24 hours.</p>
+<hr>
+<h2>5. Suggested tour (firm staff)</h2>
+<p>The left navigation rail is grouped into five sections. We recommend
+walking through them in this order — it follows the natural workflow of
+onboarding a client and producing their financials.</p>
+<h3>5.1 Dashboard</h3>
+<p>Four KPI tiles (Clients, Pending drafts, Documents, Artifacts) plus four
+list tiles showing your clients, recent documents, pending drafts, and
+latest generated reports. Everything here is scoped to your firm.</p>
+<h3>5.2 Clients</h3>
+<p>Lists every client in your firm. Click <strong>+ New client</strong> to add one — try
+&quot;Acme Coffee Co.&quot; or whatever you like. Click a client name to open their
+detail page.</p>
+<h3>5.3 Client detail — eight tabs</h3>
+<p>This is the heart of the app. Each tab is a different aspect of one
+client&#39;s books.</p>
+<table>
+<thead>
+<tr>
+<th>Tab</th>
+<th>What to try</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Overview</strong></td>
+<td>Stat cards summarizing periods, accounts, documents, and artifacts.</td>
+</tr>
+<tr>
+<td><strong>Periods</strong></td>
+<td>Create a new accounting period (e.g. &quot;FY2026&quot;, start <code>2026-01-01</code>, end <code>2026-12-31</code>). Inverted dates are rejected. Locking a period prevents further journal entries.</td>
+</tr>
+<tr>
+<td><strong>Chart of accounts</strong></td>
+<td>Add a new account. Pick its type (asset / liability / equity / revenue / expense) and normal balance (debit / credit).</td>
+</tr>
+<tr>
+<td><strong>Documents</strong></td>
+<td>Upload any file. See §6.4 for what the system does with it.</td>
+</tr>
+<tr>
+<td><strong>Journal entries</strong></td>
+<td>Click <strong>+ Post entry</strong>, pick a date, add at least two lines. The <strong>Post</strong> button only enables when total debits = total credits — try unbalancing it on purpose. Posting to a locked period is blocked.</td>
+</tr>
+<tr>
+<td><strong>Statements</strong></td>
+<td>Pick a period and switch between <strong>Profit &amp; Loss</strong>, <strong>Balance Sheet</strong>, and <strong>Cash Flow</strong>. The numbers are computed live from your journal entries. Click <strong>Generate PDF artifact</strong> to produce a downloadable report.</td>
+</tr>
+<tr>
+<td><strong>Tax</strong></td>
+<td>Three sub-tabs: <strong>Forms</strong> (catalog of US tax forms), <strong>Mappings</strong> (proposed account → tax-line mappings you approve / reject), <strong>Worksheets</strong> (generated from approved mappings).</td>
+</tr>
+<tr>
+<td><strong>Artifacts</strong></td>
+<td>Every generated report. <strong>Finalize</strong> locks an artifact, <strong>Download</strong> streams it.</td>
+</tr>
+</tbody></table>
+<h3>5.4 Review queue</h3>
+<p>Lists documents that the system has classified but a human still needs to
+turn into a journal entry. (Empty on a fresh deployment until you upload
+and process documents.)</p>
+<h3>5.5 Artifacts</h3>
+<p>Firm-wide library of every generated report across all clients.</p>
+<hr>
+<h2>6. Suggested tour (client portal)</h2>
+<p>Sign out, sign back in as <code>client_portal</code> (see §3).</p>
+<table>
+<thead>
+<tr>
+<th>Page</th>
+<th>What to try</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Overview</strong> (<code>/portal</code>)</td>
+<td>KPI cards showing your documents and reports. Confirm you only see your own client&#39;s data.</td>
+</tr>
+<tr>
+<td><strong>My documents</strong> (<code>/portal/documents</code>)</td>
+<td>Upload a file. Same behavior as the firm-staff Documents tab, scoped to you.</td>
+</tr>
+<tr>
+<td><strong>My reports</strong> (<code>/portal/reports</code>)</td>
+<td>Lists only <strong>finalized</strong> reports your accountant has shared with you. Download streams the file.</td>
+</tr>
+</tbody></table>
+<p>Try pasting another client&#39;s UUID into a portal URL — the system enforces
+strict tenant isolation and will return no rows.</p>
+<hr>
+<h2>7. Things to try (and what should happen)</h2>
+<p>This is a quick checklist of behaviors we&#39;d love you to verify.</p>
+<ol>
+<li><strong>Create a client.</strong> It appears in the Clients list immediately.</li>
+<li><strong>Create a period</strong> with start date <em>after</em> end date → rejected.</li>
+<li><strong>Create a chart of accounts entry</strong> for each of the five account types.</li>
+<li><strong>Post a balanced journal entry</strong> (e.g. debit Cash $100, credit Revenue $100) → succeeds and appears on the Journal entries list.</li>
+<li><strong>Try to post an unbalanced entry</strong> (debit $100, credit $50) → the <strong>Post</strong> button stays disabled.</li>
+<li><strong>Lock a period</strong>, then try to post a new entry to it → rejected with a 409 Conflict.</li>
+<li><strong>Open the Statements tab</strong>, generate a Profit &amp; Loss → numbers reflect your journal entries; Balance Sheet shows <code>Assets = Liabilities + Equity</code>.</li>
+<li><strong>Click &quot;Generate PDF artifact&quot;</strong> on a statement → a row appears in the Artifacts tab; <strong>Finalize</strong> then <strong>Download</strong> produces a real PDF.</li>
+<li><strong>Upload a document</strong> on the Documents tab → it appears in the list with a status badge (note the mock-OCR caveat in §6.4).</li>
+<li><strong>Sign out</strong>, sign back in as <code>client_portal</code> → you only see your own client&#39;s data, no firm-wide views.</li>
+</ol>
+<h3>6.4 About document uploads (important)</h3>
+<p>The Documents tab accepts <strong>any file type</strong> — PDF, PNG, JPG, CSV, XLSX,
+DOCX, plain text, anything your browser will let you select. There is no
+file size limit you will hit in normal testing.</p>
+<p><strong>However:</strong> in this demo the document extraction (OCR) is a <strong>mock
+service</strong>. That means:</p>
+<ul>
+<li>Uploads always succeed (assuming the file isn&#39;t empty or virus-flagged).</li>
+<li>The system stores your file securely, computes its hash for deduplication,
+records the audit trail, and walks the document through the full status
+pipeline.</li>
+<li>But the <strong>extracted fields</strong> you see (vendor name, amount, date, etc.)
+are deterministic placeholder values based on the <strong>&quot;Kind hint&quot;</strong>
+dropdown — not on the actual contents of your file.</li>
+</ul>
+<p>The Kind hint values the system recognises are:</p>
+<table>
+<thead>
+<tr>
+<th>Kind hint</th>
+<th>Mock extraction returns</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>generic</code> (default)</td>
+<td>A generic placeholder string.</td>
+</tr>
+<tr>
+<td><code>bank_transaction</code></td>
+<td>A fake merchant, amount, and date.</td>
+</tr>
+<tr>
+<td><code>tax_form_w2</code></td>
+<td>Fake employer EIN, wages, federal withholding.</td>
+</tr>
+<tr>
+<td><code>tax_form_1099_nec</code>, <code>tax_form_1099_int</code>, <code>tax_form_1098</code></td>
+<td>Fake tax form fields.</td>
+</tr>
+<tr>
+<td><code>invoice</code></td>
+<td>A fake vendor, total, and invoice date.</td>
+</tr>
+<tr>
+<td><code>receipt</code></td>
+<td>A fake receipt.</td>
+</tr>
+</tbody></table>
+<p>So: <strong>upload anything you like to validate the workflow</strong> (drag and drop,
+deduplication, status badges, audit trail, encrypted storage), but please
+don&#39;t expect real OCR on the document contents in this demo. In production
+this same pipeline is wired to Azure AI Document Intelligence and produces
+real field extraction from PDFs, images, and Office files.</p>
+<h3>6.5 Where your uploaded files actually live</h3>
+<p>Uploads are stored in a dedicated, hardened <strong>Azure Storage Account</strong>
+provisioned just for this demo. Every file lands at a tenant-isolated key:</p>
+<pre><code>firm-{your-firm-id}/client-{your-client-id}/{year}/{kind}/{uuid}.{ext}
+</code></pre>
+<p>What the platform does on your behalf, <em>for every upload</em>:</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>What it gives you</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Per-tenant prefix</strong> computed server-side from your auth identity</td>
+<td>A session bound to firm A cannot read, write, or list under firm B&#39;s prefix — enforced in code (<code>tenant_path()</code>, <code>_check_prefix()</code>) regardless of what path you try to send.</td>
+</tr>
+<tr>
+<td><strong>AAD (managed-identity) auth between API and Storage</strong></td>
+<td>No connection strings, no SAS keys; the API authenticates with Entra ID. Shared-key access on the account is <strong>disabled</strong>.</td>
+</tr>
+<tr>
+<td><strong>TLS 1.2 minimum, HTTPS-only</strong></td>
+<td>All traffic to the account is encrypted in transit.</td>
+</tr>
+<tr>
+<td><strong>Microsoft-managed double encryption at rest (infrastructure encryption)</strong></td>
+<td>Two independent cryptographic layers underneath the storage service.</td>
+</tr>
+<tr>
+<td><strong>App-level envelope encryption</strong></td>
+<td>The application also wraps each blob in a per-tenant DEK (data encryption key) before handing the bytes to Storage — defense in depth.</td>
+</tr>
+<tr>
+<td><strong>Blob soft-delete: 30 days</strong></td>
+<td>Accidental deletes are recoverable.</td>
+</tr>
+<tr>
+<td><strong>Versioning + change feed</strong></td>
+<td>Every overwrite produces a new version; the change feed gives a tamper-evident audit log of writes.</td>
+</tr>
+<tr>
+<td><strong>Geo-zone-redundant storage (GZRS)</strong></td>
+<td>Six replicas across three zones in-region plus an async paired region copy.</td>
+</tr>
+<tr>
+<td><strong>Container has no anonymous access</strong></td>
+<td>Public reads are blocked at the container and at the account.</td>
+</tr>
+</tbody></table>
+<p>So when the customer tester uploads a real document, the bytes are written
+directly into a private, AAD-only Storage Account container with a path
+that is mechanically impossible to share across tenants. Restarting the
+API does not affect persistence; the files remain durably stored.</p>
+<hr>
+<h2>8. What&#39;s intentionally limited in this demo</h2>
+<ul>
+<li><strong>Document OCR</strong> is mocked (see §6.4 above).</li>
+<li><strong>Email notifications</strong> are not sent.</li>
+<li><strong>E-signature</strong> flows are not enabled (PDF artifacts are real and
+downloadable; signing them is out of scope).</li>
+<li><strong>SSO / Entra ID login</strong> is wired in the codebase but disabled for the
+demo so you can log in by pasting a UUID instead of provisioning users.</li>
+<li>The demo runs on a small database tier — it&#39;s sized for one or two
+testers clicking through, not for load testing.</li>
+</ul>
+<p>Everything else — multi-tenant isolation, balanced-books enforcement,
+period locks, statement computation, tax-line mapping, PDF generation,
+encrypted storage, full audit trail — is the real production code path.</p>
+<hr>
+<h2>9. Giving us feedback</h2>
+<p>We&#39;d love to hear:</p>
+<ul>
+<li><strong>What worked well</strong> and felt natural.</li>
+<li><strong>What surprised you</strong> — a button you expected to do something else, a
+field that didn&#39;t make sense, a number that looked wrong.</li>
+<li><strong>Any errors</strong> you hit. If you see an error toast or a blank page,
+please note:<ul>
+<li>Which page you were on (the URL in the address bar).</li>
+<li>Whether you were signed in as <code>firm_staff</code> or <code>client_portal</code>.</li>
+<li>Roughly what you clicked just before the error.</li>
+<li>A screenshot if you have time.</li>
+</ul>
+</li>
+</ul>
+<p>Send your feedback to <strong><a href="mailto:gaurav.malhotra@mmfcllc.com">gaurav.malhotra@mmfcllc.com</a></strong> — we&#39;ll fold it
+directly into the next iteration.</p>
+<hr>
+<h2>10. After the demo</h2>
+<p>The environment automatically tears itself down at the time shown in §1.
+Your test data is destroyed at that point — nothing you upload here is
+preserved. If you&#39;d like a fresh environment or a longer-lived demo with
+your own sample data, just ask.</p>
+<p>Thank you for taking the time to try CTAA.</p>
+
+        <div class="cta-bar">
+          Questions or feedback? Email
+          <a href="mailto:gaurav.malhotra@mmfcllc.com">gaurav.malhotra@mmfcllc.com</a>.
+        </div>
+      </article>
+    </main>
+    <footer class="site">
+      <p>© 2026 MMFC LLC. Tax-preparation support; not a substitute for individualized tax advice.</p>
+    </footer>
+  </body>
+</html>

@@ -53,6 +53,67 @@ export interface UploadOut {
   sha256: string;
   deduped: boolean;
   job_id: string | null;
+  auto_promoted_count?: number;
+}
+
+export interface ExtractedField {
+  name: string;
+  value: string;
+  confidence?: number;
+}
+
+export interface DocumentDetailOut {
+  id: string;
+  client_id: string;
+  kind: string;
+  filename: string | null;
+  content_type: string | null;
+  sha256: string;
+  storage_uri: string;
+  size_bytes: number | null;
+  ocr_status: string;
+  ocr_completed_at: string | null;
+  ocr_error: string | null;
+  received_at: string;
+  uploaded_by: string | null;
+  extracted: {
+    text?: string;
+    fields?: ExtractedField[];
+    model?: string;
+    model_version?: string;
+    page_count?: number;
+    warnings?: string[];
+    [k: string]: unknown;
+  } | null;
+  drafts: Array<{
+    id: string;
+    kind: string;
+    status: string;
+    confidence: string;
+    promoted_journal_entry_id: string | null;
+  }>;
+  journal_entries: Array<{
+    id: string;
+    entry_date: string;
+    memo: string | null;
+    status: string;
+  }>;
+}
+
+export interface SeedOut {
+  client_id: string;
+  accounts_created: string[];
+  accounts_existing: string[];
+  period_id: string;
+  period_created: boolean;
+  sample_entries_posted: number;
+  notes: string[];
+}
+
+export interface ResetOut {
+  client_id: string;
+  deleted: Record<string, number>;
+  notes: string[];
 }
 
 // --------------------------------------------------------------------- //
@@ -172,6 +233,15 @@ export interface CashFlowOut {
   net_change: string;
   inflows: string;
   outflows: string;
+}
+
+export interface TrialBalanceOut {
+  kind: "trial_balance";
+  as_of: string;
+  rows: AccountBalanceOut[];
+  total_debits: string;
+  total_credits: string;
+  balances: boolean;
 }
 
 // --------------------------------------------------------------------- //

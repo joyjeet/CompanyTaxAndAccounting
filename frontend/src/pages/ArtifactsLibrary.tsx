@@ -24,6 +24,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { useApi } from "../api/useApi";
+import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { shortId } from "../lib/format";
@@ -88,7 +89,31 @@ export default function ArtifactsLibrary() {
     <div>
       <Toaster toasterId={toasterId} />
       <div className={styles.header}>
-        <Text size={700} weight="semibold">Artifacts</Text>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <Text size={700} weight="semibold">Artifacts</Text>
+          <InfoHint
+            title="What is an artifact?"
+            body={
+              <>
+                An artifact is a generated document — PDF, CSV, or JSON —
+                produced from posted journal entries. Examples:
+                profit-and-loss, balance sheet, cash-flow, tax worksheet,
+                audit package, narrative report.
+                <br /><br />
+                Artifacts have two states:
+                <ul style={{ marginTop: 6, marginBottom: 6, paddingLeft: 18 }}>
+                  <li><b>draft</b> — you can regenerate it (e.g. after
+                    posting more entries). Not visible to portal users.</li>
+                  <li><b>finalized</b> — SHA-256 footer is locked; file is
+                    immutable; portal users can download it.</li>
+                </ul>
+                Click <b>Finalize</b> to lock; <b>Download</b> to get a
+                copy. To <i>generate</i> a new artifact, go to a client's
+                Statements or Tax tab.
+              </>
+            }
+          />
+        </div>
         <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
           Encrypted generated outputs across all clients in the firm.
         </Caption1>

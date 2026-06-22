@@ -11,14 +11,18 @@ import type {
   ClientOut,
   CoaOut,
   DocumentOut,
+  DocumentDetailOut,
   DraftOut,
   JournalEntryCreateIn,
   JournalEntryOut,
   MappingOut,
   PeriodOut,
   ProfitAndLossOut,
+  ResetOut,
+  SeedOut,
   TaxFormDetailOut,
   TaxFormOut,
+  TrialBalanceOut,
   UploadOut,
   WorksheetDetailOut,
   WorksheetOut,
@@ -114,10 +118,40 @@ export class ApiClient {
     return this.request<DocumentOut[]>("/documents");
   }
 
-  uploadDocument(file: File, kindHint = "generic"): Promise<UploadOut> {
+  /** Full detail for a single uploaded document, including OCR text/fields
+   * and the drafts/journal entries derived from it. */
+  getDocument(id: string): Promise<DocumentDetailOut> {
+    return this.request<DocumentDetailOut>(`/documents/${id}`);
+  }
+
+  /** Returns a function that fetches the original file bytes for inline
+   * preview. Includes the bearer token so it works against the deployed
+   * API. Use `URL.createObjectURL(blob)` on the result. */
+  async downloadDocumentBlob(id: string): Promise<Blob> {
+    const token = await this.auth.getAccessToken();
+    const headers = new Headers();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const resp = await fetch(`${this.base}/documents/${id}/download`, {
+      headers,
+    });
+    if (!resp.ok) {
+      throw new ApiError(resp.status, `HTTP ${resp.status} downloading document`);
+    }
+    return resp.blob();
+  }
+
+  uploadDocument(
+    file: File,
+    kindHint = "generic",
+    clientId?: string,
+  ): Promise<UploadOut> {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("kind_hint", kindHint);
+    // Firm-staff sessions don't carry a client_id on the token; the active
+    // client is known from the URL on /clients/:id/* pages and must be sent
+    // explicitly so the upload lands against the right tenant.
+    if (clientId) fd.append("client_id", clientId);
     return this.request<UploadOut>("/documents/upload", {
       method: "POST",
       body: fd,
@@ -149,6 +183,17 @@ export class ApiClient {
 
   rejectDraft(draftId: string, reason?: string): Promise<void> {
     return this.json(`/drafts/${draftId}/reject`, "POST", { reason: reason ?? null });
+  }
+
+  promoteStatementDraft(
+    draftId: string,
+    body: {
+      period_id: string;
+      cash_account_code?: string;
+      account_overrides?: Record<string, string>;
+    },
+  ): Promise<{ journal_entry_ids: string[]; skipped: Array<{ index: string; reason: string }> }> {
+    return this.json(`/drafts/${draftId}/promote-all`, "POST", body);
   }
 
   // ----- Journal entries ----------------------------------------- //
@@ -187,6 +232,38 @@ export class ApiClient {
       q.set("cash_account_codes", cashAccountCodes.join(","));
     }
     return this.request<CashFlowOut>(`/statements/cash-flow?${q}`);
+  }
+
+  getTrialBalance(clientId: string, periodId: string): Promise<TrialBalanceOut> {
+    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    return this.request<TrialBalanceOut>(`/statements/trial-balance?${q}`);
+  }
+
+  // ----- Demo / seed helpers ------------------------------------- //
+  /**
+   * Idempotently seed a starter chart of accounts and an open period for
+   * the client. Returns counts of what was created vs already present.
+   * Only mounted on non-prod envs (dev / staging); 404 in production.
+   */
+  seedDefaults(clientId: string, postSamples = true): Promise<SeedOut> {
+    const q = new URLSearchParams({
+      client_id: clientId,
+      post_samples: String(postSamples),
+    });
+    return this.json<SeedOut>(`/dev/seed-defaults?${q}`, "POST", {});
+  }
+
+  /**
+   * Wipe transactional data for a client (drafts, journal entries, source
+   * documents, artifacts) so the demo can start fresh. Preserves the chart
+   * of accounts and accounting periods. Non-prod only.
+   */
+  resetClient(clientId: string, keepAudit = true): Promise<ResetOut> {
+    const q = new URLSearchParams({
+      client_id: clientId,
+      keep_audit: String(keepAudit),
+    });
+    return this.json<ResetOut>(`/dev/reset-client?${q}`, "POST", {});
   }
 
   // ----- Reports / artifacts ------------------------------------- //

@@ -73,6 +73,23 @@ class Settings(BaseSettings):
     azure_keyvault_key_name_template: str = "ctaa-firm-{firm_id}"
 
     # ------------------------------------------------------------------ #
+    # Object storage (uploaded source documents + generated artifacts)
+    # ------------------------------------------------------------------ #
+    # 'local'      : LocalFilesystemStorage rooted at ./data/blob/.
+    #                Suitable for tests/local dev ONLY — bytes do not survive
+    #                a container restart.
+    # 'azure_blob' : AzureBlobStorage backed by a private Storage Account
+    #                container. AAD auth via DefaultAzureCredential (Managed
+    #                Identity in Azure, az login locally). Per-tenant prefix
+    #                isolation is enforced by tenant_path() + _check_prefix()
+    #                exactly as in the local backend.
+    app_storage_backend: Literal["local", "azure_blob"] = "local"
+    # Base URL of the Storage Account, e.g. https://ctaxdemodocs.blob.core.windows.net
+    azure_storage_account_url: str | None = None
+    # Container name. Created out-of-band by infra (not by the app).
+    azure_storage_container: str = "documents"
+
+    # ------------------------------------------------------------------ #
     # Database / Redis
     # ------------------------------------------------------------------ #
     database_url: str = Field(
@@ -83,12 +100,56 @@ class Settings(BaseSettings):
     )
     redis_url: str = "redis://localhost:6379/0"
 
+    # 'redis'  : RedisJobQueue against `redis_url`. Use in production where a
+    #            durable worker process consumes the stream.
+    # 'memory' : InMemoryJobQueue. Suitable for demo/test deployments that
+    #            don't yet run a separate worker — uploads still succeed and
+    #            the job is recorded in-process, but no extraction runs until
+    #            you add a worker. Pairs with `app_storage_backend=azure_blob`.
+    app_queue_backend: Literal["redis", "memory"] = "redis"
+
     # ------------------------------------------------------------------ #
     # Frontend / CORS
     # ------------------------------------------------------------------ #
     # Comma-separated list of allowed CORS origins. The Vite dev server
     # defaults to :5173. In prod, set this to the deployed frontend URL only.
     app_cors_origins: str = "http://localhost:5173"
+
+    # ------------------------------------------------------------------ #
+    # AI integrations (Azure OpenAI, Document Intelligence)
+    # ------------------------------------------------------------------ #
+    # Categorizer backend used by the bank-statement pipeline to map
+    # transactions onto the client's chart of accounts.
+    #   'dictionary'  : deterministic vendor-keyword dict only (default;
+    #                   no network calls). Suitable for tests and demos
+    #                   that don't want Azure OpenAI dependencies.
+    #   'azure_openai': re-categorize weak rows with Azure OpenAI Chat
+    #                   Completions, using the client's actual COA. The
+    #                   dictionary still runs first; the LLM only sees
+    #                   rows that landed on 9999 (Suspense) etc.
+    app_categorizer_backend: Literal["dictionary", "azure_openai"] = "dictionary"
+    azure_openai_endpoint: str | None = None
+    azure_openai_api_key: str | None = None
+    azure_openai_api_version: str = "2024-08-01-preview"
+    azure_openai_deployment: str = "gpt-4o-mini"
+
+    # Document extraction backend used by /documents upload + classify.
+    #   'mock'                       : MockDocumentExtractor (pypdf-based;
+    #                                  no network). Default — keeps tests
+    #                                  and demos self-contained.
+    #   'azure_document_intelligence': real Azure AI Document Intelligence.
+    #                                  Routes by kind_hint to prebuilt
+    #                                  models (bank-statement.us, tax.us.W2,
+    #                                  tax.us.1099*, invoice, receipt) for
+    #                                  high-fidelity structured output.
+    app_extractor_backend: Literal[
+        "mock", "azure_document_intelligence"
+    ] = "mock"
+    azure_document_intelligence_endpoint: str | None = None
+    # When supplied, auth uses AzureKeyCredential. When None, the extractor
+    # falls back to DefaultAzureCredential (Managed Identity in Azure,
+    # `az login` locally). Prefer Managed Identity in prod.
+    azure_document_intelligence_api_key: str | None = None
 
     # ------------------------------------------------------------------ #
     # Output / Branding (Phase 6)

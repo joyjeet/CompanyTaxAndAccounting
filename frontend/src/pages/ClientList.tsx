@@ -33,6 +33,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
+import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { shortId } from "../lib/format";
@@ -95,9 +96,28 @@ export default function ClientList() {
       <Toaster toasterId={toasterId} />
       <div className={styles.header}>
         <div>
-          <Text size={700} weight="semibold">
-            Clients
-          </Text>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <Text size={700} weight="semibold">
+              Clients
+            </Text>
+            <InfoHint
+              title="What is a client?"
+              body={
+                <>
+                  Each <b>client</b> is one of your firm's customers —
+                  the business whose books you keep. Everything else in
+                  the app (chart of accounts, periods, documents,
+                  journal entries, statements, tax forms) lives <i>under
+                  a client</i>.
+                  <br /><br />
+                  Click <b>Open</b> on a row to enter that client's
+                  workspace. Click <b>New client</b> to onboard a new one
+                  — you'll only need a name and (optionally) an external
+                  code that matches your accounting system.
+                </>
+              }
+            />
+          </div>
           <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
             All clients in your firm. Row-level security enforces tenant boundaries.
           </Caption1>
