@@ -7,7 +7,7 @@
 # all secrets baked as plain Container App secrets, auto-teardown at T+24h.
 #
 # Pre-reqs:
-#   * az CLI signed in to subscription 15d0fb58-... (verified at start).
+#   * az CLI signed in to subscription 0270f50b-... (verified at start).
 #   * Docker NOT required locally — images are built with `az acr build`.
 #   * Run from repo root: ./scripts/deploy_azure_customer.sh
 #
