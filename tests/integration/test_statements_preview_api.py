@@ -170,8 +170,22 @@ def test_pl_mismatched_period_404(client: TestClient, world) -> None:
 
 
 def test_portal_can_view_own_pl(client: TestClient, world) -> None:
+    """Portal can view its own client's reports once the period is locked.
+
+    Per the PART C 'finalized' rule, live reports are visible to portal
+    users only after the firm has closed the period. Before that, the
+    period is still open and balances can shift — see
+    `test_portal_blocked_on_open_period`.
+    """
     firm_h = _auth(client, "firm_staff", world.firm_a)
     _seed_activity(client, firm_h, world.a1, world.a1.period_id)
+    # Lock the period as the firm — only then does portal get to see it.
+    lock = client.post(
+        f"/clients/{world.a1.client_id}/periods/{world.a1.period_id}/lock",
+        headers=firm_h,
+    )
+    assert lock.status_code == 200, lock.text
+
     portal_h = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
     r = client.get(
         "/statements/profit-and-loss",
@@ -180,3 +194,23 @@ def test_portal_can_view_own_pl(client: TestClient, world) -> None:
     )
     assert r.status_code == 200
     assert Decimal(r.json()["net_income"]) == Decimal("1200")
+
+
+def test_portal_blocked_on_open_period(client: TestClient, world) -> None:
+    """Portal must NOT see live reports for an unlocked (open) period."""
+    firm_h = _auth(client, "firm_staff", world.firm_a)
+    _seed_activity(client, firm_h, world.a1, world.a1.period_id)
+    portal_h = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    for endpoint in (
+        "/statements/profit-and-loss",
+        "/statements/balance-sheet",
+        "/statements/cash-flow",
+        "/statements/trial-balance",
+    ):
+        r = client.get(
+            endpoint,
+            headers=portal_h,
+            params={"client_id": str(world.a1.client_id), "period_id": str(world.a1.period_id)},
+        )
+        assert r.status_code == 403, f"{endpoint}: {r.status_code} {r.text}"
+        assert "not yet finalized" in r.json()["detail"]

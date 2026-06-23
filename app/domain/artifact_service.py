@@ -488,6 +488,35 @@ def finalize_artifact(
                     "before finalizing this artifact."
                 )
 
+    # Phase 8b: FormTemplate gate. A TAX_WORKSHEET PDF may only be
+    # FINALIZED when an ACTIVE+verified form_template row exists for the
+    # (form_code, tax_year). Non-PDF tax worksheets (XLSX/JSON/MD) are
+    # internal review formats and not subject to this gate; non-tax
+    # artifacts are unaffected entirely.
+    if (
+        art.kind is ArtifactKind.TAX_WORKSHEET
+        and art.format is ArtifactFormat.PDF
+        and art.tax_worksheet_id is not None
+    ):
+        from app.domain.form_template import (
+            FormTemplateNotActiveError,
+            get_active_verified,
+        )
+
+        ws = sess.get(TaxWorksheet, art.tax_worksheet_id)
+        if ws is not None:
+            form = sess.get(TaxForm, ws.form_id)
+            period = sess.get(AccountingPeriod, ws.period_id)
+            if form is not None and period is not None:
+                try:
+                    get_active_verified(
+                        sess,
+                        form_code=form.code,
+                        tax_year=period.end_date.year,
+                    )
+                except FormTemplateNotActiveError as e:
+                    raise ArtifactStateError(str(e)) from e
+
     # Supersede prior FINALIZED of same (kind, format, period_id).
     superseded_ids: list[str] = []
     prior_q = select(GeneratedArtifact).where(

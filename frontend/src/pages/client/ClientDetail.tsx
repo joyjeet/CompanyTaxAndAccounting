@@ -19,6 +19,7 @@ import DocumentsTab from "./DocumentsTab";
 import JournalEntriesTab from "./JournalEntriesTab";
 import OverviewTab from "./OverviewTab";
 import PeriodsTab from "./PeriodsTab";
+import ReportsTab from "./ReportsTab";
 import StatementsTab from "./StatementsTab";
 import TaxTab from "./TaxTab";
 
@@ -29,6 +30,7 @@ type TabId =
   | "documents"
   | "journal"
   | "statements"
+  | "reports"
   | "tax"
   | "artifacts";
 
@@ -84,6 +86,7 @@ export default function ClientDetail() {
         <Tab value="documents">Documents</Tab>
         <Tab value="journal">Journal entries</Tab>
         <Tab value="statements">Statements</Tab>
+        <Tab value="reports">Reports</Tab>
         <Tab value="tax">Tax</Tab>
         <Tab value="artifacts">Artifacts</Tab>
       </TabList>
@@ -94,6 +97,7 @@ export default function ClientDetail() {
       {tab === "documents" && <DocumentsTab clientId={id} />}
       {tab === "journal" && <JournalEntriesTab clientId={id} />}
       {tab === "statements" && <StatementsTab clientId={id} />}
+      {tab === "reports" && <ReportsTab clientId={id} />}
       {tab === "tax" && <TaxTab clientId={id} />}
       {tab === "artifacts" && <ArtifactsTab clientId={id} />}
     </div>

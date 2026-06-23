@@ -22,10 +22,12 @@ import { ArrowDownloadRegular } from "@fluentui/react-icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { useApi } from "../api/useApi";
+import { useAuth } from "../auth/AuthContext";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
 import { shortId } from "../lib/format";
+import ReportsTab from "./client/ReportsTab";
 
 const useStyles = makeStyles({
   header: { marginBottom: "16px" },
@@ -40,6 +42,7 @@ const STATUS_COLOR: Record<string, "success" | "warning" | "informative"> = {
 export default function PortalReports() {
   const styles = useStyles();
   const api = useApi();
+  const { identity } = useAuth();
   const toasterId = useId("portal-reports-toaster");
   const { dispatchToast } = useToastController(toasterId);
 
@@ -175,6 +178,17 @@ export default function PortalReports() {
           </Table>
         )}
       </Section>
+
+      {identity?.clientId && (
+        <div style={{ marginTop: 24 }}>
+          <Section
+            title="Live reports"
+            subtitle="Computed live from posted ledger entries. Only periods your firm has finalized (locked) appear here."
+          >
+            <ReportsTab clientId={identity.clientId} portalView />
+          </Section>
+        </div>
+      )}
     </div>
   );
 }

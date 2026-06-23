@@ -61,6 +61,34 @@ export default function PeriodsTab({ clientId }: { clientId: string }) {
     },
   });
 
+  const lockMut = useMutation({
+    mutationFn: (periodId: string) => api.lockPeriod(clientId, periodId),
+    onSuccess: () => {
+      dispatchToast(
+        <Toast><ToastTitle>Period locked. Reports are now visible to the client portal.</ToastTitle></Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["periods", clientId] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const unlockMut = useMutation({
+    mutationFn: (periodId: string) => api.unlockPeriod(clientId, periodId),
+    onSuccess: () => {
+      dispatchToast(
+        <Toast><ToastTitle>Period unlocked.</ToastTitle></Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["periods", clientId] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
   return (
     <div>
       <Toaster toasterId={toasterId} />
@@ -138,6 +166,7 @@ export default function PeriodsTab({ clientId }: { clientId: string }) {
                 <TableHeaderCell>End</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>ID</TableHeaderCell>
+                <TableHeaderCell>Action</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -152,6 +181,27 @@ export default function PeriodsTab({ clientId }: { clientId: string }) {
                     </Badge>
                   </TableCell>
                   <TableCell><code>{shortId(p.id)}</code></TableCell>
+                  <TableCell>
+                    {p.is_locked ? (
+                      <Button
+                        size="small"
+                        appearance="subtle"
+                        disabled={unlockMut.isPending}
+                        onClick={() => unlockMut.mutate(p.id)}
+                      >
+                        Unlock
+                      </Button>
+                    ) : (
+                      <Button
+                        size="small"
+                        appearance="primary"
+                        disabled={lockMut.isPending}
+                        onClick={() => lockMut.mutate(p.id)}
+                      >
+                        Lock (finalize)
+                      </Button>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

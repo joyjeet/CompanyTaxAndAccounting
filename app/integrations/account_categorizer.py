@@ -88,8 +88,17 @@ _SYSTEM_PROMPT = (
     "client's chart of accounts, propose the most appropriate account code "
     "for each transaction. Use ONLY codes that appear in the provided chart "
     "of accounts. If you genuinely cannot tell, return the code '9999' "
-    "(Suspense). Respond with JSON only — no prose."
+    "(Suspense). For each decision, also output a confidence score in "
+    "[0.0, 1.0] reflecting how certain you are, and up to TWO alternative "
+    "codes the reviewer should consider if the primary is wrong. "
+    "Respond with JSON only — no prose."
 )
+
+# Decisions below this confidence threshold are not auto-applied. Rows are
+# still re-coded (so the reviewer sees the suggestion) but flagged
+# `_categorizer_needs_review = True` so the promotion pipeline knows to
+# create a DraftClassification with needs_review=True instead of posting.
+CONFIDENCE_THRESHOLD = 0.65
 
 
 class AzureOpenAICategorizer(AccountCategorizer):
@@ -154,11 +163,20 @@ class AzureOpenAICategorizer(AccountCategorizer):
                 txn_idx = batch[local_idx]
                 code = str(decision.get("code") or "").strip()
                 reason = str(decision.get("reason") or "").strip()
+                confidence = _coerce_confidence(decision.get("confidence"))
+                alternatives = _coerce_alternatives(
+                    decision.get("alternatives"), valid_codes
+                )
                 if code and code in valid_codes:
                     out[txn_idx]["proposed_account_code"] = code
                     if reason:
                         out[txn_idx]["_categorizer_reason"] = reason
                     out[txn_idx]["_categorizer"] = self.NAME
+                    out[txn_idx]["_categorizer_confidence"] = confidence
+                    out[txn_idx]["_categorizer_alternatives"] = alternatives
+                    out[txn_idx]["_categorizer_needs_review"] = (
+                        confidence < CONFIDENCE_THRESHOLD
+                    )
         return out
 
     # ----- internals ----------------------------------------------------- #
@@ -181,10 +199,12 @@ class AzureOpenAICategorizer(AccountCategorizer):
             f"Chart of accounts:\n{coa_str}\n\n"
             f"Transactions to categorize:\n{rows_str}\n\n"
             "Return a JSON object of the form "
-            '{"decisions":[{"index":0,"code":"5000","reason":"why"}, ...]} '
+            '{"decisions":[{"index":0,"code":"5000","confidence":0.85,'
+            '"reason":"why","alternatives":[{"code":"6000","reason":"why"}]}]} '
             "with one decision per transaction, in the same order. "
             "The reason should be a short phrase (≤80 chars) explaining "
-            "the choice."
+            "the choice. confidence MUST be a number in [0.0, 1.0]. "
+            "alternatives may be omitted or empty; include at most TWO."
         )
         try:
             resp = self._client.chat.completions.create(
@@ -240,8 +260,53 @@ def _is_weak(txn: dict[str, Any]) -> bool:
     return False
 
 
+def _coerce_confidence(raw: Any) -> float:
+    """Map a model-supplied confidence to a clamped float in [0.0, 1.0].
+
+    Tolerates strings, ints, and the common "percentage scale" mistake
+    where the model returns 0-100 instead of 0-1. Any value >= 5 is
+    interpreted as a percentage and divided by 100 first (since legitimate
+    confidences cluster near 0-1). Out-of-range results are clamped.
+    Unparseable input defaults to 0.0 (forces needs_review).
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if value >= 5.0:
+        value = value / 100.0
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+def _coerce_alternatives(
+    raw: Any, valid_codes: set[str]
+) -> list[dict[str, str]]:
+    """Normalize the model's alternatives field to a list of code+reason dicts.
+
+    Drops alternatives whose code isn't in the valid set; caps at 2 entries.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for item in raw[:5]:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip()
+        reason = str(item.get("reason") or "").strip()
+        if code and code in valid_codes:
+            out.append({"code": code, "reason": reason})
+        if len(out) >= 2:
+            break
+    return out
+
+
 __all__ = [
     "AccountCategorizer",
     "AzureOpenAICategorizer",
+    "CONFIDENCE_THRESHOLD",
     "DictionaryCategorizer",
 ]

@@ -21,6 +21,9 @@ data/
 # IRS PDF templates are bundled with the app — not user data.
 !app/data/
 !app/data/**
+# ...but never commit Python bytecode caches that live alongside them.
+app/data/**/__pycache__/
+app/data/**/*.pyc
 # Frontend build cache
 frontend/tsconfig.tsbuildinfo
 frontend/node_modules/

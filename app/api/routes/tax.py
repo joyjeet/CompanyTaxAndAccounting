@@ -445,6 +445,35 @@ def generate(
 ) -> WorksheetDetailOut:
     _require_firm_with_client(identity)
     assert identity.client_id is not None
+    # Phase 8b: gate by the client's entity_form_ruleset. The client may
+    # only generate worksheets for forms in their active ruleset; if no
+    # ruleset is active for their (entity_type, tax_year), fail closed.
+    from app.domain.entity_form_ruleset import (
+        NeedsRulesetError,
+        get_form_set_for_client,
+    )
+
+    try:
+        allowed = get_form_set_for_client(sess, client_id=identity.client_id)
+    except NeedsRulesetError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(e),
+                "code": "needs_ruleset",
+            },
+        ) from e
+    if body.form_code not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": (
+                    f"Form {body.form_code.value} is not in the client's "
+                    "active entity-form ruleset."
+                ),
+                "allowed_forms": [f.value for f in allowed],
+            },
+        )
     try:
         ws = generate_worksheet(
             sess,
@@ -525,6 +554,39 @@ def approve_ws(
             firm_id=identity.firm_id, client_id=identity.client_id,
             actor=identity.subject, scope=identity.scope,
             worksheet_id=worksheet_id,
+        )
+    except TaxAccessForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except TaxWorksheetGenerationError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    return _serialize_worksheet(sess, ws)
+
+
+class _WorksheetRejectIn(BaseModel):
+    reason: str | None = None
+
+
+@router.post(
+    "/worksheets/{worksheet_id}/reject", response_model=WorksheetDetailOut,
+)
+def reject_ws(
+    worksheet_id: UUID,
+    body: _WorksheetRejectIn | None = None,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> WorksheetDetailOut:
+    """Mirror the mapping reject flow for worksheets."""
+    _require_firm_with_client(identity)
+    assert identity.client_id is not None
+    from app.domain.tax_service import reject_worksheet
+
+    try:
+        ws = reject_worksheet(
+            sess,
+            firm_id=identity.firm_id, client_id=identity.client_id,
+            actor=identity.subject, scope=identity.scope,
+            worksheet_id=worksheet_id,
+            reason=(body.reason if body else None),
         )
     except TaxAccessForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e

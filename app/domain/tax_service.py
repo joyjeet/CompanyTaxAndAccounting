@@ -567,6 +567,10 @@ def generate_worksheet(
       * Every active P&L account (revenue/expense) for the period must have an
         APPROVED mapping for the chosen form. Cogs accounts (if modeled as
         expense type) ARE considered part of P&L for this gate.
+
+    Side effect: regenerating for an existing (client, period, form) whose
+    prior worksheet is APPROVED supersedes that prior row (status -> SUPERSEDED)
+    so the catalog never carries two APPROVED snapshots for the same triple.
     """
     if scope is not AccessScope.FIRM:
         raise TaxAccessForbiddenError(
@@ -670,6 +674,41 @@ def generate_worksheet(
     # Stable hash over the sequence of (line_code, amount) pairs.
     sha = _hash_lines([(fl.code, amount) for fl, amount in line_rows])
 
+    # Phase 8b: regenerate auto-supersede. Any prior APPROVED worksheet
+    # for the same (client, period, form) is flipped to SUPERSEDED so the
+    # catalog never carries two APPROVED snapshots for the same triple.
+    # COMPUTED priors are also superseded (they would otherwise be stale
+    # review candidates competing with the freshly computed one).
+    prior_active = sess.execute(
+        select(TaxWorksheet).where(
+            TaxWorksheet.client_id == client_id,
+            TaxWorksheet.period_id == period.id,
+            TaxWorksheet.form_id == form.id,
+            TaxWorksheet.status.in_(
+                (TaxWorksheetStatus.COMPUTED, TaxWorksheetStatus.APPROVED)
+            ),
+        )
+    ).scalars().all()
+    superseded_ids: list[UUID] = []
+    for prior in prior_active:
+        prior.status = TaxWorksheetStatus.SUPERSEDED
+        superseded_ids.append(prior.id)
+    if prior_active:
+        sess.flush()
+        write_audit(
+            sess,
+            firm_id=firm_id, client_id=client_id, actor=actor,
+            action=AuditAction.TAX_WORKSHEET_SUPERSEDE,
+            entity_type="tax_worksheet",
+            entity_id=prior_active[0].id,
+            details={
+                "form_code": form_code.value,
+                "period_id": str(period.id),
+                "superseded_ids": [str(i) for i in superseded_ids],
+                "reason": "regenerate",
+            },
+        )
+
     ws = TaxWorksheet(
         firm_id=firm_id,
         client_id=client_id,
@@ -759,6 +798,47 @@ def approve_worksheet(
     return ws
 
 
+def reject_worksheet(
+    sess: Session,
+    *,
+    firm_id: UUID,
+    client_id: UUID,
+    actor: str,
+    scope: AccessScope,
+    worksheet_id: UUID,
+    reason: str | None = None,
+) -> TaxWorksheet:
+    """Reject a COMPUTED worksheet. Mirrors `reject_mapping`.
+
+    Only COMPUTED worksheets may be rejected — APPROVED rows must be
+    regenerated (which auto-supersedes the prior). SUPERSEDED rows are
+    historical and cannot transition.
+    """
+    if scope is not AccessScope.FIRM:
+        raise TaxAccessForbiddenError("Only firm staff may reject tax worksheets.")
+    ws = sess.get(TaxWorksheet, worksheet_id)
+    if ws is None or ws.firm_id != firm_id or ws.client_id != client_id:
+        raise TaxWorksheetGenerationError("Worksheet not found in this tenant.")
+    if ws.status is not TaxWorksheetStatus.COMPUTED:
+        raise TaxWorksheetGenerationError(
+            f"Cannot reject worksheet in status {ws.status.value}; "
+            "only COMPUTED is rejectable."
+        )
+    ws.status = TaxWorksheetStatus.REJECTED
+    ws.approved_by = actor       # repurpose the reviewer slot
+    ws.approved_at = datetime.now(tz=UTC)
+    sess.flush()
+    write_audit(
+        sess,
+        firm_id=firm_id, client_id=client_id, actor=actor,
+        action=AuditAction.TAX_WORKSHEET_REJECT,
+        entity_type="tax_worksheet",
+        entity_id=ws.id,
+        details={"sha256": ws.sha256, "reason": reason},
+    )
+    return ws
+
+
 __all__ = [
     "AutoFillResult",
     "AutoProposeSummary",
@@ -776,4 +856,5 @@ __all__ = [
     "get_form_by_code",
     "propose_mapping",
     "reject_mapping",
+    "reject_worksheet",
 ]

@@ -245,6 +245,107 @@ export interface TrialBalanceOut {
 }
 
 // --------------------------------------------------------------------- //
+// PART C client-facing reports
+// --------------------------------------------------------------------- //
+export interface LedgerEntryOut {
+  entry_id: string;
+  line_id: string;
+  entry_date: string;
+  memo: string | null;
+  line_description: string | null;
+  debit: string;
+  credit: string;
+  running_balance: string;
+}
+
+export interface GeneralLedgerOut {
+  kind: "general_ledger";
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  account_type: string;
+  period_start: string;
+  period_end: string;
+  opening_balance: string;
+  closing_balance: string;
+  rows: LedgerEntryOut[];
+}
+
+export interface AgingBucketOut {
+  label: string;
+  min_days: number;
+  max_days: number | null;
+  amount: string;
+}
+
+export interface AgingAccountRowOut {
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  total: string;
+  buckets: AgingBucketOut[];
+}
+
+export interface AgingReportOut {
+  kind: "ar_aging" | "ap_aging";
+  as_of: string;
+  account_codes: string[];
+  rows: AgingAccountRowOut[];
+  totals_by_bucket: AgingBucketOut[];
+  grand_total: string;
+}
+
+export interface DrillDownLineOut {
+  entry_id: string;
+  line_id: string;
+  entry_date: string;
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  memo: string | null;
+  line_description: string | null;
+  debit: string;
+  credit: string;
+  source_document_id: string | null;
+}
+
+export interface DrillDownOut {
+  kind: "account_activity";
+  account_id: string;
+  account_code: string;
+  account_name: string;
+  is_rollup: boolean;
+  leaf_account_ids: string[];
+  period_start: string;
+  period_end: string;
+  total_debit: string;
+  total_credit: string;
+  signed_total: string;
+  lines: DrillDownLineOut[];
+}
+
+export interface RollupNodeOut {
+  account_id: string;
+  code: string;
+  name: string;
+  account_type: string;
+  depth: number;
+  is_leaf: boolean;
+  debit_total: string;
+  credit_total: string;
+  signed_balance: string;
+  children: RollupNodeOut[];
+}
+
+export interface RollupTreeOut {
+  kind: "account_rollup";
+  scope: "balance_sheet" | "profit_and_loss" | "trial_balance";
+  period_start: string | null;
+  period_end: string;
+  roots: RollupNodeOut[];
+}
+
+// --------------------------------------------------------------------- //
 // Reports / Artifacts
 // --------------------------------------------------------------------- //
 export type ArtifactKind =

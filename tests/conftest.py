@@ -47,9 +47,19 @@ _TENANT_TABLES = (
     "journal_entry",
     "source_document",
     "accounting_period",
+    "client_profile",
     "chart_of_accounts",
     "client",
     "firm",
+)
+
+# Reference tables that may accumulate test-inserted rows. We delete only
+# rows not part of the migration seed so the seed-required rows survive
+# (form_template seed for F1120/F1120S/F1065/F1040SC tax_year=2025;
+# entity_form_ruleset seed for the 5 EntityType values tax_year=2025).
+_REFERENCE_TEST_CLEANUP = (
+    ("form_template", "tax_year != 2025"),
+    ("entity_form_ruleset", "tax_year != 2025"),
 )
 
 
@@ -83,6 +93,21 @@ def clean_db() -> Iterator[None]:
     eng = get_owner_engine()
     with eng.begin() as conn:
         conn.execute(text("TRUNCATE " + ", ".join(_TENANT_TABLES) + " RESTART IDENTITY CASCADE"))
+        # Best-effort cleanup of test-inserted rows on reference tables.
+        # The seed (tax_year=2025) is preserved.
+        for table, where_clause in _REFERENCE_TEST_CLEANUP:
+            conn.execute(text(f"DELETE FROM {table} WHERE {where_clause}"))
+        # Reset seeded reference rows to their initial state so tests that
+        # activate them don't leak state into siblings.
+        conn.execute(text(
+            "UPDATE form_template SET status='draft', verified=false, "
+            "activated_at=NULL, activated_by=NULL, verified_at=NULL, "
+            "verified_by=NULL WHERE tax_year=2025"
+        ))
+        conn.execute(text(
+            "UPDATE entity_form_ruleset SET status='draft', "
+            "activated_at=NULL, activated_by=NULL WHERE tax_year=2025"
+        ))
     yield
 
 

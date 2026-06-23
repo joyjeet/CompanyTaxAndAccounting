@@ -150,6 +150,13 @@ class LedgerService:
                 )
             if not acct.is_active:
                 raise InvalidAccountError(f"Account {acct.code} is inactive.")
+            # Leaf-only posting: parents/rollups are computed, never posted to.
+            # This protects statement-rollup integrity (Phase 8b carry-over).
+            if not acct.is_leaf:
+                raise InvalidAccountError(
+                    f"Account {acct.code} ({acct.name}) is a parent/rollup; "
+                    "journal entries may only post to leaf accounts."
+                )
 
         # Persist header.
         entry = JournalEntry(

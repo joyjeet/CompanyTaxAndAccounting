@@ -5,6 +5,7 @@
 import config from "../config";
 import type { AuthClient } from "../auth/AuthClient";
 import type {
+  AgingReportOut,
   ArtifactOut,
   BalanceSheetOut,
   CashFlowOut,
@@ -13,12 +14,15 @@ import type {
   DocumentOut,
   DocumentDetailOut,
   DraftOut,
+  DrillDownOut,
+  GeneralLedgerOut,
   JournalEntryCreateIn,
   JournalEntryOut,
   MappingOut,
   PeriodOut,
   ProfitAndLossOut,
   ResetOut,
+  RollupTreeOut,
   SeedOut,
   TaxFormDetailOut,
   TaxFormOut,
@@ -239,6 +243,82 @@ export class ApiClient {
   getTrialBalance(clientId: string, periodId: string): Promise<TrialBalanceOut> {
     const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
     return this.request<TrialBalanceOut>(`/statements/trial-balance?${q}`);
+  }
+
+  // ----- PART C: client-facing reports ---------------------------- //
+  getGeneralLedger(
+    clientId: string,
+    periodId: string,
+    accountId: string,
+  ): Promise<GeneralLedgerOut> {
+    const q = new URLSearchParams({
+      client_id: clientId,
+      period_id: periodId,
+      account_id: accountId,
+    });
+    return this.request<GeneralLedgerOut>(`/statements/general-ledger?${q}`);
+  }
+
+  getArAging(
+    clientId: string,
+    periodId: string,
+    accountCodes?: string[],
+  ): Promise<AgingReportOut> {
+    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    if (accountCodes && accountCodes.length > 0) {
+      q.set("account_codes", accountCodes.join(","));
+    }
+    return this.request<AgingReportOut>(`/statements/ar-aging?${q}`);
+  }
+
+  getApAging(
+    clientId: string,
+    periodId: string,
+    accountCodes?: string[],
+  ): Promise<AgingReportOut> {
+    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    if (accountCodes && accountCodes.length > 0) {
+      q.set("account_codes", accountCodes.join(","));
+    }
+    return this.request<AgingReportOut>(`/statements/ap-aging?${q}`);
+  }
+
+  getAccountActivity(
+    clientId: string,
+    periodId: string,
+    accountId: string,
+  ): Promise<DrillDownOut> {
+    const q = new URLSearchParams({
+      client_id: clientId,
+      period_id: periodId,
+      account_id: accountId,
+    });
+    return this.request<DrillDownOut>(`/statements/account-activity?${q}`);
+  }
+
+  getAccountRollup(
+    clientId: string,
+    periodId: string,
+    scope: "balance_sheet" | "profit_and_loss" | "trial_balance" = "trial_balance",
+  ): Promise<RollupTreeOut> {
+    const q = new URLSearchParams({
+      client_id: clientId,
+      period_id: periodId,
+      scope,
+    });
+    return this.request<RollupTreeOut>(`/statements/account-rollup?${q}`);
+  }
+
+  lockPeriod(clientId: string, periodId: string): Promise<PeriodOut> {
+    return this.json<PeriodOut>(
+      `/clients/${clientId}/periods/${periodId}/lock`, "POST", {},
+    );
+  }
+
+  unlockPeriod(clientId: string, periodId: string): Promise<PeriodOut> {
+    return this.json<PeriodOut>(
+      `/clients/${clientId}/periods/${periodId}/unlock`, "POST", {},
+    );
   }
 
   // ----- Demo / seed helpers ------------------------------------- //

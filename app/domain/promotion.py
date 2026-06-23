@@ -277,6 +277,24 @@ def promote_statement_draft(
         if not code:
             skipped.append({"index": str(idx), "reason": "no account code"})
             continue
+        # If the categorizer flagged this row as needs_review (low confidence)
+        # and the reviewer did NOT explicitly override the code, skip — the
+        # reviewer must address it before it can post.
+        if (
+            idx not in overrides
+            and txn.get("_categorizer_needs_review") is True
+        ):
+            skipped.append(
+                {
+                    "index": str(idx),
+                    "reason": (
+                        "categorizer confidence "
+                        f"{txn.get('_categorizer_confidence', 0):.2f} below "
+                        "threshold — reviewer must confirm code"
+                    ),
+                }
+            )
+            continue
         other_acct = accounts_by_code.get(code)
         if other_acct is None:
             skipped.append(

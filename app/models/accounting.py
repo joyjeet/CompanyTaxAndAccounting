@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
 )
 from sqlalchemy import Enum as SAEnum
@@ -36,6 +37,7 @@ from app.models.enums import (
     AccountType,
     AssetStatus,
     AuditAction,
+    CoaNodeOrigin,
     DraftKind,
     DraftStatus,
     JournalEntryStatus,
@@ -97,6 +99,7 @@ class ChartOfAccounts(Base):
         UniqueConstraint("client_id", "code", name="uq_coa_client_code"),
         Index("ix_coa_firm_id", "firm_id"),
         Index("ix_coa_client_id", "client_id"),
+        Index("ix_coa_parent_account_id", "parent_account_id"),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -119,6 +122,38 @@ class ChartOfAccounts(Base):
             values_callable=lambda x: [e.value for e in x],
         ),
         nullable=False,
+    )
+    # --- Hierarchy (Phase 8) -------------------------------------------- #
+    # Self-FK; root accounts have parent NULL. CHECK constraint in the
+    # migration forbids cycles via path prefix and forbids cross-client FKs.
+    parent_account_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("chart_of_accounts.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    # Materialized path like "1000>1010>1011" (codes joined by ">"). Kept
+    # in sync at insert/rename by the COA domain service. Cheap to filter
+    # subtree queries: `path LIKE '1000>%'`.
+    path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    # 0 for roots, +1 per ancestor — cached to avoid recursive CTEs.
+    depth: Mapped[int] = mapped_column(nullable=False, default=0)
+    # True only for nodes with no children. Journal entries should only
+    # post to leaves (validation deferred — see Phase-8 hardening notes).
+    is_leaf: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Lineage to the template node this row was instantiated from, if any.
+    template_node_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("coa_template_node.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    origin: Mapped[CoaNodeOrigin] = mapped_column(
+        SAEnum(
+            CoaNodeOrigin,
+            name="coa_node_origin",
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=CoaNodeOrigin.CUSTOM,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -851,3 +886,27 @@ class GeneratedArtifact(Base):
         ForeignKey("generated_artifact.id", ondelete="SET NULL"),
         nullable=True,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Default hierarchy fields for plain `ChartOfAccounts(...)` constructions.
+#
+# Most production code goes through `app.domain.coa_templates.instantiate_for_client`
+# which sets `path`, `depth`, `is_leaf` explicitly. But existing tests and the
+# legacy POST /clients/{id}/coa endpoint still instantiate flat rows without
+# those fields. This listener fills them in so the new NOT NULL columns are
+# satisfied without code churn elsewhere.
+# --------------------------------------------------------------------------- #
+@event.listens_for(ChartOfAccounts, "before_insert")
+def _coa_before_insert(mapper, connection, target):  # noqa: ANN001
+    """Auto-populate hierarchy defaults for flat (root-only) COA inserts."""
+    if not target.path:
+        target.path = target.code or ""
+    if target.depth is None:
+        target.depth = 0
+    if target.is_leaf is None:
+        target.is_leaf = True
+    if target.origin is None:
+        from app.models.enums import CoaNodeOrigin
+
+        target.origin = CoaNodeOrigin.CUSTOM
