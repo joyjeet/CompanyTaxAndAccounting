@@ -51,7 +51,11 @@ class ClientProfile(Base):
     # Stored as the enum's string value. We keep it as String (not a PG
     # enum type) so a new EntityType — e.g. "non_profit" — can ship as a
     # pure data/enum change, without a DB migration.
-    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    #
+    # Nullable as of migration 0010: a portal user can populate contact
+    # info before the firm has confirmed entity_type. The form-set engine
+    # fails closed when entity_type is missing.
+    entity_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     industry: Mapped[str] = mapped_column(
         String(64), nullable=False, default=Industry.GENERIC.value
     )
@@ -59,7 +63,9 @@ class ClientProfile(Base):
     # client crosses into a new tax year the firm bumps this — the
     # entity_form_ruleset for that (entity_type, tax_year) is the one
     # used to compute their form set.
-    tax_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    #
+    # Nullable as of migration 0010 — same rationale as entity_type.
+    tax_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Two-letter state abbreviation; nullable while client onboarding is
     # in progress.
     home_state: Mapped[str | None] = mapped_column(String(2), nullable=True)
@@ -77,6 +83,30 @@ class ClientProfile(Base):
     #   {"member_count": 3} for partnerships.
     # No schema enforcement here — the CPA/UI layer validates.
     entity_attributes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # ------------------------------------------------------------------ #
+    # Phase 8c — Business identity and contact info.
+    # All nullable. Editable by firm staff AND by the owning client (the
+    # client portal). Address fields are mailing address; `home_state`
+    # above remains the *tax* home state (sometimes different).
+    # ------------------------------------------------------------------ #
+    business_legal_name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    dba_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ein: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    address_line1: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    address_line2: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    address_state: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    postal_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    country: Mapped[str] = mapped_column(
+        String(2), nullable=False, default="US"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

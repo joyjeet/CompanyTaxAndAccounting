@@ -11,6 +11,8 @@ import type {
   CashFlowOut,
   ClientOut,
   CoaOut,
+  ClientProfileOut,
+  ClientProfileUpsertIn,
   DocumentOut,
   DocumentDetailOut,
   DraftOut,
@@ -88,6 +90,32 @@ export class ApiClient {
 
   createClient(body: { name: string; external_code?: string | null }): Promise<ClientOut> {
     return this.json<ClientOut>("/clients", "POST", body);
+  }
+
+  // ----- Client profile (entity type + contact info) ------------ //
+  /** Fetches the client's profile. Returns ``null`` on 404 (not yet set). */
+  async getClientProfile(clientId: string): Promise<ClientProfileOut | null> {
+    try {
+      return await this.request<ClientProfileOut>(
+        `/clients/${clientId}/profile`,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /** PATCH-style upsert. Both firm staff and the client portal user may
+   * call this against their own client. */
+  upsertClientProfile(
+    clientId: string,
+    body: ClientProfileUpsertIn,
+  ): Promise<ClientProfileOut> {
+    return this.json<ClientProfileOut>(
+      `/clients/${clientId}/profile`,
+      "PUT",
+      body,
+    );
   }
 
   // ----- Periods -------------------------------------------------- //

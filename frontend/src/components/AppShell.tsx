@@ -46,6 +46,7 @@ const PORTAL_NAV: NavItem[] = [
   { to: "/portal", label: "Overview", icon: <Home24Regular />, end: true },
   { to: "/portal/documents", label: "My documents", icon: <Document24Regular /> },
   { to: "/portal/reports", label: "My reports", icon: <ChartMultipleRegular /> },
+  { to: "/portal/profile", label: "My profile", icon: <PersonCircle24Regular /> },
 ];
 
 const useStyles = makeStyles({

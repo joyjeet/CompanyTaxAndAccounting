@@ -110,16 +110,31 @@ def test_put_profile_then_get_round_trip(api_client: TestClient, world) -> None:
     assert r.json()["entity_type"] == "c_corp"
 
 
-def test_put_profile_rejects_portal(api_client: TestClient, world) -> None:
+def test_put_profile_accepts_portal_self_edit(
+    api_client: TestClient, world
+) -> None:
+    """Phase 8c: a client portal user can update their own profile
+    (entity type self-attestation + contact info). RLS still ensures
+    they cannot reach another client's profile.
+    """
     headers = _auth(
         api_client, "client_portal", world.firm_a, world.a1.client_id,
     )
     r = api_client.put(
         f"/clients/{world.a1.client_id}/profile",
         headers=headers,
-        json={"entity_type": "s_corp", "tax_year": 2025},
+        json={
+            "entity_type": "s_corp",
+            "tax_year": 2025,
+            "business_legal_name": "Acme LLC",
+            "phone": "555-987-6543",
+        },
     )
-    assert r.status_code == 403
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["entity_type"] == "s_corp"
+    assert body["business_legal_name"] == "Acme LLC"
+    assert body["phone"] == "555-987-6543"
 
 
 def test_put_profile_validation_error(api_client: TestClient, world) -> None:

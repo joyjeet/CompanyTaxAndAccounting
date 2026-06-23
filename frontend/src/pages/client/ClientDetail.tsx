@@ -19,12 +19,14 @@ import DocumentsTab from "./DocumentsTab";
 import JournalEntriesTab from "./JournalEntriesTab";
 import OverviewTab from "./OverviewTab";
 import PeriodsTab from "./PeriodsTab";
+import ProfileTab from "./ProfileTab";
 import ReportsTab from "./ReportsTab";
 import StatementsTab from "./StatementsTab";
 import TaxTab from "./TaxTab";
 
 type TabId =
   | "overview"
+  | "profile"
   | "periods"
   | "accounts"
   | "documents"
@@ -81,6 +83,7 @@ export default function ClientDetail() {
         onTabSelect={(_, d) => setTab(d.value as TabId)}
       >
         <Tab value="overview">Overview</Tab>
+        <Tab value="profile">Profile</Tab>
         <Tab value="periods">Periods</Tab>
         <Tab value="accounts">Chart of accounts</Tab>
         <Tab value="documents">Documents</Tab>
@@ -92,6 +95,9 @@ export default function ClientDetail() {
       </TabList>
 
       {tab === "overview" && <OverviewTab clientId={id} />}
+      {tab === "profile" && (
+        <ProfileTab clientId={id} clientName={client.data.name} />
+      )}
       {tab === "periods" && <PeriodsTab clientId={id} />}
       {tab === "accounts" && <AccountsTab clientId={id} />}
       {tab === "documents" && <DocumentsTab clientId={id} />}

@@ -1,4 +1,4 @@
-"""Seed a single demo firm + one client + a minimal chart of accounts and an
+"""Seed a single demo firm + one client + a realistic chart of accounts and an
 accounting period, then print the IDs.
 
 Intended for use by testers / QA against the local dev stack:
@@ -19,7 +19,8 @@ from uuid import UUID, uuid4
 from app.db.session import tenant_session, unscoped_session
 from app.db.tenant import AccessScope, TenantContext
 from app.models.accounting import AccountingPeriod, ChartOfAccounts, Client, Firm
-from app.models.enums import AccountType, NormalBalance
+from app.models.client_profile import ClientProfile
+from app.models.enums import AccountType, EntityType, Industry, NormalBalance
 
 
 def _create_firm(name: str) -> UUID:
@@ -27,6 +28,73 @@ def _create_firm(name: str) -> UUID:
     with unscoped_session() as sess:
         sess.add(Firm(id=firm_id, name=name))
     return firm_id
+
+
+# Account name + numbering picked to match the keyword rules in
+# ``app/domain/tax_automap.py`` so generated journal entries flow into the
+# correct lines of Form 1120 / Schedule C without manual mapping.
+#
+# 1xxx Assets, 2xxx Liabilities, 3xxx Equity,
+# 4xxx Revenue, 5xxx COGS, 6xxx Operating expenses,
+# 7xxx Payroll / benefits, 8xxx Other expenses
+DEMO_COA: list[tuple[str, str, AccountType, NormalBalance]] = [
+    # ---- Assets ----
+    ("1000", "Cash - Operating",              AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1010", "Cash - Payroll",                AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1020", "Cash - Savings",                AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1100", "Accounts Receivable",           AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1200", "Inventory",                     AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1300", "Prepaid Expenses",              AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1500", "Office Equipment",              AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1510", "Computers & Software",          AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1520", "Vehicles",                      AccountType.ASSET,     NormalBalance.DEBIT),
+    ("1590", "Accumulated Depreciation",      AccountType.ASSET,     NormalBalance.CREDIT),
+    # ---- Liabilities ----
+    ("2000", "Accounts Payable",              AccountType.LIABILITY, NormalBalance.CREDIT),
+    ("2100", "Credit Card Payable",           AccountType.LIABILITY, NormalBalance.CREDIT),
+    ("2200", "Sales Tax Payable",             AccountType.LIABILITY, NormalBalance.CREDIT),
+    ("2300", "Payroll Liabilities",           AccountType.LIABILITY, NormalBalance.CREDIT),
+    ("2400", "Bank Loan Payable",             AccountType.LIABILITY, NormalBalance.CREDIT),
+    # ---- Equity ----
+    ("3000", "Owner's Equity",                AccountType.EQUITY,    NormalBalance.CREDIT),
+    ("3100", "Owner's Draws",                 AccountType.EQUITY,    NormalBalance.DEBIT),
+    ("3900", "Retained Earnings",             AccountType.EQUITY,    NormalBalance.CREDIT),
+    # ---- Revenue ----
+    ("4000", "Service Revenue",               AccountType.REVENUE,   NormalBalance.CREDIT),
+    ("4100", "Product Sales",                 AccountType.REVENUE,   NormalBalance.CREDIT),
+    ("4200", "Other Income",                  AccountType.REVENUE,   NormalBalance.CREDIT),
+    ("4900", "Returns and Allowances",        AccountType.REVENUE,   NormalBalance.DEBIT),
+    # ---- COGS (5xxx → maps to COGS / line 2 on 1120) ----
+    ("5000", "Cost of Goods Sold",            AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("5100", "Materials & Supplies",          AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("5200", "Direct Labor",                  AccountType.EXPENSE,   NormalBalance.DEBIT),
+    # ---- Operating expenses (6xxx) — names tuned for the automap keywords ----
+    ("6000", "Officer Compensation",          AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6010", "Salaries & Wages",              AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6020", "Payroll Taxes",                 AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6100", "Office Rent",                   AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6110", "Utilities",                     AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6120", "Repairs and Maintenance",       AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6200", "Office Supplies",               AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6210", "Office Expense",                AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6300", "Advertising & Marketing",       AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6400", "Travel",                        AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6410", "Meals",                         AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6420", "Vehicle Expense",               AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6500", "Legal Services",                AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6510", "Professional Fees",             AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6600", "Bank Loan Interest Expense",    AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6700", "Depreciation Expense",          AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6800", "Charitable Donations",          AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("6900", "State Income Taxes",            AccountType.EXPENSE,   NormalBalance.DEBIT),
+    # ---- Benefits (7xxx) ----
+    ("7000", "Health Insurance",              AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("7100", "401k Match",                    AccountType.EXPENSE,   NormalBalance.DEBIT),
+    # ---- Other (8xxx) ----
+    ("8000", "Bad Debt Expense",              AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("8100", "Bank Fees",                     AccountType.EXPENSE,   NormalBalance.DEBIT),
+    ("8200", "Insurance",                     AccountType.EXPENSE,   NormalBalance.DEBIT),
+]
 
 
 def _create_client_and_coa(firm_id: UUID, client_name: str) -> tuple[UUID, UUID]:
@@ -39,40 +107,39 @@ def _create_client_and_coa(firm_id: UUID, client_name: str) -> tuple[UUID, UUID]
         sess.add_all(
             [
                 ChartOfAccounts(
-                    id=uuid4(), firm_id=firm_id, client_id=client_id,
-                    code="1000", name="Cash",
-                    account_type=AccountType.ASSET, normal_balance=NormalBalance.DEBIT,
-                ),
-                ChartOfAccounts(
-                    id=uuid4(), firm_id=firm_id, client_id=client_id,
-                    code="1100", name="Accounts Receivable",
-                    account_type=AccountType.ASSET, normal_balance=NormalBalance.DEBIT,
-                ),
-                ChartOfAccounts(
-                    id=uuid4(), firm_id=firm_id, client_id=client_id,
-                    code="2000", name="Accounts Payable",
-                    account_type=AccountType.LIABILITY, normal_balance=NormalBalance.CREDIT,
-                ),
-                ChartOfAccounts(
-                    id=uuid4(), firm_id=firm_id, client_id=client_id,
-                    code="3000", name="Owner's Equity",
-                    account_type=AccountType.EQUITY, normal_balance=NormalBalance.CREDIT,
-                ),
-                ChartOfAccounts(
-                    id=uuid4(), firm_id=firm_id, client_id=client_id,
-                    code="4000", name="Service Revenue",
-                    account_type=AccountType.REVENUE, normal_balance=NormalBalance.CREDIT,
-                ),
-                ChartOfAccounts(
-                    id=uuid4(), firm_id=firm_id, client_id=client_id,
-                    code="5000", name="Office Expense",
-                    account_type=AccountType.EXPENSE, normal_balance=NormalBalance.DEBIT,
-                ),
+                    id=uuid4(),
+                    firm_id=firm_id,
+                    client_id=client_id,
+                    code=code,
+                    name=name,
+                    account_type=atype,
+                    normal_balance=nbal,
+                )
+                for (code, name, atype, nbal) in DEMO_COA
+            ]
+            + [
                 AccountingPeriod(
-                    id=period_id, firm_id=firm_id, client_id=client_id,
+                    id=period_id,
+                    firm_id=firm_id,
+                    client_id=client_id,
                     name="2026",
                     start_date=date(2026, 1, 1),
                     end_date=date(2026, 12, 31),
+                ),
+                # Seed a starter profile so the dashboard isn't blank. The
+                # firm or client can edit on the Profile tab / page.
+                ClientProfile(
+                    id=uuid4(),
+                    firm_id=firm_id,
+                    client_id=client_id,
+                    entity_type=EntityType.S_CORP,
+                    industry=Industry.PROFESSIONAL_SERVICES,
+                    tax_year=2026,
+                    home_state="CA",
+                    additional_states=[],
+                    fiscal_year_end_month=12,
+                    business_legal_name=client_name,
+                    country="US",
                 ),
             ]
         )

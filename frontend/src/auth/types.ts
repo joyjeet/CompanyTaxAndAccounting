@@ -146,6 +146,74 @@ export interface CoaOut {
   account_type: AccountType;
   normal_balance: NormalBalance;
   is_active: boolean;
+  parent_account_id: string | null;
+}
+
+// --------------------------------------------------------------------- //
+// Client profile (Phase 8c — entity + contact, editable by firm OR client)
+// --------------------------------------------------------------------- //
+/** Mirrors backend ``EntityType`` enum. Drives which tax forms get filed. */
+export type EntityType =
+  | "c_corp"
+  | "s_corp"
+  | "partnership"
+  | "single_member_llc"
+  | "sole_prop";
+
+/** Mirrors backend ``Industry`` enum (used for default account templates). */
+export type Industry =
+  | "generic"
+  | "construction"
+  | "retail_ecommerce"
+  | "professional_services";
+
+export interface ClientProfileOut {
+  client_id: string;
+  entity_type: EntityType | null;
+  industry: Industry;
+  tax_year: number | null;
+  home_state: string | null;
+  additional_states: string[];
+  fiscal_year_end_month: number | null;
+  entity_attributes: Record<string, unknown>;
+  business_legal_name: string | null;
+  dba_name: string | null;
+  ein: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  address_line1: string | null;
+  address_line2: string | null;
+  city: string | null;
+  address_state: string | null;
+  postal_code: string | null;
+  country: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** PATCH-style: every field optional. Omitting a key leaves the existing
+ * value untouched; passing ``null`` clears it. */
+export interface ClientProfileUpsertIn {
+  entity_type?: EntityType | null;
+  industry?: Industry | null;
+  tax_year?: number | null;
+  home_state?: string | null;
+  additional_states?: string[] | null;
+  fiscal_year_end_month?: number | null;
+  entity_attributes?: Record<string, unknown> | null;
+  business_legal_name?: string | null;
+  dba_name?: string | null;
+  ein?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  website?: string | null;
+  address_line1?: string | null;
+  address_line2?: string | null;
+  city?: string | null;
+  address_state?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
 }
 
 // --------------------------------------------------------------------- //

@@ -74,6 +74,7 @@ class CoaOut(BaseModel):
     account_type: str
     normal_balance: str
     is_active: bool
+    parent_account_id: UUID | None = None
 
 
 class CoaCreateIn(BaseModel):
@@ -399,6 +400,7 @@ def list_chart_of_accounts(
             account_type=a.account_type.value,
             normal_balance=a.normal_balance.value,
             is_active=a.is_active,
+            parent_account_id=a.parent_account_id,
         )
         for a in rows
     ]
@@ -437,6 +439,7 @@ def create_account(
         account_type=a.account_type.value,
         normal_balance=a.normal_balance.value,
         is_active=a.is_active,
+        parent_account_id=a.parent_account_id,
     )
 
 
@@ -513,29 +516,60 @@ def instantiate_coa(
 
 
 # --------------------------------------------------------------------------- #
-# Client profile (Phase 8b)
+# Client profile (Phase 8b/8c)
 # --------------------------------------------------------------------------- #
 class ClientProfileOut(BaseModel):
     client_id: UUID
-    entity_type: str
+    entity_type: str | None
     industry: str
-    tax_year: int
+    tax_year: int | None
     home_state: str | None
     additional_states: list[str]
     fiscal_year_end_month: int | None
     entity_attributes: dict
+    # Contact / address (Phase 8c)
+    business_legal_name: str | None
+    dba_name: str | None
+    ein: str | None
+    phone: str | None
+    email: str | None
+    website: str | None
+    address_line1: str | None
+    address_line2: str | None
+    city: str | None
+    address_state: str | None
+    postal_code: str | None
+    country: str
     created_at: str
     updated_at: str
 
 
 class ClientProfileUpsertIn(BaseModel):
-    entity_type: str = Field(min_length=1, max_length=32)
-    tax_year: int = Field(ge=1900, le=2200)
+    """PATCH-style upsert. Any field omitted is preserved; any field
+    explicitly set to ``null`` is cleared. To distinguish "absent" from
+    "explicit null" we use a sentinel below in the route handler.
+    """
+
+    entity_type: str | None = Field(default=None, max_length=32)
+    tax_year: int | None = Field(default=None, ge=1900, le=2200)
     industry: str | None = Field(default=None, max_length=64)
     home_state: str | None = Field(default=None, max_length=2)
     additional_states: list[str] | None = None
     fiscal_year_end_month: int | None = Field(default=None, ge=1, le=12)
     entity_attributes: dict | None = None
+    # Contact / address — writeable by client portal as well as firm.
+    business_legal_name: str | None = Field(default=None, max_length=255)
+    dba_name: str | None = Field(default=None, max_length=255)
+    ein: str | None = Field(default=None, max_length=32)
+    phone: str | None = Field(default=None, max_length=64)
+    email: str | None = Field(default=None, max_length=255)
+    website: str | None = Field(default=None, max_length=512)
+    address_line1: str | None = Field(default=None, max_length=255)
+    address_line2: str | None = Field(default=None, max_length=255)
+    city: str | None = Field(default=None, max_length=128)
+    address_state: str | None = Field(default=None, max_length=2)
+    postal_code: str | None = Field(default=None, max_length=16)
+    country: str | None = Field(default=None, max_length=2)
 
 
 def _serialize_profile(row) -> ClientProfileOut:
@@ -548,6 +582,18 @@ def _serialize_profile(row) -> ClientProfileOut:
         additional_states=list(row.additional_states or []),
         fiscal_year_end_month=row.fiscal_year_end_month,
         entity_attributes=dict(row.entity_attributes or {}),
+        business_legal_name=row.business_legal_name,
+        dba_name=row.dba_name,
+        ein=row.ein,
+        phone=row.phone,
+        email=row.email,
+        website=row.website,
+        address_line1=row.address_line1,
+        address_line2=row.address_line2,
+        city=row.city,
+        address_state=row.address_state,
+        postal_code=row.postal_code,
+        country=row.country or "US",
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
     )
@@ -581,30 +627,27 @@ def upsert_client_profile_endpoint(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> ClientProfileOut:
-    """Create or update a client's profile. Firm staff only."""
+    """Create or update a client's profile.
+
+    Phase 8c: portal users (CLIENT scope) may also call this endpoint
+    to maintain their business identity & contact info, and to
+    self-attest entity_type / tax_year. The firm reviews and can
+    override.
+    """
     from app.domain.client_profile import (
         ClientProfileForbiddenError,
         ClientProfileValidationError,
         upsert_profile,
     )
 
-    _require_firm_scope(identity)
+    _require_client_access(identity, client_id)
     _load_client_or_404(sess, client_id)
-    # Drop None-valued optional kwargs so the domain defaults apply.
-    kwargs = {
-        "entity_type": body.entity_type,
-        "tax_year": body.tax_year,
-    }
-    if body.industry is not None:
-        kwargs["industry"] = body.industry
-    if body.home_state is not None:
-        kwargs["home_state"] = body.home_state
-    if body.additional_states is not None:
-        kwargs["additional_states"] = body.additional_states
-    if body.fiscal_year_end_month is not None:
-        kwargs["fiscal_year_end_month"] = body.fiscal_year_end_month
-    if body.entity_attributes is not None:
-        kwargs["entity_attributes"] = body.entity_attributes
+    # PATCH semantics: only pass through keys the client actually set
+    # (Pydantic's `model_fields_set` records which were explicitly
+    # provided vs left at their default). This lets the domain layer
+    # use its _UNSET sentinel to leave untouched fields alone.
+    sent = body.model_fields_set
+    kwargs: dict = {k: getattr(body, k) for k in sent}
     try:
         row = upsert_profile(
             sess,

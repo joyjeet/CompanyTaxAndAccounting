@@ -19,6 +19,7 @@ import DraftDetail from "./pages/DraftDetail";
 import LoginPage from "./pages/LoginPage";
 import PortalDocuments from "./pages/PortalDocuments";
 import PortalHome from "./pages/PortalHome";
+import PortalProfile from "./pages/PortalProfile";
 import PortalReports from "./pages/PortalReports";
 import ReviewQueue from "./pages/ReviewQueue";
 import TaxFormsLibrary from "./pages/TaxFormsLibrary";
@@ -165,6 +166,16 @@ export default function App() {
                 <RequireAuth>
                   <AuthenticatedShell>
                     <PortalReports />
+                  </AuthenticatedShell>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/portal/profile"
+              element={
+                <RequireAuth>
+                  <AuthenticatedShell>
+                    <PortalProfile />
                   </AuthenticatedShell>
                 </RequireAuth>
               }

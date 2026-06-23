@@ -76,18 +76,26 @@ def test_upsert_creates_then_updates(world) -> None:
         assert len(rows) == 1
 
 
-def test_upsert_rejected_for_portal_scope(world) -> None:
+def test_portal_scope_can_self_serve_profile(world) -> None:
+    """Phase 8c: the client portal user is allowed to maintain their own
+    profile (entity type + contact info). The firm reviews and can
+    override later. RLS still prevents writes to a different client.
+    """
     firm = world.firm_a
     client = world.a1.client_id
 
     with tenant_session(ctx_client(firm, client)) as sess:
-        with pytest.raises(ClientProfileForbiddenError):
-            upsert_profile(
-                sess,
-                firm_id=firm, client_id=client,
-                actor="portal@firm.test", scope=AccessScope.CLIENT,
-                entity_type=EntityType.SOLE_PROP, tax_year=2025,
-            )
+        row = upsert_profile(
+            sess,
+            firm_id=firm, client_id=client,
+            actor="portal@firm.test", scope=AccessScope.CLIENT,
+            entity_type=EntityType.SOLE_PROP, tax_year=2025,
+            business_legal_name="Acme Inc.",
+            phone="555-123-4567",
+        )
+        assert row.entity_type == "sole_prop"
+        assert row.business_legal_name == "Acme Inc."
+        assert row.phone == "555-123-4567"
 
 
 def test_upsert_validates_inputs(world) -> None:
