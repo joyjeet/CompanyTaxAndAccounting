@@ -179,6 +179,9 @@ resource apiApp 'Microsoft.App/containerApps@2024-10-02-preview' = {
             { name: 'APP_ENV',                value: 'staging' }
             { name: 'APP_AUTH_MODE',          value: 'test' }
             { name: 'APP_KEK_PROVIDER',       value: 'local' }
+            // The demo runs without a Redis instance — drain ingest jobs
+            // inline inside the upload request handler.
+            { name: 'APP_QUEUE_BACKEND',      value: 'memory' }
             { name: 'APP_CORS_ORIGINS',       value: '*' }
             { name: 'APP_LOG_LEVEL',          value: 'INFO' }
             { name: 'DATABASE_URL',           secretRef: 'database-url' }

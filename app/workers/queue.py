@@ -56,7 +56,17 @@ class InMemoryJobQueue(JobQueue):
 
 @lru_cache(maxsize=1)
 def get_job_queue() -> JobQueue:
-    return RedisJobQueue(get_settings().redis_url)
+    """Pick a queue backend based on settings.
+
+    ``app_queue_backend=memory`` returns an InMemoryJobQueue — appropriate
+    for demo deployments that drain jobs inline inside the upload request
+    (see ``app/api/routes/documents.py``::upload_document). ``redis`` is
+    the production default and requires a reachable Redis at ``redis_url``.
+    """
+    settings = get_settings()
+    if settings.app_queue_backend == "memory":
+        return InMemoryJobQueue()
+    return RedisJobQueue(settings.redis_url)
 
 
 __all__ = [
