@@ -216,3 +216,132 @@ def test_cors_headers_present(client: TestClient) -> None:
     # 200 with allow-origin echoed, OR 204 — both are valid for CORS preflight.
     assert resp.status_code in (200, 204)
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_firm_can_promote_with_client_id_in_body_when_token_has_no_client_id(
+    client: TestClient,
+    world,
+    fake_integrations,
+) -> None:
+    from app.workers.jobs import dispatch_payload
+
+    # 1) Upload + classify as firm scoped to client a1 so we get a draft.
+    uploader_token = mint_test_token(
+        sub="firm-uploader", firm_id=world.firm_a, role="firm_staff",
+        client_id=world.a1.client_id,
+    )
+    r = client.post(
+        "/documents/upload",
+        headers={"Authorization": f"Bearer {uploader_token}"},
+        files={"file": ("txn.pdf", b"bank transaction", "application/pdf")},
+        data={"kind_hint": "bank_transaction"},
+    )
+    assert r.status_code == 201
+
+    queue = fake_integrations.queue
+    while True:
+        progressed = False
+        for qname in ("extract", "classify"):
+            items = queue.drain(qname)
+            if items:
+                progressed = True
+                for _job_id, payload in items:
+                    dispatch_payload(payload)
+        if not progressed:
+            break
+
+    drafts = client.get(
+        "/drafts",
+        headers={"Authorization": f"Bearer {uploader_token}"},
+    ).json()
+    assert drafts, "expected at least one draft"
+
+    # 2) Promote with a firm token that has no client_id claim.
+    no_client_token = mint_test_token(
+        sub="firm-no-client", firm_id=world.firm_a, role="firm_staff",
+    )
+    promote = client.post(
+        f"/drafts/{drafts[0]['id']}/promote",
+        headers={"Authorization": f"Bearer {no_client_token}"},
+        json={
+            "client_id": str(world.a1.client_id),
+            "period_id": str(world.a1.period_id),
+            "entry_date": "2026-06-15",
+            "lines": [
+                {
+                    "account_id": str(world.a1.expense_account_id),
+                    "debit": "10.00",
+                    "credit": "0",
+                },
+                {
+                    "account_id": str(world.a1.cash_account_id),
+                    "debit": "0",
+                    "credit": "10.00",
+                },
+            ],
+        },
+    )
+    assert promote.status_code == 200, promote.text
+
+
+def test_firm_can_promote_without_client_id_in_token_or_body_when_draft_exists(
+    client: TestClient,
+    world,
+    fake_integrations,
+) -> None:
+    from app.workers.jobs import dispatch_payload
+
+    uploader_token = mint_test_token(
+        sub="firm-uploader-2", firm_id=world.firm_a, role="firm_staff",
+        client_id=world.a1.client_id,
+    )
+    r = client.post(
+        "/documents/upload",
+        headers={"Authorization": f"Bearer {uploader_token}"},
+        files={"file": ("txn2.pdf", b"bank transaction two", "application/pdf")},
+        data={"kind_hint": "bank_transaction"},
+    )
+    assert r.status_code == 201
+
+    queue = fake_integrations.queue
+    while True:
+        progressed = False
+        for qname in ("extract", "classify"):
+            items = queue.drain(qname)
+            if items:
+                progressed = True
+                for _job_id, payload in items:
+                    dispatch_payload(payload)
+        if not progressed:
+            break
+
+    drafts = client.get(
+        "/drafts",
+        headers={"Authorization": f"Bearer {uploader_token}"},
+    ).json()
+    assert drafts, "expected at least one draft"
+
+    no_client_token = mint_test_token(
+        sub="firm-no-client-2", firm_id=world.firm_a, role="firm_staff",
+    )
+    promote = client.post(
+        f"/drafts/{drafts[-1]['id']}/promote",
+        headers={"Authorization": f"Bearer {no_client_token}"},
+        json={
+            "period_id": str(world.a1.period_id),
+            "entry_date": "2026-06-15",
+            "lines": [
+                {
+                    "account_id": str(world.a1.expense_account_id),
+                    "debit": "10.00",
+                    "credit": "0",
+                },
+                {
+                    "account_id": str(world.a1.cash_account_id),
+                    "debit": "0",
+                    "credit": "10.00",
+                },
+            ],
+        },
+    )
+    assert promote.status_code == 200, promote.text

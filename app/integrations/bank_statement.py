@@ -110,9 +110,12 @@ _VENDOR_TO_CODE: tuple[tuple[str, str], ...] = (
     ("overdraft", "5100"),
     # Rent
     ("rent", "5200"),
-    # Loans / transfers (no AP/loan-payable acct in seed, route to suspense)
-    ("loan payment", "9999"),
-    ("sba", "9999"),
+    # Loans
+    # Any transaction description containing LOAN should hit 2400 so
+    # loan proceeds/payments post against Loan Payable.
+    ("loan", "2400"),
+    ("sba", "2400"),
+    # Transfers / P2P
     ("transfer to", "9999"),
     ("zelle sent", "9999"),
     ("venmo", "9999"),

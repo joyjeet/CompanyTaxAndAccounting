@@ -591,6 +591,36 @@ def test_rollup_parent_equals_sum_of_leaf_descendants(
         assert_invariant(r_)
 
 
+def test_rollup_hides_zero_only_heads(client: TestClient, world) -> None:
+    h = _auth(client, "firm_staff", world.firm_a)
+    _seed_three_entries(client, h, world.a1)
+
+    for scope in ("trial_balance", "balance_sheet", "profit_and_loss"):
+        r = client.get(
+            "/statements/account-rollup",
+            headers=h,
+            params={
+                "client_id": str(world.a1.client_id),
+                "period_id": str(world.a1.period_id),
+                "scope": scope,
+            },
+        )
+        assert r.status_code == 200, r.text
+        roots = r.json()["roots"]
+
+        def assert_nonzero(nodes: list[dict]) -> None:
+            for n in nodes:
+                all_zero = (
+                    Decimal(n["debit_total"]) == Decimal("0")
+                    and Decimal(n["credit_total"]) == Decimal("0")
+                    and Decimal(n["signed_balance"]) == Decimal("0")
+                )
+                assert not all_zero, f"zero-only node leaked in scope={scope}: {n['code']}"
+                assert_nonzero(n["children"])
+
+        assert_nonzero(roots)
+
+
 def test_rollup_portal_blocked_until_locked(client: TestClient, world) -> None:
     firm_h = _auth(client, "firm_staff", world.firm_a)
     _seed_three_entries(client, firm_h, world.a1)

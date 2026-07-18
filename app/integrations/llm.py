@@ -20,7 +20,7 @@ from typing import Any
 
 from app.integrations.account_categorizer import (
     AccountCategorizer,
-    DictionaryCategorizer,
+    XeroRuleEngineCategorizer,
 )
 from app.integrations.ocr import ExtractionResult
 
@@ -92,10 +92,10 @@ class MockLLMClassifier(LLMClassifier):
     }
 
     def __init__(self, *, categorizer: AccountCategorizer | None = None) -> None:
-        # Default to the no-op dictionary categorizer so behavior matches
-        # the previous (pre-Azure-OpenAI) shape unless production wiring
-        # injects a smarter backend.
-        self._categorizer = categorizer or DictionaryCategorizer()
+        # Default to deterministic Xero-style rule engine categorizer.
+        # Callers can still inject DictionaryCategorizer for strict no-op
+        # behavior or AzureOpenAICategorizer for model-backed re-mapping.
+        self._categorizer = categorizer or XeroRuleEngineCategorizer()
 
     def _maybe_classify_bank_statement(
         self, extraction: ExtractionResult,

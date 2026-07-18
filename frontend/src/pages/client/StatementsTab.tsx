@@ -270,35 +270,43 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow className={styles.sectionHeader}>
-                    <TableCell colSpan={3}>Revenue</TableCell>
-                  </TableRow>
-                  {pl.data.revenue.map((r) => (
-                    <TableRow key={r.account_id}>
-                      <TableCell><code>{r.code}</code></TableCell>
-                      <TableCell>{r.name}</TableCell>
-                      <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
-                    </TableRow>
-                  ))}
-                  <TableRow className={styles.totalRow}>
-                    <TableCell colSpan={2}>Total revenue</TableCell>
-                    <TableCell className={styles.num}>{fmtMoney(pl.data.total_revenue)}</TableCell>
-                  </TableRow>
+                  {pl.data.revenue.length > 0 && (
+                    <>
+                      <TableRow className={styles.sectionHeader}>
+                        <TableCell colSpan={3}>Revenue</TableCell>
+                      </TableRow>
+                      {pl.data.revenue.map((r) => (
+                        <TableRow key={r.account_id}>
+                          <TableCell><code>{r.code}</code></TableCell>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className={styles.totalRow}>
+                        <TableCell colSpan={2}>Total revenue</TableCell>
+                        <TableCell className={styles.num}>{fmtMoney(pl.data.total_revenue)}</TableCell>
+                      </TableRow>
+                    </>
+                  )}
 
-                  <TableRow className={styles.sectionHeader}>
-                    <TableCell colSpan={3}>Expenses</TableCell>
-                  </TableRow>
-                  {pl.data.expenses.map((r) => (
-                    <TableRow key={r.account_id}>
-                      <TableCell><code>{r.code}</code></TableCell>
-                      <TableCell>{r.name}</TableCell>
-                      <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
-                    </TableRow>
-                  ))}
-                  <TableRow className={styles.totalRow}>
-                    <TableCell colSpan={2}>Total expenses</TableCell>
-                    <TableCell className={styles.num}>{fmtMoney(pl.data.total_expenses)}</TableCell>
-                  </TableRow>
+                  {pl.data.expenses.length > 0 && (
+                    <>
+                      <TableRow className={styles.sectionHeader}>
+                        <TableCell colSpan={3}>Expenses</TableCell>
+                      </TableRow>
+                      {pl.data.expenses.map((r) => (
+                        <TableRow key={r.account_id}>
+                          <TableCell><code>{r.code}</code></TableCell>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className={styles.totalRow}>
+                        <TableCell colSpan={2}>Total expenses</TableCell>
+                        <TableCell className={styles.num}>{fmtMoney(pl.data.total_expenses)}</TableCell>
+                      </TableRow>
+                    </>
+                  )}
 
                   <TableRow className={styles.totalRow}>
                     <TableCell colSpan={2}>
@@ -353,54 +361,68 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  <TableRow className={styles.sectionHeader}>
-                    <TableCell colSpan={3}>Assets</TableCell>
-                  </TableRow>
-                  {bs.data.assets.map((r) => (
-                    <TableRow key={r.account_id}>
-                      <TableCell><code>{r.code}</code></TableCell>
-                      <TableCell>{r.name}</TableCell>
-                      <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
-                    </TableRow>
-                  ))}
-                  <TableRow className={styles.totalRow}>
-                    <TableCell colSpan={2}>Total assets</TableCell>
-                    <TableCell className={styles.num}>{fmtMoney(bs.data.total_assets)}</TableCell>
-                  </TableRow>
+                  {bs.data.assets.length > 0 && (
+                    <>
+                      <TableRow className={styles.sectionHeader}>
+                        <TableCell colSpan={3}>Assets</TableCell>
+                      </TableRow>
+                      {bs.data.assets.map((r) => (
+                        <TableRow key={r.account_id}>
+                          <TableCell><code>{r.code}</code></TableCell>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className={styles.totalRow}>
+                        <TableCell colSpan={2}>Total assets</TableCell>
+                        <TableCell className={styles.num}>{fmtMoney(bs.data.total_assets)}</TableCell>
+                      </TableRow>
+                    </>
+                  )}
 
-                  <TableRow className={styles.sectionHeader}>
-                    <TableCell colSpan={3}>Liabilities</TableCell>
-                  </TableRow>
-                  {bs.data.liabilities.map((r) => (
-                    <TableRow key={r.account_id}>
-                      <TableCell><code>{r.code}</code></TableCell>
-                      <TableCell>{r.name}</TableCell>
-                      <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
-                    </TableRow>
-                  ))}
-                  <TableRow className={styles.totalRow}>
-                    <TableCell colSpan={2}>Total liabilities</TableCell>
-                    <TableCell className={styles.num}>{fmtMoney(bs.data.total_liabilities)}</TableCell>
-                  </TableRow>
+                  {bs.data.liabilities.length > 0 && (
+                    <>
+                      <TableRow className={styles.sectionHeader}>
+                        <TableCell colSpan={3}>Liabilities</TableCell>
+                      </TableRow>
+                      {bs.data.liabilities.map((r) => (
+                        <TableRow key={r.account_id}>
+                          <TableCell><code>{r.code}</code></TableCell>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
+                        </TableRow>
+                      ))}
+                      <TableRow className={styles.totalRow}>
+                        <TableCell colSpan={2}>Total liabilities</TableCell>
+                        <TableCell className={styles.num}>{fmtMoney(bs.data.total_liabilities)}</TableCell>
+                      </TableRow>
+                    </>
+                  )}
 
-                  <TableRow className={styles.sectionHeader}>
-                    <TableCell colSpan={3}>Equity</TableCell>
-                  </TableRow>
-                  {bs.data.equity.map((r) => (
-                    <TableRow key={r.account_id}>
-                      <TableCell><code>{r.code}</code></TableCell>
-                      <TableCell>{r.name}</TableCell>
-                      <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
-                    </TableRow>
-                  ))}
-                  <TableRow>
-                    <TableCell colSpan={2}>Retained earnings (period)</TableCell>
-                    <TableCell className={styles.num}>{fmtMoney(bs.data.retained_earnings_to_date)}</TableCell>
-                  </TableRow>
-                  <TableRow className={styles.totalRow}>
-                    <TableCell colSpan={2}>Total equity</TableCell>
-                    <TableCell className={styles.num}>{fmtMoney(bs.data.total_equity)}</TableCell>
-                  </TableRow>
+                  {(bs.data.equity.length > 0 || Number(bs.data.retained_earnings_to_date) !== 0) && (
+                    <>
+                      <TableRow className={styles.sectionHeader}>
+                        <TableCell colSpan={3}>Equity</TableCell>
+                      </TableRow>
+                      {bs.data.equity.map((r) => (
+                        <TableRow key={r.account_id}>
+                          <TableCell><code>{r.code}</code></TableCell>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell className={styles.num}>{fmtMoney(r.signed_balance)}</TableCell>
+                        </TableRow>
+                      ))}
+                      {Number(bs.data.retained_earnings_to_date) !== 0 && (
+                        <TableRow>
+                          <TableCell colSpan={2}>Retained earnings (period)</TableCell>
+                          <TableCell className={styles.num}>{fmtMoney(bs.data.retained_earnings_to_date)}</TableCell>
+                        </TableRow>
+                      )}
+                      <TableRow className={styles.totalRow}>
+                        <TableCell colSpan={2}>Total equity</TableCell>
+                        <TableCell className={styles.num}>{fmtMoney(bs.data.total_equity)}</TableCell>
+                      </TableRow>
+                    </>
+                  )}
                 </TableBody>
               </Table>
             )}

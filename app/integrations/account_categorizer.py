@@ -33,8 +33,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - dependency is present in runtime image
+    yaml = None
 
 
 class AccountCategorizer(ABC):
@@ -78,6 +86,353 @@ class DictionaryCategorizer(AccountCategorizer):
     ) -> list[dict[str, Any]]:
         _ = chart_of_accounts
         return list(transactions)
+
+
+# --------------------------------------------------------------------------- #
+# Deterministic rule engine (Xero-style bank rules)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class RuleCondition:
+    """Single condition in a categorization rule.
+
+    Supported fields/operators:
+      * field="description" with contains|starts_with|equals|regex
+      * field="direction" with equals
+      * field="amount" with gt|gte|lt|lte|equals
+    """
+
+    field: str
+    operator: str
+    value: str
+
+
+@dataclass(frozen=True)
+class CategorizationRule:
+    """Rule that maps a matching transaction to a target COA code."""
+
+    name: str
+    target_code: str
+    conditions: tuple[RuleCondition, ...]
+    match: str = "all"  # all | any
+
+
+_XERO_STYLE_RULES: tuple[CategorizationRule, ...] = (
+    # High-signal liability mapping first.
+    CategorizationRule(
+        name="Loan transactions",
+        target_code="2400",
+        conditions=(RuleCondition("description", "contains", "loan"),),
+    ),
+    CategorizationRule(
+        name="SBA loan transactions",
+        target_code="2400",
+        conditions=(RuleCondition("description", "contains", "sba"),),
+    ),
+    # Xero-style text rules for common operating spend buckets.
+    CategorizationRule(
+        name="Rent",
+        target_code="5200",
+        conditions=(RuleCondition("description", "contains", "rent"),),
+    ),
+    CategorizationRule(
+        name="Bank fees",
+        target_code="5100",
+        conditions=(
+            RuleCondition("description", "contains", "service charge"),
+            RuleCondition("description", "contains", "monthly fee"),
+            RuleCondition("description", "contains", "nsf"),
+            RuleCondition("description", "contains", "overdraft"),
+        ),
+        match="any",
+    ),
+    CategorizationRule(
+        name="Sales revenue from card/mobile deposits",
+        target_code="4000",
+        conditions=(
+            RuleCondition("direction", "equals", "deposit"),
+            RuleCondition("description", "contains", "square"),
+        ),
+    ),
+    CategorizationRule(
+        name="Professional fees",
+        target_code="5300",
+        conditions=(
+            RuleCondition("direction", "equals", "payment"),
+            RuleCondition("description", "contains", "consult"),
+        ),
+    ),
+    # Zelle handling: company payees -> office expense, person payees -> draw.
+    CategorizationRule(
+        name="Zelle payment to company -> Office expense",
+        target_code="7500",
+        conditions=(
+            RuleCondition("direction", "equals", "payment"),
+            RuleCondition("description", "contains", "zelle"),
+            RuleCondition(
+                "description",
+                "regex",
+                r"\b(llc|inc|corp|co\.?|company|ltd)\b",
+            ),
+        ),
+    ),
+    CategorizationRule(
+        name="Zelle payment to person -> Personal expense (owner draw)",
+        target_code="3070",
+        conditions=(
+            RuleCondition("direction", "equals", "payment"),
+            RuleCondition("description", "contains", "zelle"),
+            RuleCondition(
+                "description",
+                "regex",
+                r"\b(mr|mrs|ms|dr)\.?\s+[A-Za-z]+|\b[A-Z][a-z]+\s+[A-Z][a-z]+\b",
+            ),
+        ),
+    ),
+)
+
+DEFAULT_RULES_FILE = Path(__file__).resolve().parents[2] / "data" / "categorization_rules.yaml"
+
+
+def _parse_rules_obj(obj: Any, *, strict: bool) -> tuple[CategorizationRule, ...]:
+    rules_raw = obj.get("rules") if isinstance(obj, dict) else None
+    if not isinstance(rules_raw, list):
+        if strict:
+            raise ValueError("rules document must contain a top-level 'rules' list")
+        return _XERO_STYLE_RULES
+
+    parsed: list[CategorizationRule] = []
+    for i, item in enumerate(rules_raw):
+        if not isinstance(item, dict):
+            if strict:
+                raise ValueError(f"rule at index {i} must be an object")
+            continue
+
+        name = str(item.get("name") or "").strip()
+        target_code = str(item.get("target_code") or "").strip()
+        match = str(item.get("match") or "all").strip().lower()
+        conds_raw = item.get("conditions")
+
+        if not name:
+            if strict:
+                raise ValueError(f"rule at index {i} is missing name")
+            continue
+        if not target_code:
+            if strict:
+                raise ValueError(f"rule '{name}' is missing target_code")
+            continue
+        if match not in {"all", "any"}:
+            if strict:
+                raise ValueError(f"rule '{name}' has invalid match '{match}'")
+            continue
+        if not isinstance(conds_raw, list) or not conds_raw:
+            if strict:
+                raise ValueError(f"rule '{name}' must define at least one condition")
+            continue
+
+        conds: list[RuleCondition] = []
+        for j, c in enumerate(conds_raw):
+            if not isinstance(c, dict):
+                if strict:
+                    raise ValueError(f"rule '{name}' condition #{j} must be an object")
+                continue
+
+            field = str(c.get("field") or "").strip().lower()
+            operator = str(c.get("operator") or "").strip().lower()
+            value = str(c.get("value") or "").strip()
+            if field not in {"description", "direction", "amount"}:
+                if strict:
+                    raise ValueError(f"rule '{name}' condition #{j} has invalid field '{field}'")
+                continue
+            if not operator:
+                if strict:
+                    raise ValueError(f"rule '{name}' condition #{j} is missing operator")
+                continue
+            conds.append(RuleCondition(field=field, operator=operator, value=value))
+
+        if conds:
+            parsed.append(
+                CategorizationRule(
+                    name=name,
+                    target_code=target_code,
+                    conditions=tuple(conds),
+                    match=match,
+                )
+            )
+
+    if not parsed:
+        if strict:
+            raise ValueError("no valid rules found in document")
+        return _XERO_STYLE_RULES
+    return tuple(parsed)
+
+
+def parse_rules_content(content: str, *, format_hint: str) -> tuple[CategorizationRule, ...]:
+    """Parse JSON/YAML rules content and raise ValueError on invalid input."""
+    fmt = format_hint.strip().lower()
+    if fmt not in {"json", "yaml", "yml"}:
+        raise ValueError("format_hint must be one of: json, yaml, yml")
+
+    try:
+        if fmt in {"yaml", "yml"}:
+            if yaml is None:
+                raise ValueError("PyYAML is not installed; cannot parse YAML")
+            obj = yaml.safe_load(content)
+        else:
+            obj = json.loads(content)
+    except ValueError:
+        raise
+    except Exception as e:  # pragma: no cover - parser-specific exceptions
+        raise ValueError(f"invalid {fmt} document: {e}") from e
+
+    return _parse_rules_obj(obj, strict=True)
+
+
+def load_rules_from_file(path: str | Path) -> tuple[CategorizationRule, ...]:
+    """Load categorization rules from JSON or YAML.
+
+    Expected shape:
+      {
+        "rules": [
+          {
+            "name": "Loan transactions",
+            "target_code": "2400",
+            "match": "all",
+            "conditions": [
+              {"field": "description", "operator": "contains", "value": "loan"}
+            ]
+          }
+        ]
+      }
+
+    Invalid files fall back to built-in defaults to keep classification
+    available even when operators edit rules incorrectly.
+    """
+    p = Path(path)
+    if not p.exists():
+        return _XERO_STYLE_RULES
+
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except OSError:
+        return _XERO_STYLE_RULES
+
+    fmt = "yaml" if p.suffix.lower() in {".yaml", ".yml"} else "json"
+    try:
+        return parse_rules_content(raw, format_hint=fmt)
+    except ValueError:
+        return _XERO_STYLE_RULES
+
+
+class XeroRuleEngineCategorizer(AccountCategorizer):
+    """Deterministic categorizer inspired by Xero bank-rule behavior.
+
+    Behavior:
+      * Evaluate ordered rules against each transaction.
+      * First matching rule wins.
+      * Only apply target codes that exist in the client's chart of accounts.
+      * Preserve strong explicit mappings unless the row is weak (`_is_weak`).
+    """
+
+    NAME = "xero_rule_engine"
+
+    def __init__(
+        self,
+        rules: tuple[CategorizationRule, ...] | None = None,
+        rules_file: str | Path | None = None,
+    ) -> None:
+        if rules is not None:
+            self._rules = rules
+            return
+        self._rules = load_rules_from_file(rules_file or DEFAULT_RULES_FILE)
+
+    def recategorize(
+        self,
+        transactions: list[dict[str, Any]],
+        chart_of_accounts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not transactions or not chart_of_accounts:
+            return list(transactions)
+
+        valid_codes = {str(a.get("code")) for a in chart_of_accounts if a.get("code")}
+        out = [dict(t) for t in transactions]
+
+        for idx, txn in enumerate(out):
+            if not _is_weak(txn):
+                continue
+
+            decision = self._match_rule(txn, valid_codes)
+            if decision is None:
+                continue
+            code, reason = decision
+            txn["proposed_account_code"] = code
+            txn["_categorizer"] = self.NAME
+            txn["_categorizer_reason"] = reason
+            # Deterministic rules are considered high confidence.
+            txn["_categorizer_confidence"] = 0.95
+            txn["_categorizer_needs_review"] = False
+            out[idx] = txn
+
+        return out
+
+    def _match_rule(
+        self,
+        txn: dict[str, Any],
+        valid_codes: set[str],
+    ) -> tuple[str, str] | None:
+        for rule in self._rules:
+            if rule.target_code not in valid_codes:
+                continue
+
+            checks = [self._condition_matches(txn, c) for c in rule.conditions]
+            matched = all(checks) if rule.match == "all" else any(checks)
+            if matched:
+                return (rule.target_code, f"Rule matched: {rule.name}")
+        return None
+
+    @staticmethod
+    def _condition_matches(txn: dict[str, Any], cond: RuleCondition) -> bool:
+        if cond.field == "description":
+            desc = str(txn.get("description") or "")
+            desc_l = desc.lower()
+            val = cond.value.lower()
+            if cond.operator == "contains":
+                return val in desc_l
+            if cond.operator == "starts_with":
+                return desc_l.startswith(val)
+            if cond.operator == "equals":
+                return desc_l == val
+            if cond.operator == "regex":
+                try:
+                    return re.search(cond.value, desc, flags=re.IGNORECASE) is not None
+                except re.error:
+                    return False
+            return False
+
+        if cond.field == "direction":
+            direction = str(txn.get("direction") or "").lower()
+            if cond.operator == "equals":
+                return direction == cond.value.lower()
+            return False
+
+        if cond.field == "amount":
+            try:
+                amt = float(txn.get("amount") or 0.0)
+                target = float(cond.value)
+            except (TypeError, ValueError):
+                return False
+            if cond.operator == "gt":
+                return amt > target
+            if cond.operator == "gte":
+                return amt >= target
+            if cond.operator == "lt":
+                return amt < target
+            if cond.operator == "lte":
+                return amt <= target
+            if cond.operator == "equals":
+                return amt == target
+            return False
+
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -307,6 +662,12 @@ def _coerce_alternatives(
 __all__ = [
     "AccountCategorizer",
     "AzureOpenAICategorizer",
+    "CategorizationRule",
     "CONFIDENCE_THRESHOLD",
+    "DEFAULT_RULES_FILE",
     "DictionaryCategorizer",
+    "parse_rules_content",
+    "RuleCondition",
+    "XeroRuleEngineCategorizer",
+    "load_rules_from_file",
 ]

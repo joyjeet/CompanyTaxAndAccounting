@@ -63,6 +63,18 @@ def _fmt_amount(value: str | Decimal | float | int) -> str:
     return f"{int(rounded):,}"
 
 
+def _fmt_amount_required(value: str | Decimal | float | int) -> str:
+    """Format an amount as a whole-dollar string, including zero as "0"."""
+    d = Decimal(str(value)) if not isinstance(value, Decimal) else value
+    rounded = d.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return f"{int(rounded):,}"
+
+
+def _round_to_irs_dollars(value: Decimal) -> Decimal:
+    """Round to whole dollars using IRS half-up convention."""
+    return value.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+
+
 def _fmt_date_mmdd(d: date | None) -> str:
     return d.strftime("%m/%d") if d else ""
 
@@ -164,7 +176,12 @@ class IrsFormFiller:
         for page in writer.pages:
             try:
                 writer.update_page_form_field_values(
-                    page, resolved, auto_regenerate=False,
+                    page,
+                    resolved,
+                    # Some viewers ignore /NeedAppearances and may hide /V-only
+                    # fields. Force appearance regeneration so computed lines
+                    # (e.g. Form 1120-S line 22) are visibly printed.
+                    auto_regenerate=True,
                 )
             except Exception:  # noqa: BLE001
                 # update_page_form_field_values raises if the page has no
@@ -232,24 +249,76 @@ class IrsFormFiller:
     ) -> dict[str, str]:
         out: dict[str, str] = {}
         line_map = ff.LINES.get(form_code) or {}
+        by_code: dict[str, Decimal] = {}
         unmapped: list[str] = []
         for ln in worksheet.get("lines", []):
             code = ln["line_code"]
+            amt = Decimal(str(ln.get("amount", "0")))
+            by_code[code] = amt
             field_path = line_map.get(code)
             if field_path is None:
                 # Only flag lines that actually have non-zero amounts. A
                 # zero line is harmless to skip.
-                amt = Decimal(str(ln.get("amount", "0")))
                 if amt != 0:
                     unmapped.append(code)
                 continue
             out[field_path] = _fmt_amount(ln["amount"])
+
+        # Write computed/subtotal lines explicitly so generated PDFs remain
+        # complete even in viewers that do not auto-calculate form fields.
+        for line_code, field_path in (ff.COMPUTED_LINE_FIELDS.get(form_code) or {}).items():
+            computed = IrsFormFiller._compute_line(form_code, line_code, by_code)
+            if computed is None:
+                continue
+            out[field_path] = _fmt_amount_required(computed)
+
         if unmapped:
             raise IrsFormFieldMissingError(
                 f"Worksheet for {form_code.value} has non-zero amounts on "
                 f"unmapped lines: {sorted(set(unmapped))}",
             )
         return out
+
+    @staticmethod
+    def _compute_line(
+        form_code: TaxFormCode,
+        line_code: str,
+        by_code: dict[str, Decimal],
+    ) -> Decimal | None:
+        """Compute derived IRS form lines from worksheet base lines.
+
+        Returns None when we do not have a formula for the requested form/line.
+        """
+        zero = Decimal("0")
+
+        def v(code: str) -> Decimal:
+            return by_code.get(code, zero)
+
+        # IRS forms are whole-dollar forms; compute derived lines from
+        # whole-dollar-rounded source lines so displayed math always ties out.
+        def rv(code: str) -> Decimal:
+            return _round_to_irs_dollars(v(code))
+
+        if form_code is TaxFormCode.F1120S:
+            if line_code == "1c":
+                return rv("1a") - rv("1b")
+            if line_code == "3":
+                return (rv("1a") - rv("1b")) - rv("2")
+            if line_code == "6":
+                return ((rv("1a") - rv("1b")) - rv("2")) + rv("4") + rv("5")
+            if line_code == "21":
+                total = zero
+                for i in range(7, 21):
+                    total += rv(str(i))
+                return total
+            if line_code == "22":
+                total_income = ((rv("1a") - rv("1b")) - rv("2")) + rv("4") + rv("5")
+                total_deductions = zero
+                for i in range(7, 21):
+                    total_deductions += rv(str(i))
+                return total_income - total_deductions
+
+        return None
 
 
 __all__ = [

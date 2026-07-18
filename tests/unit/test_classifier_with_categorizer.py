@@ -139,8 +139,8 @@ def test_classifier_skips_categorizer_when_no_coa() -> None:
     assert len(suspense) == 2
 
 
-def test_classifier_default_categorizer_is_noop() -> None:
-    # No categorizer supplied -> DictionaryCategorizer -> no remapping.
+def test_classifier_default_categorizer_applies_rule_engine() -> None:
+    # No categorizer supplied -> default deterministic rule engine.
     classifier = MockLLMClassifier()
     result = classifier.classify(
         kind_hint="generic",
@@ -151,7 +151,12 @@ def test_classifier_default_categorizer_is_noop() -> None:
         1 for t in result.payload["transactions"]
         if t["proposed_account_code"] == "9999"
     )
-    assert suspense_count == 2
+    # Patel row gets mapped by default rules; Venmo stays suspense.
+    assert suspense_count == 1
+    assert any(
+        t["proposed_account_code"] == "5300"
+        for t in result.payload["transactions"]
+    )
     # Confidence remains at the canonical 0.80 floor.
     assert result.confidence == Decimal("0.80")
 

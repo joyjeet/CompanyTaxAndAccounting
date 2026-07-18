@@ -12,7 +12,11 @@ import pytest
 
 from app.integrations.account_categorizer import (
     AzureOpenAICategorizer,
+    CategorizationRule,
+    load_rules_from_file,
     DictionaryCategorizer,
+    RuleCondition,
+    XeroRuleEngineCategorizer,
     _is_weak,
 )
 
@@ -29,6 +33,7 @@ def coa() -> list[dict[str, Any]]:
         {"code": "5100", "name": "Bank Fees", "account_type": "expense"},
         {"code": "5200", "name": "Rent Expense", "account_type": "expense"},
         {"code": "5300", "name": "Professional Fees", "account_type": "expense"},
+        {"code": "2400", "name": "Bank Loan Payable", "account_type": "liability"},
         {"code": "9999", "name": "Suspense", "account_type": "asset"},
     ]
 
@@ -104,6 +109,167 @@ def test_dictionary_categorizer_returns_input_unchanged(
     assert result == sample_txns
     # And the result is a NEW list (not aliased) — callers may mutate.
     assert result is not sample_txns
+
+
+def test_xero_rule_engine_maps_loan_description_to_2400(
+    coa: list[dict[str, Any]],
+) -> None:
+    txns = [
+        {
+            "description": "ACH LOAN PAYMENT SBA",
+            "amount": "250.00",
+            "direction": "payment",
+            "proposed_account_code": "9999",
+        }
+    ]
+    cat = XeroRuleEngineCategorizer()
+    result = cat.recategorize(txns, coa)
+    assert result[0]["proposed_account_code"] == "2400"
+    assert result[0]["_categorizer"] == "xero_rule_engine"
+
+
+def test_xero_rule_engine_only_applies_when_rule_target_exists_in_coa() -> None:
+    txns = [
+        {
+            "description": "ACH LOAN PAYMENT SBA",
+            "amount": "250.00",
+            "direction": "payment",
+            "proposed_account_code": "9999",
+        }
+    ]
+    coa_without_loan = [
+        {"code": "1000", "name": "Cash", "account_type": "asset"},
+        {"code": "9999", "name": "Suspense", "account_type": "asset"},
+    ]
+    cat = XeroRuleEngineCategorizer()
+    result = cat.recategorize(txns, coa_without_loan)
+    assert result[0]["proposed_account_code"] == "9999"
+
+
+def test_xero_rule_engine_supports_custom_rules(
+    coa: list[dict[str, Any]],
+) -> None:
+    txns = [
+        {
+            "description": "AMZN MKTPLACE ORDER",
+            "amount": "42.00",
+            "direction": "payment",
+            "proposed_account_code": "9999",
+        }
+    ]
+    custom = (
+        CategorizationRule(
+            name="Amazon office supplies",
+            target_code="5000",
+            conditions=(RuleCondition("description", "contains", "amzn"),),
+        ),
+    )
+    cat = XeroRuleEngineCategorizer(rules=custom)
+    result = cat.recategorize(txns, coa)
+    assert result[0]["proposed_account_code"] == "5000"
+
+
+def test_xero_rule_engine_maps_zelle_person_vs_company() -> None:
+    txns = [
+        {
+            "description": "Zelle payment to John Doe",
+            "amount": "85.00",
+            "direction": "payment",
+            "proposed_account_code": "9999",
+        },
+        {
+            "description": "Zelle transfer ACME LLC",
+            "amount": "130.00",
+            "direction": "payment",
+            "proposed_account_code": "9999",
+        },
+    ]
+    coa = [
+        {"code": "3070", "name": "Owner Draws", "account_type": "equity"},
+        {"code": "7500", "name": "Office and Administration", "account_type": "expense"},
+        {"code": "9999", "name": "Suspense", "account_type": "asset"},
+    ]
+
+    cat = XeroRuleEngineCategorizer()
+    result = cat.recategorize(txns, coa)
+
+    assert result[0]["proposed_account_code"] == "3070"
+    assert result[1]["proposed_account_code"] == "7500"
+
+
+def test_load_rules_from_yaml_file(tmp_path: Any) -> None:
+    pytest.importorskip("yaml")
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        """
+rules:
+  - name: Wire-in deposits
+    target_code: "4000"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: deposit
+      - field: description
+        operator: contains
+        value: wire
+""".strip(),
+        encoding="utf-8",
+    )
+    rules = load_rules_from_file(rules_file)
+    cat = XeroRuleEngineCategorizer(rules=rules)
+    txns = [
+        {
+            "description": "WIRE TRANSFER RECEIVED",
+            "amount": "1200.00",
+            "direction": "deposit",
+            "proposed_account_code": "9999",
+        }
+    ]
+    coa = [
+        {"code": "4000", "name": "Sales Revenue", "account_type": "revenue"},
+        {"code": "9999", "name": "Suspense", "account_type": "asset"},
+    ]
+    result = cat.recategorize(txns, coa)
+    assert result[0]["proposed_account_code"] == "4000"
+
+
+def test_load_rules_from_json_file(tmp_path: Any) -> None:
+    rules_file = tmp_path / "rules.json"
+    rules_file.write_text(
+        """
+{
+  "rules": [
+    {
+      "name": "Wire-in deposits",
+      "target_code": "4000",
+      "match": "all",
+      "conditions": [
+        {"field": "direction", "operator": "equals", "value": "deposit"},
+        {"field": "description", "operator": "contains", "value": "wire"}
+      ]
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    rules = load_rules_from_file(rules_file)
+    cat = XeroRuleEngineCategorizer(rules=rules)
+    txns = [
+        {
+            "description": "WIRE TRANSFER RECEIVED",
+            "amount": "1200.00",
+            "direction": "deposit",
+            "proposed_account_code": "9999",
+        }
+    ]
+    coa = [
+        {"code": "4000", "name": "Sales Revenue", "account_type": "revenue"},
+        {"code": "9999", "name": "Suspense", "account_type": "asset"},
+    ]
+    result = cat.recategorize(txns, coa)
+    assert result[0]["proposed_account_code"] == "4000"
 
 
 # --------------------------------------------------------------------------- #

@@ -25,6 +25,7 @@ import { ArrowExportRegular, CheckmarkCircleRegular, SparkleRegular } from "@flu
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
+import { ApiError } from "../../api/ApiClient";
 import { useApi } from "../../api/useApi";
 import InfoHint from "../../components/InfoHint";
 import Section from "../../components/Section";
@@ -49,6 +50,7 @@ export default function TaxTab({ clientId }: { clientId: string }) {
   const [view, setView] = useState<TaxView>("forms");
   const [formCode, setFormCode] = useState<string>("");
   const [periodId, setPeriodId] = useState<string>("");
+  const [rulesetMessage, setRulesetMessage] = useState<string>("");
 
   const forms = useQuery({ queryKey: ["tax-forms"], queryFn: () => api.listTaxForms() });
   const formDetail = useQuery({
@@ -77,20 +79,54 @@ export default function TaxTab({ clientId }: { clientId: string }) {
     () => new Map((accounts.data ?? []).map((a) => [a.id, a])),
     [accounts.data],
   );
-  // Resolve line UUIDs -> human-readable codes for whichever form is loaded.
-  const lineMap = useMemo(
-    () => new Map((formDetail.data?.lines ?? []).map((ln) => [ln.id, ln])),
-    [formDetail.data],
+
+  const formById = useMemo(
+    () => new Map((forms.data ?? []).map((f) => [f.id, f])),
+    [forms.data],
   );
+
+  const mappingFormCodes = useMemo(() => {
+    if (!mappings.data || !forms.data) return [] as string[];
+    const idToCode = new Map(forms.data.map((f) => [f.id, f.code]));
+    const codes = new Set<string>();
+    for (const m of mappings.data) {
+      const c = idToCode.get(m.form_id);
+      if (c) codes.add(c);
+    }
+    return [...codes].sort();
+  }, [mappings.data, forms.data]);
+
+  const mappingFormDetails = useQuery({
+    queryKey: ["tax-form-details-for-mappings", mappingFormCodes.join(",")],
+    enabled: mappingFormCodes.length > 0,
+    queryFn: async () => Promise.all(mappingFormCodes.map((code) => api.getTaxForm(code))),
+  });
+
+  const lineMap = useMemo(() => {
+    const map = new Map<string, { code: string; label: string }>();
+    for (const d of mappingFormDetails.data ?? []) {
+      for (const ln of d.lines) {
+        map.set(ln.id, { code: ln.code, label: ln.label });
+      }
+    }
+    return map;
+  }, [mappingFormDetails.data]);
 
   const generate = useMutation({
     mutationFn: () =>
-      api.generateWorksheet({ period_id: periodId, form_code: formCode }),
+      api.generateWorksheet({ client_id: clientId, period_id: periodId, form_code: formCode }),
     onSuccess: () => {
+      setRulesetMessage("");
       dispatchToast(<Toast><ToastTitle>Worksheet generated</ToastTitle></Toast>, { intent: "success" });
       qc.invalidateQueries({ queryKey: ["worksheets"] });
     },
     onError: (err: Error) => {
+      if (err instanceof ApiError && typeof err.body === "object" && err.body) {
+        const detail = (err.body as { detail?: { code?: string; message?: string } }).detail;
+        if (detail?.code === "needs_ruleset") {
+          setRulesetMessage(detail.message ?? err.message);
+        }
+      }
       dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
     },
   });
@@ -128,7 +164,7 @@ export default function TaxTab({ clientId }: { clientId: string }) {
 
   // --- Auto-mapping mutations ---------------------------------------- //
   const autoPropose = useMutation({
-    mutationFn: () => api.autoProposeMappings({ form_code: formCode }),
+    mutationFn: () => api.autoProposeMappings({ client_id: clientId, form_code: formCode }),
     onSuccess: (res) => {
       const n = res.proposed_mapping_ids.length;
       const ex = res.already_existed.length;
@@ -149,7 +185,7 @@ export default function TaxTab({ clientId }: { clientId: string }) {
   });
 
   const approveAll = useMutation({
-    mutationFn: () => api.approveAllMappings({ form_code: formCode }),
+    mutationFn: () => api.approveAllMappings({ client_id: clientId, form_code: formCode }),
     onSuccess: (ids) => {
       dispatchToast(
         <Toast>
@@ -186,8 +222,9 @@ export default function TaxTab({ clientId }: { clientId: string }) {
 
   const autoFill = useMutation({
     mutationFn: () =>
-      api.autoFillWorksheet({ period_id: periodId, form_code: formCode }),
+      api.autoFillWorksheet({ client_id: clientId, period_id: periodId, form_code: formCode }),
     onSuccess: (res) => {
+      setRulesetMessage("");
       dispatchToast(
         <Toast>
           <ToastTitle>
@@ -198,6 +235,30 @@ export default function TaxTab({ clientId }: { clientId: string }) {
       );
       qc.invalidateQueries({ queryKey: ["tax-mappings"] });
       qc.invalidateQueries({ queryKey: ["worksheets"] });
+    },
+    onError: (err: Error) => {
+      if (err instanceof ApiError && typeof err.body === "object" && err.body) {
+        const detail = (err.body as { detail?: { code?: string; message?: string } }).detail;
+        if (detail?.code === "needs_ruleset") {
+          setRulesetMessage(detail.message ?? err.message);
+        }
+      }
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const activateRuleset = useMutation({
+    mutationFn: () => api.activateTaxRulesetForClient({ client_id: clientId }),
+    onSuccess: (ruleset) => {
+      setRulesetMessage("");
+      dispatchToast(
+        <Toast>
+          <ToastTitle>
+            Activated {ruleset.entity_type} ruleset for {ruleset.tax_year}
+          </ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
     },
     onError: (err: Error) => {
       dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
@@ -432,7 +493,15 @@ export default function TaxTab({ clientId }: { clientId: string }) {
                         <TableCell>
                           {a ? <><code>{a.code}</code> {a.name}</> : <code>{shortId(m.account_id)}</code>}
                         </TableCell>
-                        <TableCell><code>{shortId(m.form_id)}</code></TableCell>
+                        <TableCell>
+                          {formById.get(m.form_id) ? (
+                            <>
+                              <code>{formById.get(m.form_id)!.code}</code> {formById.get(m.form_id)!.label}
+                            </>
+                          ) : (
+                            <code>{shortId(m.form_id)}</code>
+                          )}
+                        </TableCell>
                         <TableCell>
                           {ln ? (
                             <>
@@ -565,6 +634,29 @@ export default function TaxTab({ clientId }: { clientId: string }) {
               </div>
             }
           >
+            {rulesetMessage && (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: 12,
+                  borderRadius: tokens.borderRadiusMedium,
+                  backgroundColor: tokens.colorNeutralBackground2,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <Body1>{rulesetMessage}</Body1>
+                <Button
+                  appearance="primary"
+                  disabled={activateRuleset.isPending}
+                  onClick={() => activateRuleset.mutate()}
+                >
+                  Activate ruleset
+                </Button>
+              </div>
+            )}
             {worksheets.isLoading && <LoadingState />}
             {worksheets.error && <ErrorState error={worksheets.error} />}
             {worksheets.data && worksheets.data.length === 0 && (

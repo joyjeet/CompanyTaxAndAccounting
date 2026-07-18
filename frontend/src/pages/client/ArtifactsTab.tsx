@@ -21,7 +21,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useApi } from "../../api/useApi";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
-import { shortId } from "../../lib/format";
+import { fmtDateTime, shortId } from "../../lib/format";
 
 const useStyles = makeStyles({
   num: { textAlign: "right", fontFamily: tokens.fontFamilyMonospace },
@@ -106,6 +106,8 @@ export default function ArtifactsTab({ clientId }: { clientId: string }) {
                 <TableHeaderCell>Kind</TableHeaderCell>
                 <TableHeaderCell>Format</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Created At</TableHeaderCell>
+                <TableHeaderCell>Finalized At</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>Size</TableHeaderCell>
                 <TableHeaderCell>SHA-256</TableHeaderCell>
                 <TableHeaderCell></TableHeaderCell>
@@ -122,6 +124,8 @@ export default function ArtifactsTab({ clientId }: { clientId: string }) {
                       {a.status}
                     </Badge>
                   </TableCell>
+                  <TableCell>{fmtDateTime(a.generated_at)}</TableCell>
+                  <TableCell>{fmtDateTime(a.finalized_at)}</TableCell>
                   <TableCell className={styles.num}>{(a.size_bytes / 1024).toFixed(1)} KB</TableCell>
                   <TableCell><code>{shortId(a.plaintext_sha256)}</code></TableCell>
                   <TableCell>

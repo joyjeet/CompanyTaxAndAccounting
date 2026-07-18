@@ -47,6 +47,11 @@ from app.domain.tax_service import (
     propose_mapping,
     reject_mapping,
 )
+from app.domain.entity_form_ruleset import (
+    EntityFormRulesetForbiddenError,
+    NeedsRulesetError,
+    ensure_active_ruleset_for_client,
+)
 from app.models.accounting import (
     TaxAccountMapping,
     TaxForm,
@@ -55,6 +60,7 @@ from app.models.accounting import (
     TaxWorksheetLine,
 )
 from app.models.enums import (
+    EntityFormRulesetStatus,
     TaxFormCode,
     TaxLineSign,
     TaxMappingStatus,
@@ -102,6 +108,7 @@ class MappingOut(BaseModel):
 
 
 class MappingProposeIn(BaseModel):
+    client_id: UUID | None = None
     form_id: UUID
     account_id: UUID
     line_id: UUID
@@ -142,13 +149,64 @@ class WorksheetDetailOut(WorksheetOut):
 
 
 class WorksheetGenerateIn(BaseModel):
+    client_id: UUID | None = None
     period_id: UUID
     form_code: TaxFormCode
+
+
+class RulesetActivateIn(BaseModel):
+    client_id: UUID | None = None
+
+
+class RulesetOut(BaseModel):
+    id: UUID
+    entity_type: str
+    tax_year: int
+    version: str
+    status: str
+    required_forms: list[str]
 
 
 # --------------------------------------------------------------------------- #
 # Forms (reference data — no RLS, but viewer must be authenticated)
 # --------------------------------------------------------------------------- #
+@router.post("/rulesets/activate-for-client", response_model=RulesetOut)
+def activate_ruleset_for_client(
+    body: RulesetActivateIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> RulesetOut:
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
+    try:
+        row = ensure_active_ruleset_for_client(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+            scope=identity.scope,
+        )
+    except EntityFormRulesetForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+    except NeedsRulesetError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"message": str(e), "code": "needs_ruleset"},
+        ) from e
+
+    return RulesetOut(
+        id=row.id,
+        entity_type=row.entity_type,
+        tax_year=row.tax_year,
+        version=row.version,
+        status=row.status.value if isinstance(row.status, EntityFormRulesetStatus) else str(row.status),
+        required_forms=list(row.required_forms),
+    )
+
+
 @router.get("/forms", response_model=list[TaxFormOut])
 def list_forms(
     _identity: AuthIdentity = Depends(get_identity),
@@ -204,12 +262,46 @@ def get_form(
 # --------------------------------------------------------------------------- #
 # Mappings (tenant)
 # --------------------------------------------------------------------------- #
-def _require_firm_with_client(identity: AuthIdentity) -> None:
+def _require_firm(identity: AuthIdentity) -> None:
     if identity.scope is not AccessScope.FIRM:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This action requires firm-scope access.",
         )
+
+
+def _resolve_tax_client_id(
+    sess: Session,
+    *,
+    identity: AuthIdentity,
+    body_client_id: UUID | None = None,
+    mapping_id: UUID | None = None,
+    worksheet_id: UUID | None = None,
+) -> UUID:
+    _require_firm(identity)
+    if identity.client_id is not None:
+        return identity.client_id
+    if body_client_id is not None:
+        return body_client_id
+    if mapping_id is not None:
+        row = sess.get(TaxAccountMapping, mapping_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Mapping not found.")
+        return row.client_id
+    if worksheet_id is not None:
+        row = sess.get(TaxWorksheet, worksheet_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Worksheet not found.")
+        return row.client_id
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="client_id must be present in identity or request body for this action.",
+    )
+
+
+def _require_firm_with_client(identity: AuthIdentity) -> None:
+    _require_firm(identity)
     if identity.client_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -255,13 +347,16 @@ def propose(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> MappingOut:
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None  # guarded above
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
     try:
         row = propose_mapping(
             sess,
             firm_id=identity.firm_id,
-            client_id=identity.client_id,
+            client_id=client_id,
             actor=identity.subject,
             scope=identity.scope,
             form_id=body.form_id,
@@ -289,12 +384,15 @@ def approve(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> MappingOut:
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        mapping_id=mapping_id,
+    )
     try:
         row = approve_mapping(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             mapping_id=mapping_id,
         )
@@ -316,12 +414,15 @@ def reject(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> MappingOut:
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        mapping_id=mapping_id,
+    )
     try:
         row = reject_mapping(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             mapping_id=mapping_id,
             reason=body.reason,
@@ -341,6 +442,7 @@ def reject(
 # Auto-mapping (heuristic) — one-button onboarding
 # --------------------------------------------------------------------------- #
 class AutoProposeIn(BaseModel):
+    client_id: UUID | None = None
     form_code: TaxFormCode
 
 
@@ -352,6 +454,7 @@ class AutoProposeOut(BaseModel):
 
 
 class AutoFillIn(BaseModel):
+    client_id: UUID | None = None
     period_id: UUID
     form_code: TaxFormCode
 
@@ -392,12 +495,15 @@ def auto_propose(
     """Walk the client's COA and write DRAFT mappings using a heuristic
     (account-name keyword + code-range fallback). Idempotent — rows that
     already have a DRAFT/APPROVED mapping on this form are skipped."""
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
     try:
         summary = auto_propose_for_form(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             form_code=body.form_code,
         )
@@ -418,12 +524,15 @@ def approve_all(
     sess: Session = Depends(db_session),
 ) -> list[UUID]:
     """Flip every DRAFT mapping for (client, form) to APPROVED in one call."""
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
     try:
         ids = approve_all_drafts_for_form(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             form_code=body.form_code,
         )
@@ -443,18 +552,18 @@ def generate(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> WorksheetDetailOut:
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
     # Phase 8b: gate by the client's entity_form_ruleset. The client may
     # only generate worksheets for forms in their active ruleset; if no
     # ruleset is active for their (entity_type, tax_year), fail closed.
-    from app.domain.entity_form_ruleset import (
-        NeedsRulesetError,
-        get_form_set_for_client,
-    )
+    from app.domain.entity_form_ruleset import get_form_set_for_client
 
     try:
-        allowed = get_form_set_for_client(sess, client_id=identity.client_id)
+        allowed = get_form_set_for_client(sess, client_id=client_id)
     except NeedsRulesetError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -477,7 +586,7 @@ def generate(
     try:
         ws = generate_worksheet(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             period_id=body.period_id, form_code=body.form_code,
         )
@@ -546,12 +655,15 @@ def approve_ws(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> WorksheetDetailOut:
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        worksheet_id=worksheet_id,
+    )
     try:
         ws = approve_worksheet(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             worksheet_id=worksheet_id,
         )
@@ -576,14 +688,17 @@ def reject_ws(
     sess: Session = Depends(db_session),
 ) -> WorksheetDetailOut:
     """Mirror the mapping reject flow for worksheets."""
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        worksheet_id=worksheet_id,
+    )
     from app.domain.tax_service import reject_worksheet
 
     try:
         ws = reject_worksheet(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             worksheet_id=worksheet_id,
             reason=(body.reason if body else None),
@@ -645,12 +760,15 @@ def auto_fill(
     """First-run convenience: heuristic-propose mappings, approve them all,
     then generate the worksheet for `period_id` + `form_code`. Returns the
     worksheet so the UI can render it immediately."""
-    _require_firm_with_client(identity)
-    assert identity.client_id is not None
+    client_id = _resolve_tax_client_id(
+        sess,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
     try:
         result: AutoFillResult = auto_fill_worksheet(
             sess,
-            firm_id=identity.firm_id, client_id=identity.client_id,
+            firm_id=identity.firm_id, client_id=client_id,
             actor=identity.subject, scope=identity.scope,
             period_id=body.period_id, form_code=body.form_code,
         )

@@ -103,3 +103,19 @@ def test_daily_balance_section_is_skipped() -> None:
     # parser walked the daily-balance section.
     for t in r["transactions"]:
         assert t["raw_date"] != "07/31"
+
+
+def test_loan_description_maps_to_loan_payable_code() -> None:
+    stmt = """
+    STATEMENT OF ACCOUNT
+    Statement Period: Jul 01 2025-Jul 31 2025
+    Beginning Balance 1,000.00
+    Ending Balance 900.00
+
+    Electronic Payments
+    07/22 LOAN PAYMENT TO SBA 100.00
+    """
+    r = parse_statement(stmt)
+    assert r["is_statement"] is True
+    assert len(r["transactions"]) == 1
+    assert r["transactions"][0]["proposed_account_code"] == "2400"

@@ -120,14 +120,17 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # Categorizer backend used by the bank-statement pipeline to map
     # transactions onto the client's chart of accounts.
-    #   'dictionary'  : deterministic vendor-keyword dict only (default;
-    #                   no network calls). Suitable for tests and demos
-    #                   that don't want Azure OpenAI dependencies.
+    #   'xero_rule_engine': deterministic condition-based rules loaded from
+    #                   app_categorizer_rules_file (default; no network).
+    #   'dictionary'  : deterministic vendor-keyword dict only.
     #   'azure_openai': re-categorize weak rows with Azure OpenAI Chat
     #                   Completions, using the client's actual COA. The
     #                   dictionary still runs first; the LLM only sees
     #                   rows that landed on 9999 (Suspense) etc.
-    app_categorizer_backend: Literal["dictionary", "azure_openai"] = "dictionary"
+    app_categorizer_backend: Literal[
+        "xero_rule_engine", "dictionary", "azure_openai"
+    ] = "xero_rule_engine"
+    app_categorizer_rules_file: str = "data/categorization_rules.yaml"
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None
     azure_openai_api_version: str = "2024-08-01-preview"

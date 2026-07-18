@@ -18,6 +18,7 @@ from app.domain.promotion import (
     AlreadyPromotedError,
     promote_statement_draft,
 )
+from app.integrations.account_categorizer import load_rules_from_file
 from app.models.accounting import (
     DraftClassification,
     JournalEntry,
@@ -258,6 +259,70 @@ def test_promote_statement_account_overrides(world: SeededWorld) -> None:
 
     assert len(result.journal_entry_ids) == 1
     assert result.skipped == []
+
+
+def test_promote_statement_persists_override_into_rules_file(
+    world: SeededWorld,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    a1 = world.a1
+    txns = [
+        {
+            "date": "2026-07-05",
+            "raw_date": "07/05",
+            "description": "Staples order 123",
+            "amount": "45.00",
+            "direction": "payment",
+            "proposed_account_code": "9999",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    rules_file = tmp_path / "categorization_rules.yaml"
+    rules_file.write_text(
+        (
+            "rules:\n"
+            "  - name: Existing\n"
+            "    target_code: \"4000\"\n"
+            "    match: all\n"
+            "    conditions:\n"
+            "      - field: description\n"
+            "        operator: contains\n"
+            "        value: square\n"
+        ),
+        encoding="utf-8",
+    )
+
+    class _Settings:
+        app_categorizer_backend = "xero_rule_engine"
+        app_categorizer_rules_file = str(rules_file)
+
+    monkeypatch.setattr("app.domain.promotion.get_settings", lambda: _Settings())
+    monkeypatch.setattr("app.domain.promotion._reload_rules_runtime", lambda: None)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+            account_overrides={0: "5000"},
+        )
+
+    assert len(result.journal_entry_ids) == 1
+
+    learned = load_rules_from_file(rules_file)
+    assert learned[0].target_code == "5000"
+    assert learned[0].conditions[0].field == "direction"
+    assert learned[0].conditions[0].operator == "equals"
+    assert learned[0].conditions[0].value == "payment"
+    assert learned[0].conditions[1].field == "description"
+    assert learned[0].conditions[1].operator == "contains"
+    assert learned[0].conditions[1].value == "staples order"
 
 
 def test_promote_statement_rejects_non_statement_draft(

@@ -215,3 +215,54 @@ def test_readonly_flag_is_set_on_filled_fields() -> None:
             assert ff & 1, "ReadOnly bit not set on filled field"
             return
     pytest.fail("f1_14[0] not present in filled PDF fields")
+
+
+def test_f1120s_computed_lines_are_explicitly_written() -> None:
+    worksheet = {
+        "form_code": "F1120S",
+        "lines": [
+            {"line_code": "1a", "amount": "26807", "line_label": "x", "section": "income"},
+            {"line_code": "2", "amount": "131", "line_label": "x", "section": "cogs"},
+            {"line_code": "8", "amount": "4700", "line_label": "x", "section": "deductions"},
+            {"line_code": "19", "amount": "2014", "line_label": "x", "section": "deductions"},
+        ],
+    }
+    pdf = IrsFormFiller().render(
+        form_code=TaxFormCode.F1120S, worksheet=worksheet, ctx=_ctx(),
+    )
+    values = _read_filled_values(pdf)
+
+    # Explicitly written computed lines for Form 1120-S.
+    assert values.get("f1_19[0]") == "26,807"   # 1c = 1a - 1b
+    assert values.get("f1_21[0]") == "26,676"   # 3 = 1c - 2
+    assert values.get("f1_24[0]") == "26,676"   # 6 = 3 + 4 + 5
+    assert values.get("f1_38[0]") == "6,714"    # 21 = total deductions
+    assert values.get("f1_39[0]") == "19,962"   # 22 = 6 - 21
+
+
+def test_f1120s_computed_lines_tie_out_with_rounded_display_values() -> None:
+    # Fractional inputs can create 1-dollar drift if derived lines are
+    # computed from unrounded amounts. This regression ensures on-form
+    # arithmetic uses IRS whole-dollar values and ties out exactly.
+    worksheet = {
+        "form_code": "F1120S",
+        "lines": [
+            {"line_code": "1a", "amount": "26806.50", "line_label": "x", "section": "income"},
+            {"line_code": "2", "amount": "130.50", "line_label": "x", "section": "cogs"},
+            {"line_code": "8", "amount": "4699.60", "line_label": "x", "section": "deductions"},
+            {"line_code": "19", "amount": "2014.40", "line_label": "x", "section": "deductions"},
+        ],
+    }
+    pdf = IrsFormFiller().render(
+        form_code=TaxFormCode.F1120S, worksheet=worksheet, ctx=_ctx(),
+    )
+    values = _read_filled_values(pdf)
+
+    assert values.get("f1_17[0]") == "26,807"   # line 1a
+    assert values.get("f1_20[0]") == "131"      # line 2
+    assert values.get("f1_21[0]") == "26,676"   # line 3
+    assert values.get("f1_24[0]") == "26,676"   # line 6
+    assert values.get("f1_26[0]") == "4,700"    # line 8
+    assert values.get("f1_37[0]") == "2,014"    # line 19
+    assert values.get("f1_38[0]") == "6,714"    # line 21
+    assert values.get("f1_39[0]") == "19,962"   # line 22 = 26,676 - 6,714

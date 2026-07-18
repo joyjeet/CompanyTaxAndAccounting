@@ -14,6 +14,7 @@ from threading import Lock
 from app.integrations.account_categorizer import (
     AccountCategorizer,
     DictionaryCategorizer,
+    XeroRuleEngineCategorizer,
 )
 from app.integrations.llm import LLMClassifier, MockLLMClassifier
 from app.integrations.ocr import DocumentExtractor, MockDocumentExtractor
@@ -38,7 +39,7 @@ def _default_extractor() -> DocumentExtractor:
 
 
 def _default_categorizer() -> AccountCategorizer:
-    return DictionaryCategorizer()
+    return XeroRuleEngineCategorizer()
 
 
 def _default_classifier() -> LLMClassifier:
@@ -84,7 +85,7 @@ def get_categorizer() -> AccountCategorizer:
     global _categorizer
     with _lock:
         if _categorizer is None:
-            _categorizer = DictionaryCategorizer()
+            _categorizer = XeroRuleEngineCategorizer()
         return _categorizer
 
 
@@ -217,21 +218,30 @@ def bootstrap_from_settings() -> None:
     # ----- categorizer ------------------------------------------------- #
     # The categorizer must be installed BEFORE the classifier so the
     # MockLLMClassifier picks it up via `_default_classifier`.
-    if _categorizer is None and settings.app_categorizer_backend == "azure_openai":
-        if not settings.azure_openai_endpoint:
-            raise RuntimeError(
-                "app_categorizer_backend=azure_openai requires azure_openai_endpoint"
-            )
-        from app.integrations.account_categorizer import AzureOpenAICategorizer
+    if _categorizer is None:
+        if settings.app_categorizer_backend == "azure_openai":
+            if not settings.azure_openai_endpoint:
+                raise RuntimeError(
+                    "app_categorizer_backend=azure_openai requires azure_openai_endpoint"
+                )
+            from app.integrations.account_categorizer import AzureOpenAICategorizer
 
-        set_categorizer(
-            AzureOpenAICategorizer(
-                endpoint=settings.azure_openai_endpoint,
-                api_key=settings.azure_openai_api_key,
-                api_version=settings.azure_openai_api_version,
-                deployment=settings.azure_openai_deployment,
+            set_categorizer(
+                AzureOpenAICategorizer(
+                    endpoint=settings.azure_openai_endpoint,
+                    api_key=settings.azure_openai_api_key,
+                    api_version=settings.azure_openai_api_version,
+                    deployment=settings.azure_openai_deployment,
+                )
             )
-        )
+        elif settings.app_categorizer_backend == "dictionary":
+            set_categorizer(DictionaryCategorizer())
+        else:
+            set_categorizer(
+                XeroRuleEngineCategorizer(
+                    rules_file=settings.app_categorizer_rules_file,
+                )
+            )
 
     # ----- classifier -------------------------------------------------- #
     # Force the default classifier to re-resolve so it picks up whatever

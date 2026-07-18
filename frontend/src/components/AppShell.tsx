@@ -20,6 +20,7 @@ import {
   PersonCircle24Regular,
   ShieldCheckmark24Regular,
   TaskListSquareLtr24Regular,
+  Wrench24Regular,
 } from "@fluentui/react-icons";
 import { type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
@@ -38,6 +39,7 @@ const FIRM_NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <Home24Regular />, end: true },
   { to: "/clients", label: "Clients", icon: <BookContacts24Regular /> },
   { to: "/review", label: "Review queue", icon: <ClipboardTaskListLtr24Regular /> },
+  { to: "/rules-engine", label: "Rules engine", icon: <Wrench24Regular /> },
   { to: "/artifacts", label: "Artifacts", icon: <DocumentBulletList24Regular /> },
   { to: "/tax/forms", label: "Tax forms", icon: <TaskListSquareLtr24Regular /> },
 ];

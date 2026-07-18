@@ -8,6 +8,7 @@ import {
   Input,
   makeStyles,
   Option,
+  OptionGroup,
   Spinner,
   Table,
   TableBody,
@@ -31,6 +32,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
 import { useAuth } from "../auth/AuthContext";
+import type { CoaOut } from "../auth/types";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtMoney, shortId, todayIso } from "../lib/format";
@@ -41,6 +43,16 @@ interface DraftLine {
   credit: string;
   description: string;
 }
+
+const ACCOUNT_TYPE_ORDER = ["asset", "liability", "equity", "revenue", "expense"] as const;
+
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  asset: "Assets",
+  liability: "Liabilities",
+  equity: "Equity",
+  revenue: "Income",
+  expense: "Expenses",
+};
 
 const useStyles = makeStyles({
   payload: {
@@ -77,6 +89,12 @@ export default function DraftDetail() {
     select: (rows) => rows.find((r) => r.id === id) ?? null,
   });
 
+  const sourceDocument = useQuery({
+    queryKey: ["document-detail", draft.data?.source_document_id],
+    queryFn: () => api.getDocument(draft.data!.source_document_id),
+    enabled: !!draft.data?.source_document_id,
+  });
+
   // For promotion we need a client_id. The identity may or may not have
   // one. If it does, use it; otherwise we ask the user to pick from the
   // firm's clients.
@@ -96,6 +114,33 @@ export default function DraftDetail() {
     () => new Map((accounts.data ?? []).map((a) => [a.id, a])),
     [accounts.data],
   );
+  const accountCodeMap = useMemo(
+    () => new Map((accounts.data ?? []).map((a) => [a.code, a])),
+    [accounts.data],
+  );
+  const groupedAccounts = useMemo(() => {
+    const buckets = new Map<string, CoaOut[]>();
+    for (const type of ACCOUNT_TYPE_ORDER) buckets.set(type, []);
+    for (const account of accounts.data ?? []) {
+      const group = buckets.get(account.account_type) ?? [];
+      group.push(account);
+      buckets.set(account.account_type, group);
+    }
+    for (const rows of buckets.values()) {
+      rows.sort((left, right) => left.code.localeCompare(right.code));
+    }
+    return ACCOUNT_TYPE_ORDER.map((type) => ({
+      type,
+      label: ACCOUNT_TYPE_LABELS[type],
+      accounts: buckets.get(type) ?? [],
+    })).filter((group) => group.accounts.length > 0);
+  }, [accounts.data]);
+
+  const accountLabelByCode = (code: string): string => {
+    const acct = accountCodeMap.get(code);
+    if (!acct) return code;
+    return `${acct.code} - ${acct.name}`;
+  };
 
   const [periodId, setPeriodId] = useState("");
   const [entryDate, setEntryDate] = useState(todayIso());
@@ -105,6 +150,12 @@ export default function DraftDetail() {
     { account_id: "", debit: "", credit: "", description: "" },
   ]);
   const [rejectReason, setRejectReason] = useState("");
+
+  useEffect(() => {
+    if (clientId) return;
+    if (!sourceDocument.data?.client_id) return;
+    setClientId(sourceDocument.data.client_id);
+  }, [clientId, sourceDocument.data?.client_id]);
 
   // Pre-fill the promote form from the AI's payload once accounts have
   // loaded. Only runs ONCE per draft (guarded by `prefilledRef`) so a user
@@ -177,6 +228,7 @@ export default function DraftDetail() {
   const promote = useMutation({
     mutationFn: () =>
       api.promoteDraft(id, {
+        client_id: clientId || undefined,
         period_id: periodId,
         entry_date: entryDate,
         memo: memo || undefined,
@@ -230,6 +282,7 @@ export default function DraftDetail() {
         if (code) overrides[String(idx)] = code;
       }
       return api.promoteStatementDraft(id, {
+        client_id: clientId || undefined,
         period_id: periodId,
         cash_account_code: "1000",
         account_overrides: Object.keys(overrides).length ? overrides : undefined,
@@ -262,6 +315,20 @@ export default function DraftDetail() {
 
   const d = draft.data;
   const conf = Number.parseFloat(d.confidence);
+
+  const renderAccountOptions = () => (
+    <>
+      {groupedAccounts.map((group) => (
+        <OptionGroup key={group.type} label={group.label}>
+          {group.accounts.map((a) => (
+            <Option key={a.id} value={a.id} text={`${a.code} — ${a.name}`}>
+              {a.code} — {a.name}
+            </Option>
+          ))}
+        </OptionGroup>
+      ))}
+    </>
+  );
 
   return (
     <div style={{ display: "grid", rowGap: 16 }}>
@@ -484,9 +551,7 @@ export default function DraftDetail() {
                     {rawTxns.map((t, i) => {
                       const proposed = String(t.proposed_account_code ?? "");
                       const current = txnOverrides[i] ?? proposed;
-                      const acct = (accounts.data ?? []).find(
-                        (a) => a.code === current,
-                      );
+                      const acct = accountCodeMap.get(current);
                       const dir = String(t.direction ?? "");
                       return (
                         <TableRow key={i}>
@@ -509,9 +574,7 @@ export default function DraftDetail() {
                             <Dropdown
                               placeholder="Account"
                               selectedOptions={acct ? [acct.id] : []}
-                              value={
-                                acct ? `${acct.code} — ${acct.name}` : current
-                              }
+                              value={accountLabelByCode(current)}
                               onOptionSelect={(_, dd) => {
                                 const next = { ...txnOverrides };
                                 const newAcct = (accounts.data ?? []).find(
@@ -521,15 +584,7 @@ export default function DraftDetail() {
                                 setTxnOverrides(next);
                               }}
                             >
-                              {(accounts.data ?? []).map((a) => (
-                                <Option
-                                  key={a.id}
-                                  value={a.id}
-                                  text={`${a.code} — ${a.name}`}
-                                >
-                                  {a.code} — {a.name}
-                                </Option>
-                              ))}
+                              {renderAccountOptions()}
                             </Dropdown>
                           </TableCell>
                         </TableRow>
@@ -680,18 +735,18 @@ export default function DraftDetail() {
                     <Dropdown
                       placeholder="Account"
                       selectedOptions={ln.account_id ? [ln.account_id] : []}
-                      value={accountMap.get(ln.account_id)?.name ?? ""}
+                      value={
+                        accountMap.get(ln.account_id)
+                          ? `${accountMap.get(ln.account_id)!.code} - ${accountMap.get(ln.account_id)!.name}`
+                          : ""
+                      }
                       onOptionSelect={(_, dd) => {
                         const next = [...lines];
                         next[i] = { ...next[i], account_id: dd.optionValue ?? "" };
                         setLines(next);
                       }}
                     >
-                      {(accounts.data ?? []).map((a) => (
-                        <Option key={a.id} value={a.id} text={`${a.code} — ${a.name}`}>
-                          {a.code} — {a.name}
-                        </Option>
-                      ))}
+                      {renderAccountOptions()}
                     </Dropdown>
                   </TableCell>
                   <TableCell>

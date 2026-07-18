@@ -22,6 +22,7 @@ import PortalHome from "./pages/PortalHome";
 import PortalProfile from "./pages/PortalProfile";
 import PortalReports from "./pages/PortalReports";
 import ReviewQueue from "./pages/ReviewQueue";
+import RulesEngine from "./pages/RulesEngine";
 import TaxFormsLibrary from "./pages/TaxFormsLibrary";
 
 const queryClient = new QueryClient({
@@ -134,6 +135,16 @@ export default function App() {
                 <RequireAuth roles={["firm_staff"]}>
                   <AuthenticatedShell>
                     <TaxFormsLibrary />
+                  </AuthenticatedShell>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/rules-engine"
+              element={
+                <RequireAuth roles={["firm_staff"]}>
+                  <AuthenticatedShell>
+                    <RulesEngine />
                   </AuthenticatedShell>
                 </RequireAuth>
               }

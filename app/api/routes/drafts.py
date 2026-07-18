@@ -49,6 +49,27 @@ class DraftOut(BaseModel):
     payload: dict
 
 
+def _resolve_promote_client_id(
+    sess: Session,
+    *,
+    draft_id: UUID,
+    identity: AuthIdentity,
+    body_client_id: UUID | None,
+) -> UUID:
+    if identity.client_id is not None:
+        return identity.client_id
+    if body_client_id is not None:
+        return body_client_id
+
+    draft = sess.get(DraftClassification, draft_id)
+    if draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="draft not found",
+        )
+    return draft.client_id
+
+
 @router.get("", response_model=list[DraftOut])
 def list_drafts(
     pending_only: bool = True,
@@ -84,6 +105,7 @@ class PromoteLineIn(BaseModel):
 
 
 class PromoteIn(BaseModel):
+    client_id: UUID | None = None
     period_id: UUID
     entry_date: date
     memo: str | None = None
@@ -101,22 +123,24 @@ def promote(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> PromoteOut:
-    if identity.client_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="client_id must be present in identity to promote a draft.",
-        )
     if identity.scope is not AccessScope.FIRM:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only firm-scope users can promote drafts.",
         )
 
+    client_id = _resolve_promote_client_id(
+        sess,
+        draft_id=draft_id,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
+
     try:
         je_id = promote_draft(
             sess,
             firm_id=identity.firm_id,
-            client_id=identity.client_id,
+            client_id=client_id,
             actor=identity.subject,
             scope=identity.scope,
             draft_id=draft_id,
@@ -143,6 +167,7 @@ def promote(
 # --------------------------------------------------------------------------- #
 # Statement promote-all — one balanced JE per transaction in payload.transactions.
 class StatementPromoteIn(BaseModel):
+    client_id: UUID | None = None
     period_id: UUID
     cash_account_code: str = "1000"
     # Optional remap: {"3": "4100", "7": "5200"} — transaction index -> code.
@@ -163,16 +188,18 @@ def promote_all(
     sess: Session = Depends(db_session),
 ) -> StatementPromoteOut:
     """Post every transaction in a bank-statement draft as its own JE."""
-    if identity.client_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="client_id must be present in identity to promote a draft.",
-        )
     if identity.scope is not AccessScope.FIRM:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only firm-scope users can promote drafts.",
         )
+
+    client_id = _resolve_promote_client_id(
+        sess,
+        draft_id=draft_id,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
 
     # Coerce string keys -> int.
     overrides: dict[int, str] | None = None
@@ -191,7 +218,7 @@ def promote_all(
         result = promote_statement_draft(
             sess,
             firm_id=identity.firm_id,
-            client_id=identity.client_id,
+            client_id=client_id,
             actor=identity.subject,
             scope=identity.scope,
             draft_id=draft_id,

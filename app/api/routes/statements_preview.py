@@ -113,12 +113,26 @@ def _ab_out(b: AccountBalance) -> AccountBalanceOut:
     )
 
 
+def _is_zero(value: Decimal) -> bool:
+    return value == Decimal("0")
+
+
+def _has_nonzero_activity(b: AccountBalance) -> bool:
+    return not (_is_zero(b.debit_total) and _is_zero(b.credit_total) and _is_zero(b.signed_balance))
+
+
+def _has_nonzero_balance(b: AccountBalance) -> bool:
+    return not _is_zero(b.signed_balance)
+
+
 def _pl_out(pl: ProfitAndLoss) -> ProfitAndLossOut:
+    revenue = [b for b in pl.revenue if _has_nonzero_balance(b)]
+    expenses = [b for b in pl.expenses if _has_nonzero_balance(b)]
     return ProfitAndLossOut(
         period_start=pl.period_start.isoformat(),
         period_end=pl.period_end.isoformat(),
-        revenue=[_ab_out(b) for b in pl.revenue],
-        expenses=[_ab_out(b) for b in pl.expenses],
+        revenue=[_ab_out(b) for b in revenue],
+        expenses=[_ab_out(b) for b in expenses],
         total_revenue=pl.total_revenue,
         total_expenses=pl.total_expenses,
         net_income=pl.net_income,
@@ -126,11 +140,14 @@ def _pl_out(pl: ProfitAndLoss) -> ProfitAndLossOut:
 
 
 def _bs_out(bs: BalanceSheet) -> BalanceSheetOut:
+    assets = [b for b in bs.assets if _has_nonzero_balance(b)]
+    liabilities = [b for b in bs.liabilities if _has_nonzero_balance(b)]
+    equity = [b for b in bs.equity if _has_nonzero_balance(b)]
     return BalanceSheetOut(
         as_of=bs.as_of.isoformat(),
-        assets=[_ab_out(b) for b in bs.assets],
-        liabilities=[_ab_out(b) for b in bs.liabilities],
-        equity=[_ab_out(b) for b in bs.equity],
+        assets=[_ab_out(b) for b in assets],
+        liabilities=[_ab_out(b) for b in liabilities],
+        equity=[_ab_out(b) for b in equity],
         total_assets=bs.total_assets,
         total_liabilities=bs.total_liabilities,
         total_equity=bs.total_equity,
@@ -153,9 +170,10 @@ def _cf_out(cf: CashFlowStatement) -> CashFlowOut:
 
 
 def _tb_out(tb: TrialBalance) -> TrialBalanceOut:
+    rows = [b for b in tb.rows if _has_nonzero_activity(b)]
     return TrialBalanceOut(
         as_of=tb.as_of.isoformat(),
-        rows=[_ab_out(b) for b in tb.rows],
+        rows=[_ab_out(b) for b in rows],
         total_debits=tb.total_debits,
         total_credits=tb.total_credits,
         balances=tb.balances,
@@ -659,6 +677,36 @@ def _rollup_out(node: RollupNode) -> RollupNodeOut:
     )
 
 
+def _rollup_has_nonzero_activity(node: RollupNode) -> bool:
+    return not (
+        _is_zero(node.debit_total)
+        and _is_zero(node.credit_total)
+        and _is_zero(node.signed_balance)
+    )
+
+
+def _prune_zero_rollup_nodes(nodes: list[RollupNode]) -> list[RollupNode]:
+    kept: list[RollupNode] = []
+    for node in nodes:
+        pruned_children = _prune_zero_rollup_nodes(node.children)
+        if _rollup_has_nonzero_activity(node) or pruned_children:
+            kept.append(
+                RollupNode(
+                    account_id=node.account_id,
+                    code=node.code,
+                    name=node.name,
+                    account_type=node.account_type,
+                    depth=node.depth,
+                    is_leaf=node.is_leaf,
+                    debit_total=node.debit_total,
+                    credit_total=node.credit_total,
+                    signed_balance=node.signed_balance,
+                    children=pruned_children,
+                )
+            )
+    return kept
+
+
 RollupNodeOut.model_rebuild()
 
 
@@ -719,9 +767,10 @@ def get_account_rollup(
         if a.account_type in types
     ]
     tree = build_rollup_tree(balances, accounts)
+    pruned_tree = _prune_zero_rollup_nodes(tree)
     return RollupTreeOut(
         scope=scope,
         period_start=start_date.isoformat() if start_date is not None else None,
         period_end=period.end_date.isoformat(),
-        roots=[_rollup_out(n) for n in tree],
+        roots=[_rollup_out(n) for n in pruned_tree],
     )

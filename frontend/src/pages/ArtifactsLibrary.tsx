@@ -27,7 +27,7 @@ import { useApi } from "../api/useApi";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
-import { shortId } from "../lib/format";
+import { fmtDateTime, shortId } from "../lib/format";
 
 const useStyles = makeStyles({
   header: { marginBottom: "16px" },
@@ -150,6 +150,8 @@ export default function ArtifactsLibrary() {
                 <TableHeaderCell>Format</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Client</TableHeaderCell>
+                <TableHeaderCell>Created At</TableHeaderCell>
+                <TableHeaderCell>Finalized At</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>Size</TableHeaderCell>
                 <TableHeaderCell></TableHeaderCell>
               </TableRow>
@@ -169,6 +171,8 @@ export default function ArtifactsLibrary() {
                     </Badge>
                   </TableCell>
                   <TableCell><code>{shortId(a.client_id)}</code></TableCell>
+                  <TableCell>{fmtDateTime(a.generated_at)}</TableCell>
+                  <TableCell>{fmtDateTime(a.finalized_at)}</TableCell>
                   <TableCell className={styles.num}>{(a.size_bytes / 1024).toFixed(1)} KB</TableCell>
                   <TableCell>
                     {a.status !== "finalized" && (

@@ -259,6 +259,19 @@ LINES: dict[TaxFormCode, dict[str, str]] = {
     TaxFormCode.F1040SC: _F1040SC_LINES,
 }
 
+# Computed lines are totals/subtotals that IRS forms often auto-calculate in
+# interactive viewers. We still write them explicitly so downloaded PDFs have
+# stable values in all viewers.
+COMPUTED_LINE_FIELDS: dict[TaxFormCode, dict[str, str]] = {
+    TaxFormCode.F1120S: {
+        "1c": "Page1[0].f1_19[0]",
+        "3": "Page1[0].f1_21[0]",
+        "6": "Page1[0].f1_24[0]",
+        "21": "Page1[0].f1_38[0]",
+        "22": "Page1[0].f1_39[0]",
+    },
+}
+
 
 def line_field(form_code: TaxFormCode, line_code: str) -> str | None:
     """Return the AcroForm field path for a worksheet line, or None."""
@@ -276,6 +289,7 @@ __all__ = [
     "line_field",
     "HEADERS",
     "LINES",
+    "COMPUTED_LINE_FIELDS",
     "HK_NAME",
     "HK_ADDRESS",
     "HK_CITY",

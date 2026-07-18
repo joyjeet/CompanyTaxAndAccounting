@@ -22,7 +22,7 @@ intersect with the catalog without parsing surprises.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -63,6 +63,15 @@ class NeedsRulesetError(EntityFormRulesetError):
     Callers should surface this to the firm with a clear "CPA must
     activate a ruleset before tax forms can be generated" message.
     """
+
+
+_DEFAULT_REQUIRED_FORMS: dict[str, list[TaxFormCode]] = {
+    "c_corp": [TaxFormCode.F1120],
+    "s_corp": [TaxFormCode.F1120S],
+    "partnership": [TaxFormCode.F1065],
+    "single_member_llc": [TaxFormCode.F1040SC],
+    "sole_prop": [TaxFormCode.F1040SC],
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -195,12 +204,82 @@ def activate_ruleset(
     return row
 
 
+def ensure_active_ruleset_for_client(
+    sess: Session,
+    *,
+    firm_id: UUID,
+    client_id: UUID,
+    actor: str,
+    scope: AccessScope,
+) -> EntityFormRuleset:
+    """Ensure an ACTIVE ruleset exists for the client's entity type + tax year.
+
+    If a DRAFT already exists for the pair, activate it. Otherwise create a
+    default v1 draft from the built-in entity->forms map and activate it.
+    """
+    if scope is not AccessScope.FIRM:
+        raise EntityFormRulesetForbiddenError(
+            "Only firm staff may activate entity-form rulesets."
+        )
+
+    profile = get_profile_for_client(sess, client_id=client_id)
+    if profile is None or profile.entity_type is None or profile.tax_year is None:
+        raise NeedsRulesetError(
+            f"Client {client_id} has no complete profile; entity_type and tax_year "
+            "must be set before a ruleset can be activated."
+        )
+
+    active = get_active_ruleset(
+        sess,
+        entity_type=profile.entity_type,
+        tax_year=profile.tax_year,
+    )
+    if active is not None:
+        return active
+
+    draft = sess.execute(
+        select(EntityFormRuleset).where(
+            EntityFormRuleset.entity_type == profile.entity_type,
+            EntityFormRuleset.tax_year == profile.tax_year,
+            EntityFormRuleset.status == EntityFormRulesetStatus.DRAFT,
+        ).order_by(EntityFormRuleset.created_at.desc())
+    ).scalar_one_or_none()
+
+    if draft is None:
+        required_forms = _DEFAULT_REQUIRED_FORMS.get(str(profile.entity_type))
+        if not required_forms:
+            raise NeedsRulesetError(
+                f"No default ruleset scaffold exists for entity_type={profile.entity_type} "
+                f"tax_year={profile.tax_year}."
+            )
+        draft = EntityFormRuleset(
+            id=uuid4(),
+            entity_type=str(profile.entity_type),
+            tax_year=profile.tax_year,
+            version="v1",
+            status=EntityFormRulesetStatus.DRAFT,
+            required_forms=[f.value for f in required_forms],
+            notes="Auto-created from default entity-form ruleset map.",
+        )
+        sess.add(draft)
+        sess.flush()
+
+    return activate_ruleset(
+        sess,
+        firm_id=firm_id,
+        actor=actor,
+        scope=scope,
+        ruleset_id=draft.id,
+    )
+
+
 __all__ = [
     "EntityFormRulesetError",
     "EntityFormRulesetForbiddenError",
     "EntityFormRulesetNotFoundError",
     "EntityFormRulesetStateError",
     "NeedsRulesetError",
+    "ensure_active_ruleset_for_client",
     "activate_ruleset",
     "get_active_ruleset",
     "get_form_set_for_client",

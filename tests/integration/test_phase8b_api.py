@@ -311,6 +311,64 @@ def test_generate_endpoint_succeeds_with_active_ruleset(
     assert r.json()["status"] == "computed"
 
 
+def test_generate_endpoint_accepts_client_id_from_body_for_firm_token(
+    api_client: TestClient, world,
+) -> None:
+    sc = world.a1
+    _post_baseline_and_map(sc)
+    scoped_headers = _auth(
+        api_client, "firm_staff", world.firm_a, sc.client_id,
+    )
+    pr = api_client.put(
+        f"/clients/{sc.client_id}/profile",
+        headers=scoped_headers,
+        json={"entity_type": "c_corp", "tax_year": 2025},
+    )
+    assert pr.status_code == 200, pr.text
+    _activate_seeded_ruleset(world.firm_a, "c_corp")
+
+    no_client_headers = _auth(api_client, "firm_staff", world.firm_a)
+    r = api_client.post(
+        "/tax/worksheets",
+        headers=no_client_headers,
+        json={
+            "client_id": str(sc.client_id),
+            "form_code": "F1120",
+            "period_id": str(sc.period_id),
+        },
+    )
+    assert r.status_code in (200, 201), r.text
+    assert r.json()["status"] == "computed"
+
+
+def test_activate_ruleset_for_client_endpoint(
+    api_client: TestClient, world,
+) -> None:
+    sc = world.a1
+    scoped_headers = _auth(
+        api_client, "firm_staff", world.firm_a, sc.client_id,
+    )
+    pr = api_client.put(
+        f"/clients/{sc.client_id}/profile",
+        headers=scoped_headers,
+        json={"entity_type": "s_corp", "tax_year": 2026},
+    )
+    assert pr.status_code == 200, pr.text
+
+    no_client_headers = _auth(api_client, "firm_staff", world.firm_a)
+    r = api_client.post(
+        "/tax/rulesets/activate-for-client",
+        headers=no_client_headers,
+        json={"client_id": str(sc.client_id)},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["entity_type"] == "s_corp"
+    assert body["tax_year"] == 2026
+    assert body["status"] == "active"
+    assert body["required_forms"] == ["F1120S"]
+
+
 # --------------------------------------------------------------------------- #
 # POST /tax/worksheets/{id}/reject
 # --------------------------------------------------------------------------- #
@@ -338,3 +396,106 @@ def test_reject_worksheet_endpoint(api_client: TestClient, world) -> None:
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "rejected"
+
+
+def test_render_tax_worksheet_accepts_firm_token_without_client_id(
+    api_client: TestClient, world,
+) -> None:
+    sc = world.a1
+    _post_baseline_and_map(sc)
+
+    scoped_headers = _auth(
+        api_client, "firm_staff", world.firm_a, sc.client_id,
+    )
+    pr = api_client.put(
+        f"/clients/{sc.client_id}/profile",
+        headers=scoped_headers,
+        json={"entity_type": "c_corp", "tax_year": 2025},
+    )
+    assert pr.status_code == 200, pr.text
+    _activate_seeded_ruleset(world.firm_a, "c_corp")
+
+    generated = api_client.post(
+        "/tax/worksheets",
+        headers=scoped_headers,
+        json={
+            "form_code": "F1120",
+            "period_id": str(sc.period_id),
+        },
+    )
+    assert generated.status_code in (200, 201), generated.text
+    worksheet_id = generated.json()["id"]
+
+    approved = api_client.post(
+        f"/tax/worksheets/{worksheet_id}/approve",
+        headers=scoped_headers,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == TaxWorksheetStatus.APPROVED.value
+
+    no_client_headers = _auth(api_client, "firm_staff", world.firm_a)
+    rendered = api_client.post(
+        f"/reports/tax-worksheets/{worksheet_id}/render?format=pdf",
+        headers=no_client_headers,
+    )
+    assert rendered.status_code == 201, rendered.text
+    assert rendered.json()["kind"] == "tax_worksheet"
+    assert rendered.json()["format"] == "pdf"
+
+
+def test_artifact_finalize_and_download_accept_firm_token_without_client_id(
+    api_client: TestClient, world,
+) -> None:
+    sc = world.a1
+    _post_baseline_and_map(sc)
+
+    scoped_headers = _auth(
+        api_client, "firm_staff", world.firm_a, sc.client_id,
+    )
+    pr = api_client.put(
+        f"/clients/{sc.client_id}/profile",
+        headers=scoped_headers,
+        json={"entity_type": "c_corp", "tax_year": 2025},
+    )
+    assert pr.status_code == 200, pr.text
+    _activate_seeded_ruleset(world.firm_a, "c_corp")
+
+    generated = api_client.post(
+        "/tax/worksheets",
+        headers=scoped_headers,
+        json={
+            "form_code": "F1120",
+            "period_id": str(sc.period_id),
+        },
+    )
+    assert generated.status_code in (200, 201), generated.text
+    worksheet_id = generated.json()["id"]
+
+    approved = api_client.post(
+        f"/tax/worksheets/{worksheet_id}/approve",
+        headers=scoped_headers,
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == TaxWorksheetStatus.APPROVED.value
+
+    rendered = api_client.post(
+        f"/reports/tax-worksheets/{worksheet_id}/render?format=xlsx",
+        headers=scoped_headers,
+    )
+    assert rendered.status_code == 201, rendered.text
+    artifact_id = rendered.json()["id"]
+
+    no_client_headers = _auth(api_client, "firm_staff", world.firm_a)
+    finalized = api_client.post(
+        f"/reports/artifacts/{artifact_id}/finalize",
+        headers=no_client_headers,
+    )
+    assert finalized.status_code == 200, finalized.text
+    assert finalized.json()["status"] == "finalized"
+
+    downloaded = api_client.get(
+        f"/reports/artifacts/{artifact_id}/download",
+        headers=no_client_headers,
+    )
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content[:2] == b"PK"  # xlsx payload

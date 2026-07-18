@@ -40,7 +40,7 @@ from app.domain.audit_package import (
     AuditPackageMissingDependencyError,
     generate_audit_package,
 )
-from app.models.accounting import GeneratedArtifact
+from app.models.accounting import GeneratedArtifact, TaxWorksheet
 from app.models.enums import ArtifactFormat, ArtifactKind
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -80,7 +80,9 @@ class ArtifactOut(BaseModel):
     plaintext_sha256: str
     size_bytes: int
     generated_by: str
+    generated_at: str
     finalized_by: str | None
+    finalized_at: str | None
     parameters: dict
 
 
@@ -98,7 +100,9 @@ def _to_out(a: GeneratedArtifact) -> ArtifactOut:
         plaintext_sha256=a.plaintext_sha256,
         size_bytes=a.size_bytes,
         generated_by=a.generated_by,
+        generated_at=a.generated_at.isoformat(),
         finalized_by=a.finalized_by,
+        finalized_at=a.finalized_at.isoformat() if a.finalized_at else None,
         parameters=a.parameters or {},
     )
 
@@ -117,6 +121,36 @@ def _require_firm_with_client(identity: AuthIdentity) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="client_id must be present in identity for this action.",
         )
+
+
+def _resolve_reports_client_id(
+    sess: Session,
+    *,
+    identity: AuthIdentity,
+    worksheet_id: UUID | None = None,
+    artifact_id: UUID | None = None,
+) -> UUID:
+    if identity.scope is not AccessScope.FIRM:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This action requires firm-scope access.",
+        )
+    if identity.client_id is not None:
+        return identity.client_id
+    if worksheet_id is not None:
+        ws = sess.get(TaxWorksheet, worksheet_id)
+        if ws is None:
+            raise HTTPException(status_code=404, detail="Tax worksheet not found.")
+        return ws.client_id
+    if artifact_id is not None:
+        art = sess.get(GeneratedArtifact, artifact_id)
+        if art is None:
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+        return art.client_id
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="client_id must be present in identity for this action.",
+    )
 
 
 def _map_domain_error(e: Exception) -> HTTPException:
@@ -199,12 +233,16 @@ def render_tax_worksheet(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> ArtifactOut:
-    _require_firm_with_client(identity)
+    client_id = _resolve_reports_client_id(
+        sess,
+        identity=identity,
+        worksheet_id=worksheet_id,
+    )
     try:
         art = generate_tax_worksheet_artifact(
             sess,
             firm_id=identity.firm_id,
-            client_id=identity.client_id,  # type: ignore[arg-type]
+            client_id=client_id,
             actor=identity.subject,
             scope=identity.scope,
             worksheet_id=worksheet_id,
@@ -247,12 +285,16 @@ def finalize(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> ArtifactOut:
-    _require_firm_with_client(identity)
+    client_id = _resolve_reports_client_id(
+        sess,
+        identity=identity,
+        artifact_id=artifact_id,
+    )
     try:
         art = finalize_artifact(
             sess,
             firm_id=identity.firm_id,
-            client_id=identity.client_id,  # type: ignore[arg-type]
+            client_id=client_id,
             actor=identity.subject,
             scope=identity.scope,
             artifact_id=artifact_id,
@@ -281,7 +323,15 @@ def download(
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> StreamingResponse:
-    if identity.client_id is None:
+    if identity.scope is AccessScope.FIRM:
+        client_id = _resolve_reports_client_id(
+            sess,
+            identity=identity,
+            artifact_id=artifact_id,
+        )
+    elif identity.client_id is not None:
+        client_id = identity.client_id
+    else:
         raise HTTPException(
             status_code=400,
             detail="client_id must be present in identity for this action.",
@@ -290,7 +340,7 @@ def download(
         result = download_artifact(
             sess,
             firm_id=identity.firm_id,
-            client_id=identity.client_id,
+            client_id=client_id,
             actor=identity.subject,
             scope=identity.scope,
             artifact_id=artifact_id,

@@ -13,6 +13,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY data ./data
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
 COPY tests ./tests

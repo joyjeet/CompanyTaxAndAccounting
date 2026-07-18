@@ -11,6 +11,7 @@ import type {
   CashFlowOut,
   ClientOut,
   CoaOut,
+  RulesEngineOut,
   ClientProfileOut,
   ClientProfileUpsertIn,
   DocumentOut,
@@ -21,6 +22,7 @@ import type {
   JournalEntryCreateIn,
   JournalEntryOut,
   MappingOut,
+  RulesetOut,
   PeriodOut,
   ProfitAndLossOut,
   ResetOut,
@@ -147,6 +149,15 @@ export class ApiClient {
     return this.json<CoaOut>(`/clients/${clientId}/chart-of-accounts`, "POST", body);
   }
 
+  // ----- Rules engine (admin) ------------------------------------ //
+  getRulesEngine(): Promise<RulesEngineOut> {
+    return this.request<RulesEngineOut>("/admin/rules-engine");
+  }
+
+  updateRulesEngine(content: string): Promise<RulesEngineOut> {
+    return this.json<RulesEngineOut>("/admin/rules-engine", "PUT", { content });
+  }
+
   // ----- Documents ----------------------------------------------- //
   listDocuments(): Promise<DocumentOut[]> {
     return this.request<DocumentOut[]>("/documents");
@@ -201,6 +212,7 @@ export class ApiClient {
   promoteDraft(
     draftId: string,
     body: {
+      client_id?: string;
       period_id: string;
       entry_date: string;
       memo?: string;
@@ -222,6 +234,7 @@ export class ApiClient {
   promoteStatementDraft(
     draftId: string,
     body: {
+      client_id?: string;
       period_id: string;
       cash_account_code?: string;
       account_overrides?: Record<string, string>;
@@ -429,6 +442,7 @@ export class ApiClient {
   }
 
   proposeMapping(body: {
+    client_id?: string;
     form_id: string;
     account_id: string;
     line_id: string;
@@ -460,7 +474,7 @@ export class ApiClient {
     return this.request<WorksheetDetailOut>(`/tax/worksheets/${id}`);
   }
 
-  generateWorksheet(body: { period_id: string; form_code: string }): Promise<WorksheetDetailOut> {
+  generateWorksheet(body: { client_id?: string; period_id: string; form_code: string }): Promise<WorksheetDetailOut> {
     return this.json<WorksheetDetailOut>("/tax/worksheets", "POST", body);
   }
 
@@ -482,15 +496,19 @@ export class ApiClient {
     );
   }
 
-  autoProposeMappings(body: { form_code: string }): Promise<AutoProposeOut> {
+  autoProposeMappings(body: { client_id?: string; form_code: string }): Promise<AutoProposeOut> {
     return this.json<AutoProposeOut>("/tax/mappings/auto-propose", "POST", body);
   }
 
-  approveAllMappings(body: { form_code: string }): Promise<string[]> {
+  approveAllMappings(body: { client_id?: string; form_code: string }): Promise<string[]> {
     return this.json<string[]>("/tax/mappings/approve-all", "POST", body);
   }
 
-  autoFillWorksheet(body: { period_id: string; form_code: string }): Promise<AutoFillOut> {
+  autoFillWorksheet(body: { client_id?: string; period_id: string; form_code: string }): Promise<AutoFillOut> {
     return this.json<AutoFillOut>("/tax/auto-fill", "POST", body);
+  }
+
+  activateTaxRulesetForClient(body: { client_id?: string }): Promise<RulesetOut> {
+    return this.json<RulesetOut>("/tax/rulesets/activate-for-client", "POST", body);
   }
 }

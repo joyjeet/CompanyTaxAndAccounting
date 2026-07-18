@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -26,12 +27,14 @@ from app.domain.promotion import (
     promote_draft,
     reject_draft,
 )
+from app.integrations.account_categorizer import load_rules_from_file
 from app.models.accounting import (
     DraftClassification,
     JournalEntry,
     JournalLine,
+    SourceDocument,
 )
-from app.models.enums import DraftStatus
+from app.models.enums import DraftKind, DraftStatus, OcrStatus
 from app.workers.jobs import dispatch_payload
 from tests.conftest import SeededWorld, ctx_firm_for_client
 
@@ -224,3 +227,97 @@ def test_reject_marks_terminal(world: SeededWorld, fake_integrations) -> None:
         d = sess.get(DraftClassification, draft_id)
         assert d is not None
         assert d.status is DraftStatus.REJECTED
+
+
+def test_promote_single_draft_learns_override_into_rules_yaml(
+    world: SeededWorld,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    a1 = world.a1
+    doc_id = uuid4()
+    draft_id = uuid4()
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        sess.add(
+            SourceDocument(
+                id=doc_id,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                kind=DraftKind.BANK_TRANSACTION.value,
+                original_filename="txn.pdf",
+                mime_type="application/pdf",
+                sha256="0" * 64,
+                storage_uri="mock://test/txn.pdf",
+                ocr_status=OcrStatus.COMPLETE,
+                uploaded_by="tester",
+            )
+        )
+        sess.flush()
+        sess.add(
+            DraftClassification(
+                id=draft_id,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                source_document_id=doc_id,
+                kind=DraftKind.BANK_TRANSACTION,
+                status=DraftStatus.PENDING_REVIEW,
+                needs_review=True,
+                high_confidence=False,
+                confidence=Decimal("0.70"),
+                model="mock",
+                prompt_version="mock-v1",
+                payload={
+                    "description": "ACH Payment ACME Services",
+                    "amount": "22.00",
+                    "direction": "payment",
+                    "proposed_account_code": "4000",
+                },
+            )
+        )
+
+    rules_file = tmp_path / "categorization_rules.yaml"
+    rules_file.write_text(
+        (
+            "rules:\n"
+            "  - name: Existing\n"
+            "    target_code: \"4000\"\n"
+            "    match: all\n"
+            "    conditions:\n"
+            "      - field: description\n"
+            "        operator: contains\n"
+            "        value: square\n"
+        ),
+        encoding="utf-8",
+    )
+
+    class _Settings:
+        app_categorizer_backend = "xero_rule_engine"
+        app_categorizer_rules_file = str(rules_file)
+
+    monkeypatch.setattr("app.domain.promotion.get_settings", lambda: _Settings())
+    monkeypatch.setattr("app.domain.promotion._reload_rules_runtime", lambda: None)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        _ = promote_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+            entry_date=date(2026, 3, 15),
+            lines=[
+                PromoteLineInput(account_id=a1.expense_account_id, debit=Decimal("22.00")),
+                PromoteLineInput(account_id=a1.cash_account_id, credit=Decimal("22.00")),
+            ],
+            memo="Review override",
+        )
+
+    learned = load_rules_from_file(rules_file)
+    assert learned[0].target_code == "5000"
+    assert learned[0].conditions[0].field == "direction"
+    assert learned[0].conditions[0].value == "payment"
+    assert learned[0].conditions[1].field == "description"
+    assert learned[0].conditions[1].operator == "contains"
+    assert learned[0].conditions[1].value == "ach payment acme services"

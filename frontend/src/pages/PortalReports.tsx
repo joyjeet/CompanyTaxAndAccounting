@@ -26,7 +26,7 @@ import { useAuth } from "../auth/AuthContext";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
-import { shortId } from "../lib/format";
+import { fmtDateTime, shortId } from "../lib/format";
 import ReportsTab from "./client/ReportsTab";
 
 const useStyles = makeStyles({
@@ -122,6 +122,8 @@ export default function PortalReports() {
                 <TableHeaderCell>Kind</TableHeaderCell>
                 <TableHeaderCell>Status</TableHeaderCell>
                 <TableHeaderCell>Format</TableHeaderCell>
+                <TableHeaderCell>Created At</TableHeaderCell>
+                <TableHeaderCell>Approved At</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>Size</TableHeaderCell>
                 <TableHeaderCell>SHA-256</TableHeaderCell>
                 <TableHeaderCell></TableHeaderCell>
@@ -143,6 +145,8 @@ export default function PortalReports() {
                       </Badge>
                     </TableCell>
                     <TableCell><code>{a.format}</code></TableCell>
+                    <TableCell>{fmtDateTime(a.generated_at)}</TableCell>
+                    <TableCell>{fmtDateTime(a.finalized_at)}</TableCell>
                     <TableCell className={styles.num}>{(a.size_bytes / 1024).toFixed(1)} KB</TableCell>
                     <TableCell><code>{shortId(a.plaintext_sha256)}</code></TableCell>
                     <TableCell>

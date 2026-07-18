@@ -138,6 +138,51 @@ def test_cash_flow_numbers(client: TestClient, world) -> None:
     assert body["cash_account_codes"] == ["1000"]
 
 
+def test_statement_previews_hide_zero_balance_heads(client: TestClient, world) -> None:
+    h = _auth(client, "firm_staff", world.firm_a)
+    _seed_activity(client, h, world.a1, world.a1.period_id)
+
+    pl = client.get(
+        "/statements/profit-and-loss",
+        headers=h,
+        params={"client_id": str(world.a1.client_id), "period_id": str(world.a1.period_id)},
+    )
+    assert pl.status_code == 200, pl.text
+    pl_body = pl.json()
+    assert all(Decimal(r["signed_balance"]) != Decimal("0") for r in pl_body["revenue"])
+    assert all(Decimal(r["signed_balance"]) != Decimal("0") for r in pl_body["expenses"])
+
+    bs = client.get(
+        "/statements/balance-sheet",
+        headers=h,
+        params={"client_id": str(world.a1.client_id), "period_id": str(world.a1.period_id)},
+    )
+    assert bs.status_code == 200, bs.text
+    bs_body = bs.json()
+    assert all(Decimal(r["signed_balance"]) != Decimal("0") for r in bs_body["assets"])
+    assert all(Decimal(r["signed_balance"]) != Decimal("0") for r in bs_body["liabilities"])
+    assert all(Decimal(r["signed_balance"]) != Decimal("0") for r in bs_body["equity"])
+
+    tb = client.get(
+        "/statements/trial-balance",
+        headers=h,
+        params={"client_id": str(world.a1.client_id), "period_id": str(world.a1.period_id)},
+    )
+    assert tb.status_code == 200, tb.text
+    tb_body = tb.json()
+    assert all(
+        not (
+            Decimal(r["debit_total"]) == Decimal("0")
+            and Decimal(r["credit_total"]) == Decimal("0")
+            and Decimal(r["signed_balance"]) == Decimal("0")
+        )
+        for r in tb_body["rows"]
+    )
+
+    # Totals still represent the complete trial balance and must remain balanced.
+    assert Decimal(tb_body["total_debits"]) == Decimal(tb_body["total_credits"])
+
+
 def test_pl_cross_firm_404(client: TestClient, world) -> None:
     h = _auth(client, "firm_staff", world.firm_a)
     r = client.get(

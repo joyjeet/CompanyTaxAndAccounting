@@ -149,6 +149,28 @@ export interface CoaOut {
   parent_account_id: string | null;
 }
 
+export interface RuleConditionOut {
+  field: string;
+  operator: string;
+  value: string;
+}
+
+export interface RuleOut {
+  name: string;
+  target_code: string;
+  match: string;
+  conditions: RuleConditionOut[];
+}
+
+export interface RulesEngineOut {
+  backend: string;
+  rules_file: string;
+  format: string;
+  content: string;
+  rule_count: number;
+  rules: RuleOut[];
+}
+
 // --------------------------------------------------------------------- //
 // Client profile (Phase 8c — entity + contact, editable by firm OR client)
 // --------------------------------------------------------------------- //
@@ -439,7 +461,9 @@ export interface ArtifactOut {
   plaintext_sha256: string;
   size_bytes: number;
   generated_by: string;
+  generated_at: string;
   finalized_by: string | null;
+  finalized_at: string | null;
   parameters: Record<string, unknown>;
 }
 
@@ -533,4 +557,13 @@ export interface AutoFillOut {
   skipped: AutoProposeSkipped[];
   already_existed: AutoProposeAlreadyExisted[];
   worksheet: WorksheetDetailOut;
+}
+
+export interface RulesetOut {
+  id: string;
+  entity_type: string;
+  tax_year: number;
+  version: string;
+  status: string;
+  required_forms: string[];
 }

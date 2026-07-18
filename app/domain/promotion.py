@@ -16,19 +16,34 @@ Idempotency:
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.db.tenant import AccessScope
+from app.core.config import get_settings
 from app.domain.audit import write_audit
 from app.domain.exceptions import DomainError
+from app.integrations import registry
+from app.integrations.account_categorizer import (
+    CategorizationRule,
+    RuleCondition,
+    load_rules_from_file,
+)
 from app.domain.ledger import LedgerService, LineInput
 from app.models.accounting import AccountingPeriod, ChartOfAccounts, DraftClassification
 from app.models.enums import AuditAction, DraftStatus
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - available in runtime image
+    yaml = None
 
 
 class PromotionForbiddenError(DomainError):
@@ -103,6 +118,16 @@ def promote_draft(
     draft.promoted_journal_entry_id = entry.id
     draft.reviewed_at = datetime.now(tz=UTC)
     draft.reviewed_by = actor
+    learned_rule_count = _learn_rule_from_single_promote(
+        sess,
+        draft=draft,
+        lines=lines,
+        memo=memo,
+    )
+    draft.payload = {
+        **(draft.payload or {}),
+        "_learned_rule_count": learned_rule_count,
+    }
     sess.flush()
 
     write_audit(
@@ -170,6 +195,205 @@ def reject_draft(
 class StatementPromotionResult:
     journal_entry_ids: list[UUID]
     skipped: list[dict[str, str]]  # [{"index": "3", "reason": "..."}]
+
+
+def _resolve_rules_file() -> Path:
+    settings = get_settings()
+    p = Path(settings.app_categorizer_rules_file)
+    if p.is_absolute():
+        return p
+    return Path.cwd() / p
+
+
+def _reload_rules_runtime() -> None:
+    # Re-wire categorizer/classifier so subsequent classifications pick up
+    # newly learned rules immediately.
+    registry.set_categorizer(None)
+    registry.set_classifier(None)
+    registry.bootstrap_from_settings()
+
+
+def _rules_to_text(rules: list[CategorizationRule]) -> str:
+    payload = {
+        "rules": [
+            {
+                "name": r.name,
+                "target_code": r.target_code,
+                "match": r.match,
+                "conditions": [
+                    {
+                        "field": c.field,
+                        "operator": c.operator,
+                        "value": c.value,
+                    }
+                    for c in r.conditions
+                ],
+            }
+            for r in rules
+        ]
+    }
+    if yaml is not None:
+        return yaml.safe_dump(payload, sort_keys=False)
+    return json.dumps(payload, indent=2)
+
+
+def _description_rule_key(description: str) -> str:
+    """Normalize a reviewer description into a stable matching key."""
+    s = description.strip().lower()
+    if not s:
+        return ""
+    # Strip volatile numeric references (check/invoice ids, etc.).
+    s = re.sub(r"\b\d+\b", " ", s)
+    # Keep simple searchable characters and collapse whitespace.
+    s = re.sub(r"[^a-z0-9\s&/-]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _learn_rules_from_overrides(
+    txns: list[dict],
+    overrides: dict[int, str],
+) -> int:
+    if not overrides:
+        return 0
+
+    settings = get_settings()
+    if settings.app_categorizer_backend != "xero_rule_engine":
+        return 0
+
+    rules_file = _resolve_rules_file()
+    existing_rules = list(load_rules_from_file(rules_file))
+
+    learned: list[CategorizationRule] = []
+    for idx, code in overrides.items():
+        if idx < 0 or idx >= len(txns):
+            continue
+        txn = txns[idx]
+        proposed = str(txn.get("proposed_account_code") or "").strip()
+        code = str(code or "").strip()
+        if not code or code == proposed:
+            continue
+
+        desc = " ".join(str(txn.get("description") or "").split())
+        desc_key = _description_rule_key(desc)
+        direction = str(txn.get("direction") or "").strip().lower()
+        if not desc_key or direction not in {"deposit", "payment"}:
+            continue
+
+        learned.append(
+            CategorizationRule(
+                name=f"Learned from review: {desc[:48]}",
+                target_code=code,
+                match="all",
+                conditions=(
+                    RuleCondition("direction", "equals", direction),
+                    RuleCondition("description", "contains", desc_key),
+                ),
+            )
+        )
+
+    if not learned:
+        return 0
+
+    # Replace any existing exact learned rule for the same direction+description;
+    # otherwise prepend so reviewer corrections take precedence.
+    new_rules = existing_rules.copy()
+    applied = 0
+    for lr in learned:
+        replaced = False
+        for i, r in enumerate(new_rules):
+            if len(r.conditions) != 2:
+                continue
+            d = next((c for c in r.conditions if c.field == "direction" and c.operator == "equals"), None)
+            desc = next(
+                (
+                    c
+                    for c in r.conditions
+                    if c.field == "description" and c.operator in {"equals", "contains"}
+                ),
+                None,
+            )
+            if d and desc:
+                if (
+                    d.value.lower() == lr.conditions[0].value.lower()
+                    and _description_rule_key(desc.value) == lr.conditions[1].value
+                ):
+                    new_rules[i] = lr
+                    replaced = True
+                    applied += 1
+                    break
+        if not replaced:
+            new_rules.insert(0, lr)
+            applied += 1
+
+    try:
+        rules_file.parent.mkdir(parents=True, exist_ok=True)
+        rules_file.write_text(_rules_to_text(new_rules), encoding="utf-8")
+        _reload_rules_runtime()
+    except Exception:
+        # Rule-learning is best-effort and must not block JE posting.
+        return 0
+    return applied
+
+
+def _learn_rule_from_single_promote(
+    sess: Session,
+    *,
+    draft: DraftClassification,
+    lines: list[PromoteLineInput],
+    memo: str | None = None,
+    cash_account_code: str = "1000",
+) -> int:
+    payload = draft.payload or {}
+    if payload.get("is_statement"):
+        return 0
+
+    direction = str(payload.get("direction") or "").strip().lower()
+    proposed = str(payload.get("proposed_account_code") or "").strip()
+    review_description = next(
+        (str(ln.description or "").strip() for ln in lines if str(ln.description or "").strip()),
+        "",
+    )
+    description = (
+        review_description
+        or str(payload.get("description") or "").strip()
+        or str(payload.get("memo") or "").strip()
+        or str(payload.get("merchant") or "").strip()
+        or str(memo or "").strip()
+    )
+    if direction not in {"deposit", "payment"} or not proposed or not description:
+        return 0
+
+    line_account_ids = [ln.account_id for ln in lines]
+    if not line_account_ids:
+        return 0
+
+    from sqlalchemy import select as _select  # local import to avoid cycle
+
+    accounts = (
+        sess.execute(
+            _select(ChartOfAccounts).where(
+                ChartOfAccounts.client_id == draft.client_id,
+                ChartOfAccounts.id.in_(line_account_ids),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_id = {a.id: a for a in accounts}
+    chosen_codes = [by_id[aid].code for aid in line_account_ids if aid in by_id]
+    chosen_non_cash = [code for code in chosen_codes if code != cash_account_code]
+    if not chosen_non_cash:
+        return 0
+
+    txns = [
+        {
+            "description": description,
+            "direction": direction,
+            "proposed_account_code": proposed,
+        }
+    ]
+    return _learn_rules_from_overrides(txns, {0: chosen_non_cash[0]})
 
 
 def promote_statement_draft(
@@ -356,6 +580,8 @@ def promote_statement_draft(
             "No transactions could be posted; draft left in pending review."
         )
 
+    learned_rule_count = _learn_rules_from_overrides(txns, overrides)
+
     draft.status = DraftStatus.PROMOTED
     draft.promoted_journal_entry_id = posted_ids[0]
     draft.reviewed_at = datetime.now(tz=UTC)
@@ -365,6 +591,7 @@ def promote_statement_draft(
         "_posted_journal_entry_ids": [str(j) for j in posted_ids],
         "_posted_count": len(posted_ids),
         "_skipped": skipped,
+        "_learned_rule_count": learned_rule_count,
     }
     sess.flush()
 
