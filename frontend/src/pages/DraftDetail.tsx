@@ -7,6 +7,9 @@ import {
   Field,
   Input,
   makeStyles,
+  MessageBar,
+  MessageBarBody,
+  MessageBarTitle,
   Option,
   OptionGroup,
   Spinner,
@@ -36,6 +39,13 @@ import type { CoaOut } from "../auth/types";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtMoney, shortId, todayIso } from "../lib/format";
+import {
+  periodCoversRange,
+  pickBestPeriod,
+  statementRangeFromTxns,
+  suggestPeriodName,
+  toWholeMonths,
+} from "../lib/statementPeriod";
 
 interface DraftLine {
   account_id: string;
@@ -274,6 +284,86 @@ export default function DraftDetail() {
     ? (payload.transactions as Array<Record<string, unknown>>)
     : [];
   const [txnOverrides, setTxnOverrides] = useState<Record<number, string>>({});
+
+  // ----- Statement period alignment --------------------------------------
+  // The backend clamps every transaction date into the selected period
+  // (`app/domain/promotion.py::_clamp`), so posting a July statement against
+  // a full-year period silently rewrites all 17 dates to Jan 1. We derive the
+  // statement's own span, pre-select a period that genuinely covers it, and
+  // make any mismatch loud instead of silent.
+  const statementRange = useMemo(() => statementRangeFromTxns(rawTxns), [rawTxns]);
+
+  const selectedPeriod = useMemo(
+    () => (periods.data ?? []).find((p) => p.id === periodId) ?? null,
+    [periods.data, periodId],
+  );
+  const periodMismatch =
+    statementRange !== null &&
+    selectedPeriod !== null &&
+    !periodCoversRange(selectedPeriod, statementRange);
+
+  // Auto-select the narrowest covering period. Guarded per draft+client so a
+  // reviewer's manual choice is never overwritten by a re-render or refetch.
+  const periodAutoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isStatement || !statementRange) return;
+    const rows = periods.data;
+    if (!rows || rows.length === 0) return;
+    const key = `${id}:${clientId}`;
+    if (periodAutoRef.current === key) return;
+    periodAutoRef.current = key;
+    if (periodId) return; // reviewer already chose one
+    const best = pickBestPeriod(rows, statementRange);
+    if (best) setPeriodId(best.id);
+  }, [isStatement, statementRange, periods.data, periodId, id, clientId]);
+
+  // "Custom period" inline form state.
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+
+  const createPeriod = useMutation({
+    mutationFn: (body: { name: string; start_date: string; end_date: string }) =>
+      api.createPeriod(clientId, body),
+    onSuccess: (created) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Period “{created.name}” created</ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      // Refresh the dropdown, then select the period we just made.
+      qc.invalidateQueries({ queryKey: ["periods", clientId] });
+      setPeriodId(created.id);
+      setCustomOpen(false);
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  /** Create a period snapped to the whole month(s) the statement falls in. */
+  const createPeriodFromStatement = () => {
+    if (!statementRange) return;
+    const snapped = toWholeMonths(statementRange);
+    createPeriod.mutate({
+      name: suggestPeriodName(statementRange),
+      start_date: snapped.start,
+      end_date: snapped.end,
+    });
+  };
+
+  const openCustomPeriod = () => {
+    // Pre-fill from the statement so the common case is one click away.
+    if (statementRange) {
+      const snapped = toWholeMonths(statementRange);
+      setCustomName(suggestPeriodName(statementRange));
+      setCustomStart(snapped.start);
+      setCustomEnd(snapped.end);
+    }
+    setCustomOpen(true);
+  };
 
   const promoteAll = useMutation({
     mutationFn: () => {
@@ -592,6 +682,36 @@ export default function DraftDetail() {
                     })}
                   </TableBody>
                 </Table>
+                {periodMismatch && statementRange && selectedPeriod && (
+                  <MessageBar intent="warning" style={{ marginTop: 12 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>
+                        This period does not cover the statement dates.
+                      </MessageBarTitle>
+                      <Body1 block>
+                        The statement runs <b>{statementRange.start}</b> to{" "}
+                        <b>{statementRange.end}</b>, but <b>{selectedPeriod.name}</b>{" "}
+                        runs {selectedPeriod.start_date} to {selectedPeriod.end_date}.
+                        Posting now would <b>silently move every out-of-range
+                        transaction</b> to the nearest period boundary — the
+                        amounts stay correct but the dates do not. Pick a
+                        matching period or create one below.
+                      </Body1>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {!statementRange && (
+                  <MessageBar intent="info" style={{ marginTop: 12 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>No transaction dates detected.</MessageBarTitle>
+                      <Body1 block>
+                        The parser could not infer a year for these rows, so the
+                        period cannot be checked automatically. Confirm the
+                        period manually before posting.
+                      </Body1>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
                   {!identity?.clientId && (
                     <Field label="Client" required>
@@ -609,27 +729,59 @@ export default function DraftDetail() {
                       </Dropdown>
                     </Field>
                   )}
-                  <Field label="Period" required>
+                  <Field
+                    label="Period"
+                    required
+                    hint={
+                      statementRange
+                        ? `Statement covers ${statementRange.start} → ${statementRange.end}`
+                        : "No dated rows found on this statement"
+                    }
+                  >
                     <Dropdown
                       placeholder="Select period"
-                      value={
-                        periods.data?.find((p) => p.id === periodId)?.name ?? ""
-                      }
+                      value={selectedPeriod?.name ?? ""}
                       selectedOptions={periodId ? [periodId] : []}
                       onOptionSelect={(_, dd) => setPeriodId(dd.optionValue ?? "")}
                     >
-                      {(periods.data ?? []).map((p) => (
-                        <Option
-                          key={p.id}
-                          value={p.id}
-                          text={p.is_locked ? `${p.name} (locked)` : p.name}
-                          disabled={p.is_locked}
-                        >
-                          {p.is_locked ? `${p.name} (locked)` : p.name}
-                        </Option>
-                      ))}
+                      {(periods.data ?? []).map((p) => {
+                        const covers =
+                          statementRange !== null && periodCoversRange(p, statementRange);
+                        const label = p.is_locked
+                          ? `${p.name} (locked)`
+                          : covers
+                            ? `${p.name} ✓ matches statement`
+                            : p.name;
+                        return (
+                          <Option
+                            key={p.id}
+                            value={p.id}
+                            text={label}
+                            disabled={p.is_locked}
+                          >
+                            {label}
+                          </Option>
+                        );
+                      })}
                     </Dropdown>
                   </Field>
+                  {statementRange && (
+                    <Button
+                      appearance="secondary"
+                      disabled={!clientId || createPeriod.isPending}
+                      onClick={createPeriodFromStatement}
+                      icon={createPeriod.isPending ? <Spinner size="tiny" /> : undefined}
+                    >
+                      Use statement period ({suggestPeriodName(statementRange)})
+                    </Button>
+                  )}
+                  <Button
+                    appearance="secondary"
+                    disabled={!clientId || createPeriod.isPending}
+                    onClick={openCustomPeriod}
+                  >
+                    Custom period…
+                  </Button>
                   <Button
                     appearance="primary"
                     disabled={!clientId || !periodId || promoteAll.isPending}
@@ -642,6 +794,73 @@ export default function DraftDetail() {
                     )}
                   </Button>
                 </div>
+                {customOpen && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: 12,
+                      display: "flex",
+                      gap: 12,
+                      alignItems: "flex-end",
+                      flexWrap: "wrap",
+                      backgroundColor: tokens.colorNeutralBackground2,
+                      borderRadius: tokens.borderRadiusMedium,
+                    }}
+                  >
+                    <Field label="Period name" required>
+                      <Input
+                        value={customName}
+                        onChange={(_, dd) => setCustomName(dd.value)}
+                        placeholder="e.g. Jul 2025"
+                      />
+                    </Field>
+                    <Field label="Start date" required>
+                      <Input
+                        type="date"
+                        value={customStart}
+                        onChange={(_, dd) => setCustomStart(dd.value)}
+                      />
+                    </Field>
+                    <Field label="End date" required>
+                      <Input
+                        type="date"
+                        value={customEnd}
+                        onChange={(_, dd) => setCustomEnd(dd.value)}
+                      />
+                    </Field>
+                    <Button
+                      appearance="primary"
+                      disabled={
+                        !customName.trim() ||
+                        !customStart ||
+                        !customEnd ||
+                        customStart > customEnd ||
+                        createPeriod.isPending
+                      }
+                      onClick={() =>
+                        createPeriod.mutate({
+                          name: customName.trim(),
+                          start_date: customStart,
+                          end_date: customEnd,
+                        })
+                      }
+                    >
+                      {createPeriod.isPending ? <Spinner size="tiny" /> : "Create & select"}
+                    </Button>
+                    <Button
+                      appearance="subtle"
+                      disabled={createPeriod.isPending}
+                      onClick={() => setCustomOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    {customStart > customEnd && customStart && customEnd && (
+                      <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>
+                        Start date must be on or before the end date.
+                      </Caption1>
+                    )}
+                  </div>
+                )}
               </>
             );
           })()}
