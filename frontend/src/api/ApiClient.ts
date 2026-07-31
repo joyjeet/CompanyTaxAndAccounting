@@ -10,7 +10,9 @@ import type {
   BalanceSheetOut,
   CashFlowOut,
   ClientOut,
+  CoaCreateIn,
   CoaOut,
+  CoaUpdateIn,
   RulesEngineOut,
   ClientProfileOut,
   ClientProfileUpsertIn,
@@ -137,16 +139,32 @@ export class ApiClient {
     return this.request<CoaOut[]>(`/clients/${clientId}/chart-of-accounts`);
   }
 
-  createAccount(
-    clientId: string,
-    body: {
-      code: string;
-      name: string;
-      account_type: string;
-      normal_balance: string;
-    },
-  ): Promise<CoaOut> {
+  createAccount(clientId: string, body: CoaCreateIn): Promise<CoaOut> {
     return this.json<CoaOut>(`/clients/${clientId}/chart-of-accounts`, "POST", body);
+  }
+
+  /** Partial update: rename, recode, retype, reparent, activate/deactivate. */
+  updateAccount(
+    clientId: string,
+    accountId: string,
+    body: CoaUpdateIn,
+  ): Promise<CoaOut> {
+    return this.json<CoaOut>(
+      `/clients/${clientId}/chart-of-accounts/${accountId}`,
+      "PATCH",
+      body,
+    );
+  }
+
+  /**
+   * Permanently removes an account. The API answers 409 when the account has
+   * journal lines or sub-accounts — deactivate those instead.
+   */
+  deleteAccount(clientId: string, accountId: string): Promise<void> {
+    return this.request<void>(
+      `/clients/${clientId}/chart-of-accounts/${accountId}`,
+      { method: "DELETE" },
+    );
   }
 
   // ----- Rules engine (admin) ------------------------------------ //

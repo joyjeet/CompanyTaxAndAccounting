@@ -144,9 +144,37 @@ export interface CoaOut {
   code: string;
   name: string;
   account_type: AccountType;
+  /** Derived from `account_type` by the backend — never sent on write. */
   normal_balance: NormalBalance;
   is_active: boolean;
   parent_account_id: string | null;
+  /** 0 for top-level accounts, +1 per ancestor. Drives row indentation. */
+  depth: number;
+  is_leaf: boolean;
+  /** >0 means the account cannot be removed, only deactivated. */
+  journal_line_count: number;
+  child_count: number;
+}
+
+export interface CoaCreateIn {
+  code: string;
+  name: string;
+  account_type: AccountType;
+  /** Omit or null for a top-level account. Must match the parent's type. */
+  parent_account_id?: string | null;
+}
+
+/**
+ * Partial update — only the supplied keys change. Omitting
+ * `parent_account_id` leaves the parent alone; sending `null` promotes the
+ * account to top level.
+ */
+export interface CoaUpdateIn {
+  code?: string;
+  name?: string;
+  account_type?: AccountType;
+  parent_account_id?: string | null;
+  is_active?: boolean;
 }
 
 export interface RuleConditionOut {
