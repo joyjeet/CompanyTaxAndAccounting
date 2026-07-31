@@ -6,6 +6,7 @@ than aborting the batch.
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
@@ -323,6 +324,179 @@ def test_promote_statement_persists_override_into_rules_file(
     assert learned[0].conditions[1].field == "description"
     assert learned[0].conditions[1].operator == "contains"
     assert learned[0].conditions[1].value == "staples order"
+
+
+def test_promote_statement_skips_dates_outside_the_period(
+    world: SeededWorld,
+) -> None:
+    """Out-of-period rows are skipped, NOT clamped to a period boundary.
+
+    The seeded period is 2026-01-01..2026-12-31. Clamping used to rewrite
+    both outlying dates to a period edge and post them with the right amount
+    and the wrong date, silently.
+    """
+    a1 = world.a1
+    txns = [
+        {
+            "date": "2026-07-05",  # inside the period
+            "description": "Square deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+        {
+            "date": "2025-12-28",  # before the period
+            "description": "Prior-year payment",
+            "amount": "60.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+        },
+        {
+            "date": "2027-01-03",  # after the period
+            "description": "Next-year payment",
+            "amount": "80.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+        )
+
+    # Only the in-period row posts; the other two are surfaced.
+    assert len(result.journal_entry_ids) == 1
+    assert [s["index"] for s in result.skipped] == ["1", "2"]
+    for s in result.skipped:
+        assert "outside the selected period" in s["reason"]
+        assert "2026-01-01..2026-12-31" in s["reason"]
+    assert "2025-12-28" in result.skipped[0]["reason"]
+    assert "2027-01-03" in result.skipped[1]["reason"]
+
+    # The surviving entry kept its true date — no clamping happened.
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        je = sess.get(JournalEntry, result.journal_entry_ids[0])
+        assert je is not None
+        assert je.entry_date == date(2026, 7, 5)
+
+
+def test_promote_statement_refuses_when_every_row_is_out_of_period(
+    world: SeededWorld,
+) -> None:
+    """A wholly-mismatched period posts nothing and leaves the draft open."""
+    a1 = world.a1
+    txns = [
+        {
+            "date": "2025-07-05",
+            "description": "Square deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+        {
+            "date": "2025-07-15",
+            "description": "Office supplies",
+            "amount": "40.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with pytest.raises(AlreadyPromotedError) as exc:
+        with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+            promote_statement_draft(
+                sess,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                actor="reviewer",
+                scope=AccessScope.FIRM,
+                draft_id=draft_id,
+                period_id=a1.period_id,
+            )
+    assert "No transactions could be posted" in str(exc.value)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        d = sess.get(DraftClassification, draft_id)
+        assert d is not None
+        assert d.status is DraftStatus.PENDING_REVIEW
+
+
+def test_promote_statement_skips_unparseable_dates(world: SeededWorld) -> None:
+    a1 = world.a1
+    txns = [
+        {
+            "date": "07/05/2026",  # not ISO 8601
+            "description": "Square deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with pytest.raises(AlreadyPromotedError):
+        with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+            promote_statement_draft(
+                sess,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                actor="reviewer",
+                scope=AccessScope.FIRM,
+                draft_id=draft_id,
+                period_id=a1.period_id,
+            )
+
+
+def test_promote_statement_undated_row_falls_back_to_period_start(
+    world: SeededWorld,
+) -> None:
+    """A row the parser could not date still posts, at the period start.
+
+    `bank_statement._format_date` yields "" when the statement header carries
+    no inferable year. Skipping those would make such a statement post
+    nothing, so the fallback is deliberate — it is the one remaining case
+    where the posted date is not the transaction's own.
+    """
+    a1 = world.a1
+    txns = [
+        {
+            "date": "",
+            "raw_date": "07/05",
+            "description": "Undated deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+        )
+
+    assert len(result.journal_entry_ids) == 1
+    assert result.skipped == []
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        je = sess.get(JournalEntry, result.journal_entry_ids[0])
+        assert je is not None
+        assert je.entry_date == date(2026, 1, 1)
 
 
 def test_promote_statement_rejects_non_statement_draft(

@@ -426,9 +426,16 @@ def promote_statement_draft(
     index without re-running OCR (e.g. transaction 0 -> code "4100").
 
     Transactions whose code can't be resolved (missing from the client's
-    chart of accounts) are skipped and surfaced in `skipped[]`. The
-    remaining transactions still post — partial success is preferred over
-    all-or-nothing for demo realism.
+    chart of accounts), or whose date falls outside `period_id`, are skipped
+    and surfaced in `skipped[]`. The remaining transactions still post —
+    partial success is preferred over all-or-nothing for demo realism.
+
+    A transaction date is never adjusted to fit the period. Posting a July
+    statement against a full-year period used to clamp every date to the
+    period boundary, which silently falsified them; such rows are now
+    skipped so the caller must pick a period that actually covers the
+    statement. Rows the parser could not date at all (no year inferable from
+    the statement header) still fall back to the period start date.
 
     The draft is marked PROMOTED iff at least one JE was posted, and
     `promoted_journal_entry_id` is set to the first posted entry. All JE
@@ -488,12 +495,33 @@ def promote_statement_draft(
     skipped: list[dict[str, str]] = []
     ledger = LedgerService(sess, firm_id=firm_id, client_id=client_id, actor=actor)
 
-    def _clamp(d: date) -> date:
-        if d < period.start_date:
-            return period.start_date
-        if d > period.end_date:
-            return period.end_date
-        return d
+    def _resolve_entry_date(txn: dict) -> tuple[date | None, str]:
+        """Resolve a transaction's posting date. Returns (date, skip_reason).
+
+        A date outside the period is NEVER moved to a period boundary.
+        `LedgerService.post` refuses an out-of-period entry_date, so clamping
+        was the only way such a row could post — and it posted with a
+        falsified date (right amount, wrong date, nothing surfaced). The row
+        is skipped instead, so the caller sees the period mismatch.
+        """
+        iso = (txn.get("date") or "").strip()
+        if not iso:
+            # The parser could not infer a year for this row — see
+            # `bank_statement._format_date`, which yields "" when the statement
+            # header carries no year. There is no date to honour, so the
+            # period start stands in.
+            return period.start_date, ""
+        try:
+            d = date.fromisoformat(iso)
+        except ValueError:
+            return None, f"unparseable date '{iso}'"
+        if not (period.start_date <= d <= period.end_date):
+            return None, (
+                f"transaction date {d.isoformat()} is outside the selected "
+                f"period {period.start_date.isoformat()}.."
+                f"{period.end_date.isoformat()}"
+            )
+        return d, ""
 
     for idx, txn in enumerate(txns):
         code = overrides.get(idx) or txn.get("proposed_account_code") or ""
@@ -555,14 +583,10 @@ def promote_statement_draft(
             )
             continue
 
-        # Parse the txn's ISO date (set by the parser); fall back to period start.
-        entry_date = period.start_date
-        iso = (txn.get("date") or "").strip()
-        if iso:
-            try:
-                entry_date = _clamp(date.fromisoformat(iso))
-            except ValueError:
-                pass
+        entry_date, date_reason = _resolve_entry_date(txn)
+        if entry_date is None:
+            skipped.append({"index": str(idx), "reason": date_reason})
+            continue
 
         memo = (txn.get("description") or "")[:120] or "Bank statement transaction"
 
