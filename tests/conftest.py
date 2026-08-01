@@ -34,6 +34,9 @@ from app.models.enums import AccountType, NormalBalance
 # Tables that need TRUNCATE between tests (CASCADE handles ordering, but
 # children-first is the conservative ordering).
 _TENANT_TABLES = (
+    "firm_invite",
+    "firm_membership",
+    "user_account",
     "generated_artifact",
     "tax_worksheet_line",
     "tax_worksheet",

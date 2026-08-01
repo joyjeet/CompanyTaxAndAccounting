@@ -17,6 +17,7 @@ import {
   DocumentBulletList24Regular,
   Home24Regular,
   PersonCircle24Regular,
+  PeopleTeam24Regular,
   TaskListSquareLtr24Regular,
   Wrench24Regular,
 } from "@fluentui/react-icons";
@@ -40,6 +41,7 @@ const FIRM_NAV: NavItem[] = [
   { to: "/clients", label: "Clients", icon: <BookContacts24Regular /> },
   { to: "/review", label: "Review queue", icon: <ClipboardTaskListLtr24Regular /> },
   { to: "/rules-engine", label: "Rules engine", icon: <Wrench24Regular /> },
+  { to: "/team", label: "Team access", icon: <PeopleTeam24Regular /> },
   { to: "/artifacts", label: "Artifacts", icon: <DocumentBulletList24Regular /> },
   { to: "/tax/forms", label: "Tax forms", icon: <TaskListSquareLtr24Regular /> },
 ];
@@ -146,12 +148,22 @@ const useStyles = makeStyles({
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
+  const api = useApi();
   const { identity, client, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const api = useApi();
 
   const isFirm = identity?.role === "firm_staff";
   const nav = isFirm ? FIRM_NAV : PORTAL_NAV;
+  const team = useQuery({
+    queryKey: ["team", "summary", "shell"],
+    queryFn: () => api.listTeamMembers(),
+    enabled: Boolean(isFirm),
+    staleTime: 60_000,
+  });
+  const effectiveRole = isFirm && identity && team.data
+    ? team.data.members.find((m) => m.subject === identity.sub)?.role ?? null
+    : null;
 
   // Drives the Review-queue badge. Shares its cache key with the Dashboard,
   // which already fetches exactly this, so it costs no extra request.
@@ -180,6 +192,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <Badge appearance="tint" color={isFirm ? "brand" : "informative"}>
                 {isFirm ? "Firm staff" : "Client portal"}
               </Badge>
+              {effectiveRole && (
+                <Badge appearance="outline" color="brand">
+                  {effectiveRole.replaceAll("_", " ")}
+                </Badge>
+              )}
               <div className={styles.identity}>
                 <Text size={200} weight="semibold">
                   {identity.sub}

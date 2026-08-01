@@ -1,4 +1,5 @@
 import {
+  Button,
   Badge,
   Body1,
   Caption1,
@@ -8,6 +9,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import {
+  PeopleTeam24Regular,
   BookContacts24Regular,
   ClipboardTaskListLtr24Regular,
   Document24Regular,
@@ -72,6 +74,11 @@ const useStyles = makeStyles({
     gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
     gap: "16px",
   },
+  quickActions: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "8px",
+  },
 });
 
 function Kpi({
@@ -110,10 +117,20 @@ export default function Dashboard() {
     queryKey: ["artifacts"],
     queryFn: () => api.listArtifacts(),
   });
+  const team = useQuery({
+    queryKey: ["team", "summary"],
+    queryFn: () => api.listTeamMembers(),
+  });
 
-  const anyError = clients.error || drafts.error || docs.error || artifacts.error;
+  const anyError = clients.error || drafts.error || docs.error || artifacts.error || team.error;
   const anyLoading =
-    clients.isLoading || drafts.isLoading || docs.isLoading || artifacts.isLoading;
+    clients.isLoading || drafts.isLoading || docs.isLoading || artifacts.isLoading || team.isLoading;
+
+  const teamMembersCount = team.data?.members.length ?? 0;
+  const pendingInvitesCount =
+    team.data?.invites.filter((i) => i.status === "pending").length ?? 0;
+  const disabledMembersCount =
+    team.data?.members.filter((m) => m.status === "disabled").length ?? 0;
 
   return (
     <div>
@@ -148,6 +165,11 @@ export default function Dashboard() {
           icon={<DocumentBulletList24Regular />}
           label="Artifacts"
           value={anyLoading ? "…" : artifacts.data?.length ?? 0}
+        />
+        <Kpi
+          icon={<PeopleTeam24Regular />}
+          label="Team members"
+          value={anyLoading ? "…" : teamMembersCount}
         />
       </div>
 
@@ -310,6 +332,53 @@ export default function Dashboard() {
                   </Link>
                 );
               })}
+            </div>
+          )}
+        </Section>
+
+        <Section
+          title="Team access"
+          subtitle="Membership, invites, and role health"
+          help={{
+            title: "Why this matters",
+            body: (
+              <>
+                Team access controls who can review drafts, generate final
+                artifacts, and manage client records. Keep pending invites and
+                disabled accounts tidy to reduce access drift.
+              </>
+            ),
+          }}
+        >
+          {team.isLoading && <LoadingState />}
+          {team.data && (
+            <div style={{ display: "grid", gap: 10 }}>
+              <div className={styles.list}>
+                <div className={styles.listItem}>
+                  <Text>Members</Text>
+                  <Badge appearance="filled" color="brand">{teamMembersCount}</Badge>
+                </div>
+                <div className={styles.listItem}>
+                  <Text>Pending invites</Text>
+                  <Badge appearance="tint" color={pendingInvitesCount > 0 ? "warning" : "success"}>
+                    {pendingInvitesCount}
+                  </Badge>
+                </div>
+                <div className={styles.listItem}>
+                  <Text>Disabled members</Text>
+                  <Badge appearance="tint" color={disabledMembersCount > 0 ? "danger" : "success"}>
+                    {disabledMembersCount}
+                  </Badge>
+                </div>
+              </div>
+              <div className={styles.quickActions}>
+                <Link to="/team" style={{ textDecoration: "none" }}>
+                  <Button appearance="primary">Open team access</Button>
+                </Link>
+                <Link to="/team" style={{ textDecoration: "none" }}>
+                  <Button appearance="secondary">Create or accept invite</Button>
+                </Link>
+              </div>
             </div>
           )}
         </Section>

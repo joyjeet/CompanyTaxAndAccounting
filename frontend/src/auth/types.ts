@@ -34,10 +34,21 @@ export interface DraftOut {
 // --------------------------------------------------------------------- //
 // Documents
 // --------------------------------------------------------------------- //
+export type DocumentKind =
+  | "generic"
+  | "bank_transaction"
+  | "invoice"
+  | "receipt"
+  | "tax_form"
+  | "tax_form_w2"
+  | "tax_form_1099_nec"
+  | "tax_form_1099_int"
+  | "tax_form_1098";
+
 export interface DocumentOut {
   id: string;
   client_id: string;
-  kind: string;
+  kind: DocumentKind;
   filename: string | null;
   content_type: string | null;
   sha256: string;
@@ -65,7 +76,7 @@ export interface ExtractedField {
 export interface DocumentDetailOut {
   id: string;
   client_id: string;
-  kind: string;
+  kind: DocumentKind;
   filename: string | null;
   content_type: string | null;
   sha256: string;
@@ -594,4 +605,47 @@ export interface RulesetOut {
   version: string;
   status: string;
   required_forms: string[];
+}
+
+// --------------------------------------------------------------------- //
+// Team management (Sprint 3)
+// --------------------------------------------------------------------- //
+export type StaffRole =
+  | "firm_owner"
+  | "firm_admin"
+  | "manager"
+  | "staff"
+  | "read_only"
+  | "client_portal";
+
+export type MembershipStatus = "active" | "disabled";
+export type InviteStatus = "pending" | "accepted" | "canceled" | "expired";
+
+export interface TeamMemberOut {
+  id: string;
+  user_id: string;
+  subject: string;
+  email: string | null;
+  role: StaffRole;
+  status: MembershipStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamInviteOut {
+  id: string;
+  email: string;
+  role: StaffRole;
+  status: InviteStatus;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface TeamInviteCreateOut extends TeamInviteOut {
+  invite_token: string;
+}
+
+export interface TeamSummaryOut {
+  members: TeamMemberOut[];
+  invites: TeamInviteOut[];
 }

@@ -33,6 +33,8 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
+import { roleDisplayName } from "../auth/firmRole";
+import { useFirmRole } from "../auth/useFirmRole";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
@@ -55,6 +57,7 @@ const useStyles = makeStyles({
 export default function ClientList() {
   const styles = useStyles();
   const api = useApi();
+  const { capabilities, role } = useFirmRole();
   const qc = useQueryClient();
   const toasterId = useId("clients-toaster");
   const { dispatchToast } = useToastController(toasterId);
@@ -124,7 +127,11 @@ export default function ClientList() {
         </div>
         <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
           <DialogTrigger disableButtonEnhancement>
-            <Button appearance="primary" icon={<AddRegular />}>
+            <Button
+              appearance="primary"
+              icon={<AddRegular />}
+              disabled={!capabilities.canCreateClient}
+            >
               New client
             </Button>
           </DialogTrigger>
@@ -165,6 +172,12 @@ export default function ClientList() {
           </DialogSurface>
         </Dialog>
       </div>
+
+      {!capabilities.canCreateClient && (
+        <Caption1 block style={{ marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+          Your role ({role ? roleDisplayName(role) : "unknown"}) cannot create clients.
+        </Caption1>
+      )}
 
       <Section title={`${clients.data?.length ?? 0} clients`}>
         {clients.isLoading && <LoadingState />}

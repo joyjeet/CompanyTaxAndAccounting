@@ -30,11 +30,15 @@ from app.models.enums import (
     EntityType,
     FormTemplateStatus,
     Industry,
+    InviteStatus,
     JournalEntryStatus,
+    MembershipStatus,
     NormalBalance,
     OcrStatus,
     ReconciliationStatus,
+    StaffRole,
 )
+from app.models.identity import FirmInvite, FirmMembership, UserAccount
 
 __all__ = [
     "AccountingPeriod",
@@ -62,12 +66,18 @@ __all__ = [
     "FormTemplate",
     "FormTemplateStatus",
     "Industry",
+    "InviteStatus",
     "JournalEntry",
     "JournalEntryStatus",
     "JournalLine",
+    "MembershipStatus",
     "NormalBalance",
     "OcrStatus",
     "Reconciliation",
     "ReconciliationStatus",
+    "StaffRole",
     "SourceDocument",
+    "FirmInvite",
+    "FirmMembership",
+    "UserAccount",
 ]

@@ -18,6 +18,7 @@ from app.api.routes import (
     reports,
     rules_engine,
     statements_preview,
+    team,
     tax,
 )
 from app.core.config import get_settings
@@ -75,6 +76,7 @@ def create_app() -> FastAPI:
     app.include_router(tax.router)
     app.include_router(reports.router)
     app.include_router(rules_engine.router)
+    app.include_router(team.router)
 
     # Admin routes (Phase 7) — crypto-shred + audit export. Gated on firm
     # admin scope inside the router itself.

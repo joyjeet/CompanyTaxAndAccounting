@@ -14,7 +14,7 @@ import type { Identity } from "./types";
 export interface DevLoginRequest {
   sub: string;
   role: "firm_staff" | "client_portal";
-  firmId: string;
+  firmId?: string;
   clientId?: string;
 }
 

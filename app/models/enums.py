@@ -82,6 +82,32 @@ class AuditAction(enum.StrEnum):
     ENTITY_FORM_RULESET_ACTIVATE = "entity_form_ruleset_activate"
     TAX_WORKSHEET_REJECT = "tax_worksheet_reject"
     TAX_WORKSHEET_SUPERSEDE = "tax_worksheet_supersede"
+    USER_INVITE_CREATE = "user_invite_create"
+    USER_INVITE_CANCEL = "user_invite_cancel"
+    USER_INVITE_ACCEPT = "user_invite_accept"
+    USER_ROLE_UPDATE = "user_role_update"
+    USER_STATUS_UPDATE = "user_status_update"
+
+
+class StaffRole(enum.StrEnum):
+    FIRM_OWNER = "firm_owner"
+    FIRM_ADMIN = "firm_admin"
+    MANAGER = "manager"
+    STAFF = "staff"
+    READ_ONLY = "read_only"
+    CLIENT_PORTAL = "client_portal"
+
+
+class MembershipStatus(enum.StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class InviteStatus(enum.StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
 
 
 class OcrStatus(enum.StrEnum):

@@ -456,6 +456,11 @@ def unlock_period(
         end_date=p.end_date,
         is_locked=p.is_locked,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Chart of Accounts
+# --------------------------------------------------------------------------- #
 @router.get("/{client_id}/chart-of-accounts", response_model=list[CoaOut])
 def list_chart_of_accounts(
     client_id: UUID,
