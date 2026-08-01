@@ -17,6 +17,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
+import { roleDisplayName } from "../auth/firmRole";
+import { useFirmRole } from "../auth/useFirmRole";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
@@ -30,6 +32,7 @@ const useStyles = makeStyles({
 export default function ReviewQueue() {
   const styles = useStyles();
   const api = useApi();
+  const { capabilities, role, isLoading: roleLoading } = useFirmRole();
   const drafts = useQuery({
     queryKey: ["drafts", "pending"],
     queryFn: () => api.listDrafts(true),
@@ -68,6 +71,19 @@ export default function ReviewQueue() {
         <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
           AI-classified drafts awaiting human review and promotion to journal entries.
         </Caption1>
+        {roleLoading ? (
+          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+            Resolving your team role...
+          </Caption1>
+        ) : !capabilities.canPromoteDrafts ? (
+          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+            Your role ({role ? roleDisplayName(role) : "unknown"}) can review drafts but cannot promote or reject them.
+          </Caption1>
+        ) : (
+          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+            You can review, promote, and reject drafts.
+          </Caption1>
+        )}
       </div>
 
       <Section title={`${drafts.data?.length ?? 0} pending drafts`}>
@@ -84,6 +100,7 @@ export default function ReviewQueue() {
                 <TableHeaderCell>Confidence</TableHeaderCell>
                 <TableHeaderCell>Model</TableHeaderCell>
                 <TableHeaderCell>Source document</TableHeaderCell>
+                <TableHeaderCell>Posting access</TableHeaderCell>
                 <TableHeaderCell></TableHeaderCell>
               </TableRow>
             </TableHeader>
@@ -105,6 +122,11 @@ export default function ReviewQueue() {
                     </TableCell>
                     <TableCell>
                       <code>{shortId(d.source_document_id)}</code>
+                    </TableCell>
+                    <TableCell>
+                      <Badge appearance="tint" color={capabilities.canPromoteDrafts ? "success" : "warning"}>
+                        {capabilities.canPromoteDrafts ? "can post" : "read only"}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       <Link to={`/drafts/${d.id}`}>

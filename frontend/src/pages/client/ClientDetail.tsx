@@ -21,7 +21,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { useApi } from "../../api/useApi";
 import { ErrorState, LoadingState } from "../../components/States";
@@ -78,6 +78,23 @@ const ALL_TABS: string[] = [
 ];
 type TabId = string;
 
+const TAB_IDS: TabId[] = [
+  "overview",
+  "profile",
+  "periods",
+  "accounts",
+  "documents",
+  "journal",
+  "statements",
+  "reports",
+  "tax",
+  "artifacts",
+];
+
+function isTabId(value: string | null): value is TabId {
+  return !!value && TAB_IDS.includes(value as TabId);
+}
+
 const useStyles = makeStyles({
   header: { marginBottom: "16px" },
   crumbs: {
@@ -119,15 +136,21 @@ export default function ClientDetail() {
   const styles = useStyles();
   const { id = "", tab: tabParam } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const api = useApi();
+  const qTab = searchParams.get("tab");
+  const pathTab: TabId | null =
+    tabParam && ALL_TABS.includes(tabParam) ? (tabParam as TabId) : null;
+  const tab: TabId = isTabId(qTab) ? qTab : pathTab ?? "overview";
 
-  // An unknown tab in the URL falls back to Overview rather than rendering
-  // a blank page.
-  const tab: TabId =
-    tabParam && ALL_TABS.includes(tabParam) ? tabParam : "overview";
-
-  const selectTab = (next: string) =>
+  const selectTab = (next: string) => {
+    setSearchParams((prev) => {
+      const nextParams = new URLSearchParams(prev);
+      nextParams.set("tab", next);
+      return nextParams;
+    });
     navigate(next === "overview" ? `/clients/${id}` : `/clients/${id}/${next}`);
+  };
 
   const client = useQuery({
     queryKey: ["client", id],

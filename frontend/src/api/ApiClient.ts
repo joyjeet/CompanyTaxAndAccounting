@@ -38,6 +38,13 @@ import type {
   WorksheetOut,
   AutoProposeOut,
   AutoFillOut,
+  TeamInviteCreateOut,
+  TeamInviteOut,
+  TeamMemberOut,
+  TeamSummaryOut,
+  MembershipStatus,
+  StaffRole,
+  DocumentKind,
 } from "../auth/types";
 
 export class ApiError extends Error {
@@ -176,6 +183,35 @@ export class ApiClient {
     return this.json<RulesEngineOut>("/admin/rules-engine", "PUT", { content });
   }
 
+  // ----- Team management ----------------------------------------- //
+  listTeamMembers(): Promise<TeamSummaryOut> {
+    return this.request<TeamSummaryOut>("/team/members");
+  }
+
+  createTeamInvite(body: {
+    email: string;
+    role: StaffRole;
+    expires_in_days?: number;
+  }): Promise<TeamInviteCreateOut> {
+    return this.json<TeamInviteCreateOut>("/team/invites", "POST", body);
+  }
+
+  cancelTeamInvite(inviteId: string): Promise<TeamInviteOut> {
+    return this.json<TeamInviteOut>(`/team/invites/${inviteId}/cancel`, "POST", {});
+  }
+
+  acceptTeamInvite(token: string): Promise<TeamMemberOut> {
+    return this.json<TeamMemberOut>("/team/invites/accept", "POST", { token });
+  }
+
+  updateTeamMemberRole(memberId: string, role: StaffRole): Promise<TeamMemberOut> {
+    return this.json<TeamMemberOut>(`/team/members/${memberId}/role`, "POST", { role });
+  }
+
+  updateTeamMemberStatus(memberId: string, status: MembershipStatus): Promise<TeamMemberOut> {
+    return this.json<TeamMemberOut>(`/team/members/${memberId}/status`, "POST", { status });
+  }
+
   // ----- Documents ----------------------------------------------- //
   listDocuments(): Promise<DocumentOut[]> {
     return this.request<DocumentOut[]>("/documents");
@@ -219,6 +255,10 @@ export class ApiClient {
       method: "POST",
       body: fd,
     });
+  }
+
+  updateDocumentKind(id: string, kind: DocumentKind): Promise<DocumentOut> {
+    return this.json<DocumentOut>(`/documents/${id}/kind`, "POST", { kind });
   }
 
   // ----- Drafts -------------------------------------------------- //

@@ -35,6 +35,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
 import { useAuth } from "../auth/AuthContext";
+import { useFirmRole } from "../auth/useFirmRole";
 import type { CoaOut } from "../auth/types";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
@@ -46,6 +47,11 @@ import {
   suggestPeriodName,
   toWholeMonths,
 } from "../lib/statementPeriod";
+import {
+  promoteAllDisabledReason,
+  promoteDisabledReason,
+  rejectDisabledReason,
+} from "./draftActionGate";
 
 interface DraftLine {
   account_id: string;
@@ -90,6 +96,7 @@ export default function DraftDetail() {
   const api = useApi();
   const qc = useQueryClient();
   const { identity } = useAuth();
+  const { capabilities, role } = useFirmRole();
   const toasterId = useId("draft-toaster");
   const { dispatchToast } = useToastController(toasterId);
 
@@ -128,6 +135,13 @@ export default function DraftDetail() {
     () => new Map((accounts.data ?? []).map((a) => [a.code, a])),
     [accounts.data],
   );
+  const suspenseAccount = useMemo(() => {
+    const rows = accounts.data ?? [];
+    return (
+      rows.find((a) => /suspense|uncategor/i.test(a.name)) ??
+      rows.find((a) => a.code === "9999")
+    );
+  }, [accounts.data]);
   const groupedAccounts = useMemo(() => {
     const buckets = new Map<string, CoaOut[]>();
     for (const type of ACCOUNT_TYPE_ORDER) buckets.set(type, []);
@@ -148,7 +162,15 @@ export default function DraftDetail() {
 
   const accountLabelByCode = (code: string): string => {
     const acct = accountCodeMap.get(code);
-    if (!acct) return code;
+    if (!acct) {
+      if (code === "9999") {
+        if (suspenseAccount) {
+          return `${suspenseAccount.code} - ${suspenseAccount.name}`;
+        }
+        return "9999 - Suspense account";
+      }
+      return code;
+    }
     return `${acct.code} - ${acct.name}`;
   };
 
@@ -205,7 +227,7 @@ export default function DraftDetail() {
       const amount = String(payload.amount ?? "");
       const date = String(payload.date ?? "");
       const memoVal = String(payload.memo ?? payload.merchant ?? "");
-      const debitAcct = byCode.get(code) ?? accts.find((a) => a.code === "9999");
+      const debitAcct = byCode.get(code) ?? suspenseAccount ?? accts.find((a) => a.code === "9999");
       if (memoVal) setMemo(memoVal);
       if (date) setEntryDate(date);
       setAmountLines(debitAcct, cash, amount, memoVal);
@@ -405,6 +427,21 @@ export default function DraftDetail() {
 
   const d = draft.data;
   const conf = Number.parseFloat(d.confidence);
+  const canPromoteDrafts = capabilities.canPromoteDrafts;
+  const blockedReason = rejectDisabledReason({ canPromoteDrafts, role });
+  const promoteAllReason = promoteAllDisabledReason({
+    canPromoteDrafts,
+    role,
+    clientId,
+    periodId,
+  });
+  const promoteReason = promoteDisabledReason({
+    canPromoteDrafts,
+    role,
+    clientId,
+    periodId,
+    balanced: totals.balanced,
+  });
 
   const renderAccountOptions = () => (
     <>
@@ -640,7 +677,11 @@ export default function DraftDetail() {
                   <TableBody>
                     {rawTxns.map((t, i) => {
                       const proposed = String(t.proposed_account_code ?? "");
-                      const current = txnOverrides[i] ?? proposed;
+                      const normalizedProposed =
+                        accountCodeMap.has(proposed)
+                          ? proposed
+                          : (suspenseAccount?.code ?? proposed);
+                      const current = txnOverrides[i] ?? normalizedProposed;
                       const acct = accountCodeMap.get(current);
                       const dir = String(t.direction ?? "");
                       return (
@@ -784,7 +825,8 @@ export default function DraftDetail() {
                   </Button>
                   <Button
                     appearance="primary"
-                    disabled={!clientId || !periodId || promoteAll.isPending}
+                    disabled={!canPromoteDrafts || !clientId || !periodId || promoteAll.isPending}
+                    title={promoteAllReason}
                     onClick={() => promoteAll.mutate()}
                   >
                     {promoteAll.isPending ? (
@@ -860,6 +902,11 @@ export default function DraftDetail() {
                       </Caption1>
                     )}
                   </div>
+                )}
+                {!canPromoteDrafts && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {blockedReason}
+                  </Caption1>
                 )}
               </>
             );
@@ -1032,11 +1079,17 @@ export default function DraftDetail() {
           <div>
             <Button
               appearance="primary"
-              disabled={!clientId || !periodId || !totals.balanced || promote.isPending}
+              disabled={!canPromoteDrafts || !clientId || !periodId || !totals.balanced || promote.isPending}
+              title={promoteReason}
               onClick={() => promote.mutate()}
             >
               {promote.isPending ? <Spinner size="tiny" /> : "Promote to journal entry"}
             </Button>
+            {!canPromoteDrafts && (
+              <Caption1 block style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+                {blockedReason}
+              </Caption1>
+            )}
           </div>
         </div>
       </Section>
@@ -1065,11 +1118,17 @@ export default function DraftDetail() {
         <div style={{ marginTop: 12 }}>
           <Button
             appearance="secondary"
-            disabled={reject.isPending}
+            disabled={!canPromoteDrafts || reject.isPending}
+            title={blockedReason}
             onClick={() => reject.mutate()}
           >
             Reject draft
           </Button>
+          {!canPromoteDrafts && (
+            <Caption1 block style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+              {blockedReason}
+            </Caption1>
+          )}
         </div>
       </Section>
     </div>
