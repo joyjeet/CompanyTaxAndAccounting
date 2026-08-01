@@ -110,6 +110,9 @@ param acrLoginServer string = ''
 @description('ACR resource name. Required when `acrLoginServer` is set so we can create the AcrPull role assignment inside the same resource group.')
 param acrName string = ''
 
+@description('Resource group that contains the shared ACR used by the container apps.')
+param acrResourceGroup string = 'rg-ctax-shared-cus'
+
 var commonTags = {
   app: namePrefix
   env: env
@@ -172,7 +175,7 @@ module identity 'modules/identity.bicep' = {
 }
 
 module acrPull 'modules/acrRoleAssignment.bicep' = if (!empty(acrName)) {
-  scope: rg
+  scope: resourceGroup(acrResourceGroup)
   name: 'acrPull'
   params: {
     acrName: acrName
