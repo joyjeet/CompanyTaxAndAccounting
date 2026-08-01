@@ -36,7 +36,7 @@ jobs:
       DATABASE_OWNER_URL: "postgresql+psycopg://ctaa_owner_test:owner_test@localhost:5432/ctaa_test"
       DATABASE_URL: "postgresql+psycopg://app_user_test:app_user_test@localhost:5432/ctaa_test"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
