@@ -34,7 +34,7 @@ resource ag 'Microsoft.Insights/actionGroups@2024-10-01-preview' = {
 }
 
 // Log alert: auth failure spike
-resource alertAuthFail 'Microsoft.Insights/scheduledQueryRules@2024-01-01-preview' = {
+resource alertAuthFail 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
   name: 'alert-auth-failure-spike'
   location: location
   tags: tags
@@ -60,7 +60,7 @@ resource alertAuthFail 'Microsoft.Insights/scheduledQueryRules@2024-01-01-previe
 }
 
 // Log alert: RLS error
-resource alertRlsErr 'Microsoft.Insights/scheduledQueryRules@2024-01-01-preview' = {
+resource alertRlsErr 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
   name: 'alert-rls-error'
   location: location
   tags: tags
@@ -86,7 +86,7 @@ resource alertRlsErr 'Microsoft.Insights/scheduledQueryRules@2024-01-01-preview'
 }
 
 // Log alert: failed migrations
-resource alertMigration 'Microsoft.Insights/scheduledQueryRules@2024-01-01-preview' = {
+resource alertMigration 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
   name: 'alert-migration-failure'
   location: location
   tags: tags
@@ -112,7 +112,7 @@ resource alertMigration 'Microsoft.Insights/scheduledQueryRules@2024-01-01-previ
 }
 
 // Log alert: backup failure (Postgres/Storage backup signals routed via diag settings)
-resource alertBackup 'Microsoft.Insights/scheduledQueryRules@2024-01-01-preview' = {
+resource alertBackup 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
   name: 'alert-backup-failure'
   location: location
   tags: tags

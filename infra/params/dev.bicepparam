@@ -4,12 +4,12 @@
 using '../main.bicep'
 
 param env = 'dev'
-param location = 'eastus2'
-param locationShort = 'eus'
+param location = 'centralus'
+param locationShort = 'cus'
 
 // CI fills these in (built per commit).
-param apiImage = 'ctaadeveus.azurecr.io/ctaa-api:dev'
-param workerImage = 'ctaadeveus.azurecr.io/ctaa-worker:dev'
+param apiImage = 'ctaadevcus.azurecr.io/ctaa-api:dev'
+param workerImage = 'ctaadevcus.azurecr.io/ctaa-worker:dev'
 
 // Sourced at deploy time via:
 //   --parameters postgresAdminPassword=$(az keyvault secret show --vault-name <bootstrap-kv> --name pg-admin-pwd --query value -o tsv)

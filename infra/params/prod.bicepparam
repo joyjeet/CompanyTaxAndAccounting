@@ -1,11 +1,11 @@
 using '../main.bicep'
 
 param env = 'prod'
-param location = 'eastus2'
-param locationShort = 'eus'
+param location = 'centralus'
+param locationShort = 'cus'
 
-param apiImage = 'ctaaprodeus.azurecr.io/ctaa-api:prod'
-param workerImage = 'ctaaprodeus.azurecr.io/ctaa-worker:prod'
+param apiImage = 'ctaaprodcus.azurecr.io/ctaa-api:prod'
+param workerImage = 'ctaaprodcus.azurecr.io/ctaa-worker:prod'
 
 param postgresAdminPassword = ''
 
