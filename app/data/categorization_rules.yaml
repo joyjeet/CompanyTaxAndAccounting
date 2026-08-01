@@ -1,0 +1,91 @@
+rules:
+  - name: Loan transactions
+    target_code: "2400"
+    match: all
+    conditions:
+      - field: description
+        operator: contains
+        value: loan
+
+  - name: SBA loan transactions
+    target_code: "2400"
+    match: all
+    conditions:
+      - field: description
+        operator: contains
+        value: sba
+
+  - name: Rent
+    target_code: "5200"
+    match: all
+    conditions:
+      - field: description
+        operator: contains
+        value: rent
+
+  - name: Bank fees
+    target_code: "5100"
+    match: any
+    conditions:
+      - field: description
+        operator: contains
+        value: service charge
+      - field: description
+        operator: contains
+        value: monthly fee
+      - field: description
+        operator: contains
+        value: nsf
+      - field: description
+        operator: contains
+        value: overdraft
+
+  - name: Sales revenue from card/mobile deposits
+    target_code: "4000"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: deposit
+      - field: description
+        operator: contains
+        value: square
+
+  - name: Professional fees
+    target_code: "5300"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: contains
+        value: consult
+
+  - name: Zelle payment to company -> Office expense
+    target_code: "7500"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: contains
+        value: zelle
+      - field: description
+        operator: regex
+        value: "\\b(llc|inc|corp|co\\.?|company|ltd)\\b"
+
+  - name: Zelle payment to person -> Personal expense (owner draw)
+    target_code: "3070"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: contains
+        value: zelle
+      - field: description
+        operator: regex
+        value: "\\b(mr|mrs|ms|dr)\\.?\\s+[A-Za-z]+|\\b[A-Z][a-z]+\\s+[A-Z][a-z]+\\b"

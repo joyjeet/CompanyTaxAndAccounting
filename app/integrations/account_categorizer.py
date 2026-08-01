@@ -190,7 +190,9 @@ _XERO_STYLE_RULES: tuple[CategorizationRule, ...] = (
     ),
 )
 
-DEFAULT_RULES_FILE = Path(__file__).resolve().parents[2] / "data" / "categorization_rules.yaml"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RULES_FILE = _REPO_ROOT / "app" / "data" / "categorization_rules.yaml"
+LEGACY_RULES_FILE = _REPO_ROOT / "data" / "categorization_rules.yaml"
 
 
 def _parse_rules_obj(obj: Any, *, strict: bool) -> tuple[CategorizationRule, ...]:
@@ -308,6 +310,8 @@ def load_rules_from_file(path: str | Path) -> tuple[CategorizationRule, ...]:
     available even when operators edit rules incorrectly.
     """
     p = Path(path)
+    if not p.exists() and p == DEFAULT_RULES_FILE and LEGACY_RULES_FILE.exists():
+        p = LEGACY_RULES_FILE
     if not p.exists():
         return _XERO_STYLE_RULES
 

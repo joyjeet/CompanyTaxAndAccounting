@@ -130,7 +130,7 @@ class Settings(BaseSettings):
     app_categorizer_backend: Literal[
         "xero_rule_engine", "dictionary", "azure_openai"
     ] = "xero_rule_engine"
-    app_categorizer_rules_file: str = "data/categorization_rules.yaml"
+    app_categorizer_rules_file: str = "app/data/categorization_rules.yaml"
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None
     azure_openai_api_version: str = "2024-08-01-preview"
