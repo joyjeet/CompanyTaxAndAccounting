@@ -45,6 +45,7 @@ LOCATION_SHORT="${LOCATION_SHORT:-cus}"
 NAME_PREFIX="${NAME_PREFIX:-ctax}"
 ENV_NAME="${ENV_NAME:-demo}"
 TTL_HOURS="${TTL_HOURS:-24}"
+AUTO_TEARDOWN="${AUTO_TEARDOWN:-true}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -57,6 +58,10 @@ RECEIPT="$RESULTS_DIR/deploy.json"
 
 log() { printf '\n=== %s ===\n' "$*" | tee -a "$LOG_FILE"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+if [[ "${ENV_NAME,,}" == "prod" || "${ENV_NAME,,}" == "production" ]]; then
+  fail "deploy_azure_customer.sh is demo-only and must not be used for production. Use the CI/CD prod workflow with infra/main.bicep + infra/params/prod.bicepparam."
+fi
 
 # Tee all subsequent output into the log too.
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -228,15 +233,19 @@ fi
 # ----------------------------------------------------------------------------
 # 9. Schedule auto-teardown.
 # ----------------------------------------------------------------------------
-log "Scheduling auto-teardown at $EXPIRES_AT"
-./scripts/schedule_azure_teardown.sh \
-    --resource-group "$RG_NAME" \
-    --expires-at "$EXPIRES_AT" \
-    --subscription "$SUBSCRIPTION_ID" \
-    --shared-rg "$ACR_RG" \
-    --location "$LOCATION" \
-    --name-prefix "$NAME_PREFIX" \
-  || echo "WARNING: schedule_azure_teardown.sh failed — you must run scripts/teardown_azure_customer.sh manually."
+if [[ "$AUTO_TEARDOWN" == "true" ]]; then
+    log "Scheduling auto-teardown at $EXPIRES_AT"
+    ./scripts/schedule_azure_teardown.sh \
+        --resource-group "$RG_NAME" \
+        --expires-at "$EXPIRES_AT" \
+        --subscription "$SUBSCRIPTION_ID" \
+        --shared-rg "$ACR_RG" \
+        --location "$LOCATION" \
+        --name-prefix "$NAME_PREFIX" \
+      || echo "WARNING: schedule_azure_teardown.sh failed — you must run scripts/teardown_azure_customer.sh manually."
+else
+    log "Skipping auto-teardown scheduling"
+fi
 
 # ----------------------------------------------------------------------------
 # 10. Receipt + handoff
@@ -246,6 +255,7 @@ cat > "$RECEIPT" <<EOF
   "timestamp":         "$TS",
   "expiresAt":         "$EXPIRES_AT",
   "ttlHours":          $TTL_HOURS,
+    "autoTeardownScheduled": $AUTO_TEARDOWN,
   "subscriptionId":    "$SUBSCRIPTION_ID",
   "resourceGroup":     "$RG_NAME",
   "sharedAcrGroup":    "$ACR_RG",
@@ -263,6 +273,10 @@ cat > "$RECEIPT" <<EOF
 }
 EOF
 
+if [[ "$AUTO_TEARDOWN" != "true" ]]; then
+        echo "NOTE: auto-teardown is disabled for this deploy; remember to tear it down manually." | tee -a "$LOG_FILE"
+fi
+
 cat <<EOF
 
 
@@ -271,7 +285,7 @@ cat <<EOF
 ============================================================================
   Customer URL :  https://$UI_FQDN
   API URL      :  https://$API_FQDN
-  Resource group: $RG_NAME    (expires $EXPIRES_AT)
+    Resource group: $RG_NAME    ($([[ "$AUTO_TEARDOWN" == "true" ]] && echo "expires $EXPIRES_AT" || echo "auto teardown disabled"))
 
   Login instructions for the customer:
     1. Open https://$UI_FQDN/login

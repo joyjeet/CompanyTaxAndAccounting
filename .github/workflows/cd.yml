@@ -2,15 +2,15 @@ name: CD
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
     inputs:
       target_env:
         description: 'Target environment'
         required: true
-        default: 'staging'
+        default: 'dev'
         type: choice
-        options: ['staging', 'prod']
+        options: ['dev', 'prod']
 
 # Trust boundary: production deploy requires the protected
 # `prod` environment in GitHub repo settings, which enforces
@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cd-${{ github.event.inputs.target_env || 'staging' }}
+  group: cd-${{ github.event.inputs.target_env || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -67,12 +67,12 @@ jobs:
           docker tag "${{ steps.image.outputs.api_image }}" "${{ steps.image.outputs.worker_image }}"
           docker push "${{ steps.image.outputs.worker_image }}"
 
-  deploy-staging:
+  deploy-dev:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment:
-      name: staging
-    if: ${{ github.event_name == 'push' || github.event.inputs.target_env == 'staging' }}
+      name: dev
+    if: ${{ (github.event_name == 'push' && github.ref_name == 'dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'dev') }}
     steps:
       - uses: actions/checkout@v4
       - uses: azure/login@v2
@@ -80,34 +80,50 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy staging
+      - name: Deploy dev
         run: |
           PG_PWD=$(az keyvault secret show \
             --vault-name "${{ vars.BOOTSTRAP_KV }}" \
-            --name pg-admin-pwd-staging \
+            --name "${{ vars.PG_ADMIN_SECRET_NAME }}" \
             --query value -o tsv)
-          az deployment sub create \
-            --location eastus2 \
-            --name "ctaa-staging-${{ github.run_id }}" \
+
+          az deployment sub what-if \
+            --location "${{ vars.AZURE_LOCATION }}" \
+            --name "ctaa-dev-whatif-${{ github.run_id }}" \
             --template-file infra/main.bicep \
-            --parameters infra/params/staging.bicepparam \
+            --parameters infra/params/dev.bicepparam \
+            --parameters \
+              apiImage="${{ needs.build-and-push.outputs.api_image }}" \
+              workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              postgresAdminPassword="$PG_PWD" \
+            -o none
+
+          az deployment sub create \
+            --location "${{ vars.AZURE_LOCATION }}" \
+            --name "ctaa-dev-${{ github.run_id }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/params/dev.bicepparam \
             --parameters \
               apiImage="${{ needs.build-and-push.outputs.api_image }}" \
               workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
         run: |
-          az containerapp job start \
-            --name "ca-ctaa-staging-eus-migrate" \
-            --resource-group "rg-ctaa-staging-eus" || \
-            echo "Migration job not found — first deploy. Skipping."
+          if [[ -n "${{ vars.MIGRATION_JOB_NAME }}" && -n "${{ vars.RESOURCE_GROUP }}" ]]; then
+            az containerapp job start \
+              --name "${{ vars.MIGRATION_JOB_NAME }}" \
+              --resource-group "${{ vars.RESOURCE_GROUP }}" || \
+              echo "Migration job not found — first deploy. Skipping."
+          else
+            echo "MIGRATION_JOB_NAME or RESOURCE_GROUP vars not configured for dev environment; skipping migration job trigger."
+          fi
 
   deploy-prod:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment:
       name: prod
-    if: ${{ github.event.inputs.target_env == 'prod' }}
+    if: ${{ (github.event_name == 'push' && github.ref_name == 'main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'prod') }}
     steps:
       - uses: actions/checkout@v4
       - uses: azure/login@v2
@@ -115,14 +131,58 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Safety check - ensure prod template/params
+        run: |
+          grep -q "using '../main.bicep'" infra/params/prod.bicepparam
+          grep -q "param env = 'prod'" infra/params/prod.bicepparam
+          if grep -q "main-demo.bicep" infra/params/prod.bicepparam; then
+            echo "Refusing to deploy prod with demo template."
+            exit 1
+          fi
+      - name: Safety check - block destructive what-if changes
+        run: |
+          PG_PWD=$(az keyvault secret show \
+            --vault-name "${{ vars.BOOTSTRAP_KV }}" \
+            --name "${{ vars.PG_ADMIN_SECRET_NAME }}" \
+            --query value -o tsv)
+
+          az deployment sub what-if \
+            --location "${{ vars.AZURE_LOCATION }}" \
+            --name "ctaa-prod-whatif-${{ github.run_id }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/params/prod.bicepparam \
+            --parameters \
+              apiImage="${{ needs.build-and-push.outputs.api_image }}" \
+              workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              postgresAdminPassword="$PG_PWD" \
+            -o json > whatif-prod.json
+
+          python3 - <<'PY'
+import json
+import sys
+
+with open('whatif-prod.json', 'r', encoding='utf-8') as f:
+    data = json.load(f)
+
+changes = data.get('changes', [])
+deletes = [c for c in changes if c.get('changeType') == 'Delete']
+
+if deletes:
+    print('Refusing prod deploy: what-if reported Delete operations:')
+    for item in deletes:
+        print('-', item.get('resourceId', '<unknown-resource>'))
+    sys.exit(1)
+
+print('Prod what-if safety passed: no Delete operations detected.')
+PY
       - name: Deploy prod
         run: |
           PG_PWD=$(az keyvault secret show \
             --vault-name "${{ vars.BOOTSTRAP_KV }}" \
-            --name pg-admin-pwd-prod \
+            --name "${{ vars.PG_ADMIN_SECRET_NAME }}" \
             --query value -o tsv)
           az deployment sub create \
-            --location eastus2 \
+            --location "${{ vars.AZURE_LOCATION }}" \
             --name "ctaa-prod-${{ github.run_id }}" \
             --template-file infra/main.bicep \
             --parameters infra/params/prod.bicepparam \
@@ -132,6 +192,10 @@ jobs:
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
         run: |
-          az containerapp job start \
-            --name "ca-ctaa-prod-eus-migrate" \
-            --resource-group "rg-ctaa-prod-eus"
+          if [[ -n "${{ vars.MIGRATION_JOB_NAME }}" && -n "${{ vars.RESOURCE_GROUP }}" ]]; then
+            az containerapp job start \
+              --name "${{ vars.MIGRATION_JOB_NAME }}" \
+              --resource-group "${{ vars.RESOURCE_GROUP }}"
+          else
+            echo "MIGRATION_JOB_NAME or RESOURCE_GROUP vars not configured for prod environment; skipping migration job trigger."
+          fi
