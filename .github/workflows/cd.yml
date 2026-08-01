@@ -157,24 +157,13 @@ jobs:
               postgresAdminPassword="$PG_PWD" \
             -o json > whatif-prod.json
 
-          python3 - <<'PY'
-import json
-import sys
+          if jq -e '.changes[]? | select(.changeType == "Delete")' whatif-prod.json >/dev/null; then
+            echo "Refusing prod deploy: what-if reported Delete operations:"
+            jq -r '.changes[]? | select(.changeType == "Delete") | .resourceId // "<unknown-resource>"' whatif-prod.json | sed 's/^/- /'
+            exit 1
+          fi
 
-with open('whatif-prod.json', 'r', encoding='utf-8') as f:
-    data = json.load(f)
-
-changes = data.get('changes', [])
-deletes = [c for c in changes if c.get('changeType') == 'Delete']
-
-if deletes:
-    print('Refusing prod deploy: what-if reported Delete operations:')
-    for item in deletes:
-        print('-', item.get('resourceId', '<unknown-resource>'))
-    sys.exit(1)
-
-print('Prod what-if safety passed: no Delete operations detected.')
-PY
+          echo "Prod what-if safety passed: no Delete operations detected."
       - name: Deploy prod
         run: |
           PG_PWD=$(az keyvault secret show \
