@@ -306,6 +306,14 @@ export default function DraftDetail() {
     ? (payload.transactions as Array<Record<string, unknown>>)
     : [];
   const [txnOverrides, setTxnOverrides] = useState<Record<number, string>>({});
+  const [txnDecisions, setTxnDecisions] = useState<Record<number, "accept" | "reject">>({});
+
+  const acceptedTxnCount = useMemo(
+    () => rawTxns.reduce((n, _t, i) => n + ((txnDecisions[i] ?? "accept") === "accept" ? 1 : 0), 0),
+    [rawTxns, txnDecisions],
+  );
+
+  const rejectTxnCount = rawTxns.length - acceptedTxnCount;
 
   // ----- Statement period alignment --------------------------------------
   // The backend clamps every transaction date into the selected period
@@ -393,11 +401,22 @@ export default function DraftDetail() {
       for (const [idx, code] of Object.entries(txnOverrides)) {
         if (code) overrides[String(idx)] = code;
       }
+      const acceptedIndexes: number[] = [];
+      const rejectedIndexes: number[] = [];
+      for (let i = 0; i < rawTxns.length; i += 1) {
+        if ((txnDecisions[i] ?? "accept") === "accept") {
+          acceptedIndexes.push(i);
+        } else {
+          rejectedIndexes.push(i);
+        }
+      }
       return api.promoteStatementDraft(id, {
         client_id: clientId || undefined,
         period_id: periodId,
         cash_account_code: "1000",
         account_overrides: Object.keys(overrides).length ? overrides : undefined,
+        accepted_indexes: acceptedIndexes,
+        rejected_indexes: rejectedIndexes,
       });
     },
     onSuccess: (res) => {
@@ -605,8 +624,10 @@ export default function DraftDetail() {
             body: (
               <>
                 The classifier parsed each line of the statement into a
-                proposed transaction. Clicking <b>Post all transactions</b>
-                creates <b>one balanced journal entry per row</b> against
+                proposed transaction. You can mark rows as <b>Accept</b> or
+                <b>Reject</b> individually (or all at once). Clicking
+                <b> Post accepted transactions</b> creates <b>one balanced
+                journal entry per accepted row</b> against
                 the selected period — deposits get DR Cash / CR &lt;income
                 or other&gt;, payments get DR &lt;expense&gt; / CR Cash.
                 <br /><br />
@@ -667,6 +688,7 @@ export default function DraftDetail() {
                 <Table size="extra-small" style={{ marginTop: 8 }}>
                   <TableHeader>
                     <TableRow>
+                      <TableHeaderCell>Decision</TableHeaderCell>
                       <TableHeaderCell>Date</TableHeaderCell>
                       <TableHeaderCell>Description</TableHeaderCell>
                       <TableHeaderCell>Direction</TableHeaderCell>
@@ -684,8 +706,31 @@ export default function DraftDetail() {
                       const current = txnOverrides[i] ?? normalizedProposed;
                       const acct = accountCodeMap.get(current);
                       const dir = String(t.direction ?? "");
+                      const decision = txnDecisions[i] ?? "accept";
                       return (
                         <TableRow key={i}>
+                          <TableCell>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <Button
+                                size="small"
+                                appearance={decision === "accept" ? "primary" : "secondary"}
+                                onClick={() =>
+                                  setTxnDecisions((prev) => ({ ...prev, [i]: "accept" }))
+                                }
+                              >
+                                Accept
+                              </Button>
+                              <Button
+                                size="small"
+                                appearance={decision === "reject" ? "primary" : "secondary"}
+                                onClick={() =>
+                                  setTxnDecisions((prev) => ({ ...prev, [i]: "reject" }))
+                                }
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <code>{String(t.raw_date ?? t.date ?? "")}</code>
                           </TableCell>
@@ -723,6 +768,31 @@ export default function DraftDetail() {
                     })}
                   </TableBody>
                 </Table>
+                <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <Button
+                    appearance="secondary"
+                    onClick={() => {
+                      const next: Record<number, "accept" | "reject"> = {};
+                      for (let i = 0; i < rawTxns.length; i += 1) next[i] = "accept";
+                      setTxnDecisions(next);
+                    }}
+                  >
+                    Accept all on page
+                  </Button>
+                  <Button
+                    appearance="secondary"
+                    onClick={() => {
+                      const next: Record<number, "accept" | "reject"> = {};
+                      for (let i = 0; i < rawTxns.length; i += 1) next[i] = "reject";
+                      setTxnDecisions(next);
+                    }}
+                  >
+                    Reject all on page
+                  </Button>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {acceptedTxnCount} accepted, {rejectTxnCount} rejected.
+                  </Caption1>
+                </div>
                 {periodMismatch && statementRange && selectedPeriod && (
                   <MessageBar intent="warning" style={{ marginTop: 12 }}>
                     <MessageBarBody>
@@ -746,9 +816,9 @@ export default function DraftDetail() {
                     <MessageBarBody>
                       <MessageBarTitle>No transaction dates detected.</MessageBarTitle>
                       <Body1 block>
-                        The parser could not infer a year for these rows, so the
-                        period cannot be checked automatically. Confirm the
-                        period manually before posting.
+                        The parser could not infer full calendar dates for these
+                        rows, so the period cannot be checked automatically.
+                        Confirm the period manually before posting.
                       </Body1>
                     </MessageBarBody>
                   </MessageBar>
@@ -825,17 +895,22 @@ export default function DraftDetail() {
                   </Button>
                   <Button
                     appearance="primary"
-                    disabled={!canPromoteDrafts || !clientId || !periodId || promoteAll.isPending}
+                    disabled={!canPromoteDrafts || !clientId || !periodId || promoteAll.isPending || acceptedTxnCount === 0}
                     title={promoteAllReason}
                     onClick={() => promoteAll.mutate()}
                   >
                     {promoteAll.isPending ? (
                       <Spinner size="tiny" />
                     ) : (
-                      `Post all ${rawTxns.length} transactions`
+                      `Post ${acceptedTxnCount} accepted transaction${acceptedTxnCount === 1 ? "" : "s"}`
                     )}
                   </Button>
                 </div>
+                {acceptedTxnCount === 0 && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 6 }}>
+                    Accept at least one transaction to post, or use Reject draft below.
+                  </Caption1>
+                )}
                 {customOpen && (
                   <div
                     style={{

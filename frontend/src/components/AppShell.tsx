@@ -151,7 +151,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const api = useApi();
   const { identity, client, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const api = useApi();
 
   const isFirm = identity?.role === "firm_staff";
   const nav = isFirm ? FIRM_NAV : PORTAL_NAV;

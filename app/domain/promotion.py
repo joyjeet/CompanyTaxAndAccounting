@@ -407,6 +407,8 @@ def promote_statement_draft(
     period_id: UUID,
     cash_account_code: str = "1000",
     account_overrides: dict[int, str] | None = None,
+    accepted_indexes: set[int] | None = None,
+    rejected_indexes: set[int] | None = None,
 ) -> StatementPromotionResult:
     """Post one balanced JE per transaction in a bank-statement draft.
 
@@ -491,6 +493,17 @@ def promote_statement_draft(
         )
 
     overrides = account_overrides or {}
+    accepted = {
+        i
+        for i in (accepted_indexes or set())
+        if i >= 0
+    }
+    rejected = {
+        i
+        for i in (rejected_indexes or set())
+        if i >= 0
+    }
+
     posted_ids: list[UUID] = []
     skipped: list[dict[str, str]] = []
     ledger = LedgerService(sess, firm_id=firm_id, client_id=client_id, actor=actor)
@@ -524,6 +537,13 @@ def promote_statement_draft(
         return d, ""
 
     for idx, txn in enumerate(txns):
+        if accepted and idx not in accepted:
+            skipped.append({"index": str(idx), "reason": "rejected by reviewer"})
+            continue
+        if idx in rejected:
+            skipped.append({"index": str(idx), "reason": "rejected by reviewer"})
+            continue
+
         code = overrides.get(idx) or txn.get("proposed_account_code") or ""
         code = str(code).strip()
         if not code:
@@ -630,6 +650,8 @@ def promote_statement_draft(
         details={
             "journal_entry_ids": [str(j) for j in posted_ids],
             "skipped_count": len(skipped),
+            "accepted_count": len(accepted),
+            "rejected_count": len(rejected),
             "period_id": str(period_id),
             "kind": "bank_statement",
         },

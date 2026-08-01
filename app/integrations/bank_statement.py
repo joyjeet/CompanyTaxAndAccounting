@@ -37,6 +37,7 @@ Direction → suggested chart-of-accounts mapping uses the demo seed COA:
 """
 from __future__ import annotations
 
+from datetime import date
 import re
 from typing import Any
 
@@ -161,6 +162,48 @@ def _infer_year_from_period(text: str) -> int | None:
         return None
 
 
+def _parse_period_bounds(text: str) -> tuple[date, date] | None:
+    """Parse statement period bounds from header when available."""
+    m = _PERIOD_RE.search(text)
+    if not m:
+        return None
+    try:
+        start = date.fromisoformat(_date_text_to_iso(m.group(1).strip()))
+        end = date.fromisoformat(_date_text_to_iso(m.group(2).strip()))
+    except ValueError:
+        return None
+    if start > end:
+        return None
+    return start, end
+
+
+def _date_text_to_iso(value: str) -> str:
+    """Convert 'Jul 31 2025' style values to ISO 8601 for date parsing."""
+    month_map = {
+        "jan": "01",
+        "feb": "02",
+        "mar": "03",
+        "apr": "04",
+        "may": "05",
+        "jun": "06",
+        "jul": "07",
+        "aug": "08",
+        "sep": "09",
+        "oct": "10",
+        "nov": "11",
+        "dec": "12",
+    }
+    parts = value.split()
+    if len(parts) != 3:
+        raise ValueError(f"unsupported period date: {value}")
+    mon = month_map.get(parts[0][:3].lower())
+    if mon is None:
+        raise ValueError(f"unsupported month: {parts[0]}")
+    day = int(parts[1])
+    year = int(parts[2])
+    return f"{year:04d}-{mon}-{day:02d}"
+
+
 def _propose_account_code(description: str, direction: str) -> str:
     """Look up an account code for a transaction.
 
@@ -204,15 +247,70 @@ def _parse_amount(token: str) -> str:
     return token.replace(",", "")
 
 
-def _format_date(m_raw: str, d_raw: str, year: int | None) -> tuple[str, str]:
-    """Return (iso_date_or_empty, raw_date). Year inferred from period."""
+def _resolve_date(
+    m_raw: str,
+    d_raw: str,
+    y_raw: str | None,
+    *,
+    period_bounds: tuple[date, date] | None,
+    previous_date: date | None,
+) -> tuple[str, str, date | None]:
+    """Return (iso_date_or_empty, raw_date, resolved_date).
+
+    Date resolution is continuous: we choose the best year candidate based on
+    statement period bounds when present, and otherwise on neighboring
+    transactions, instead of forcing every row into one fixed year.
+    """
     raw = f"{m_raw.zfill(2)}/{d_raw.zfill(2)}"
-    if year is None:
-        return "", raw
+    month = int(m_raw)
+    day = int(d_raw)
+
+    candidate_years: set[int] = set()
+    if y_raw:
+        y = int(y_raw)
+        if y < 100:
+            y += 2000
+        candidate_years.add(y)
+    if period_bounds:
+        start, end = period_bounds
+        for y in range(start.year - 1, end.year + 2):
+            candidate_years.add(y)
+    if previous_date:
+        candidate_years.update({previous_date.year - 1, previous_date.year, previous_date.year + 1})
+
+    if not candidate_years:
+        return "", raw, None
+
+    candidates: list[date] = []
     try:
-        return f"{year:04d}-{int(m_raw):02d}-{int(d_raw):02d}", raw
+        for y in sorted(candidate_years):
+            try:
+                candidates.append(date(y, month, day))
+            except ValueError:
+                continue
     except ValueError:
-        return "", raw
+        return "", raw, None
+
+    if not candidates:
+        return "", raw, None
+
+    if period_bounds:
+        start, end = period_bounds
+        in_range = [d for d in candidates if start <= d <= end]
+        if in_range:
+            chosen = (
+                min(in_range, key=lambda d: abs((d - previous_date).days))
+                if previous_date
+                else min(in_range)
+            )
+            return chosen.isoformat(), raw, chosen
+
+    if previous_date is not None:
+        chosen = min(candidates, key=lambda d: abs((d - previous_date).days))
+        return chosen.isoformat(), raw, chosen
+
+    chosen = min(candidates)
+    return chosen.isoformat(), raw, chosen
 
 
 def parse_statement(text: str) -> dict[str, Any]:
@@ -223,7 +321,7 @@ def parse_statement(text: str) -> dict[str, Any]:
     if not looks_like_bank_statement(text):
         return {"is_statement": False}
 
-    year = _infer_year_from_period(text)
+    period_bounds = _parse_period_bounds(text)
     period_match = _PERIOD_RE.search(text)
     period = (
         f"{period_match.group(1).strip()} - {period_match.group(2).strip()}"
@@ -241,6 +339,7 @@ def parse_statement(text: str) -> dict[str, Any]:
             ending = amt
 
     transactions: list[dict[str, Any]] = []
+    previous_date: date | None = None
     current_section = ""
 
     # Walk line by line. A "transaction line" starts with a MM/DD date and
@@ -350,7 +449,13 @@ def parse_statement(text: str) -> dict[str, Any]:
             if current_section in _PAYMENT_SECTIONS
             else "deposit"  # fallback if no section header was seen yet
         )
-        iso_date, raw_date = _format_date(date_m.group(1), date_m.group(2), year)
+        iso_date, raw_date, resolved_date = _resolve_date(
+            date_m.group(1),
+            date_m.group(2),
+            date_m.group(3),
+            period_bounds=period_bounds,
+            previous_date=previous_date,
+        )
         code = _propose_account_code(desc, direction)
 
         transactions.append(
@@ -364,6 +469,8 @@ def parse_statement(text: str) -> dict[str, Any]:
                 "proposed_account_code": code,
             }
         )
+        if resolved_date is not None:
+            previous_date = resolved_date
         i = next_i
 
     # Pull the account-holder name: the line right above "STATEMENT OF

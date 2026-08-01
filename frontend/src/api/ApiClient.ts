@@ -296,6 +296,8 @@ export class ApiClient {
       period_id: string;
       cash_account_code?: string;
       account_overrides?: Record<string, string>;
+      accepted_indexes?: number[];
+      rejected_indexes?: number[];
     },
   ): Promise<{ journal_entry_ids: string[]; skipped: Array<{ index: string; reason: string }> }> {
     return this.json(`/drafts/${draftId}/promote-all`, "POST", body);

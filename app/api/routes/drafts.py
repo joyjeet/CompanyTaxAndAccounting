@@ -173,6 +173,9 @@ class StatementPromoteIn(BaseModel):
     # Optional remap: {"3": "4100", "7": "5200"} — transaction index -> code.
     # Keyed as strings so JSON-from-the-wire stays clean.
     account_overrides: dict[str, str] | None = None
+    # Optional row decisions from the review UI.
+    accepted_indexes: list[int] | None = None
+    rejected_indexes: list[int] | None = None
 
 
 class StatementPromoteOut(BaseModel):
@@ -225,6 +228,8 @@ def promote_all(
             period_id=body.period_id,
             cash_account_code=body.cash_account_code,
             account_overrides=overrides,
+            accepted_indexes=set(body.accepted_indexes or []),
+            rejected_indexes=set(body.rejected_indexes or []),
         )
     except PromotionForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
