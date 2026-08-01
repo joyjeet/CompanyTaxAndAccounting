@@ -210,3 +210,44 @@ def test_classifier_uses_di_extra_transactions_when_present() -> None:
     assert result.payload["account_holder"] == "JANE DOE"
     assert result.payload["beginning_balance"] == "5000.00"
     assert result.payload["ending_balance"] == "6207.50"
+
+
+def test_classifier_generic_fallback_detects_statement_fields() -> None:
+    classifier = MockLLMClassifier()
+    extraction = ExtractionResult(
+        text="",
+        fields=[
+            {"name": "statement_period", "value": "2026-06-01 - 2026-06-30"},
+            {"name": "beginning_balance", "value": "1023.45"},
+            {"name": "ending_balance", "value": "992.11"},
+            {"name": "transaction_count", "value": "18"},
+        ],
+    )
+
+    result = classifier.classify(
+        kind_hint="generic",
+        extraction=extraction,
+        chart_of_accounts=None,
+    )
+
+    assert result.kind == "bank_transaction"
+    assert result.payload["is_statement"] is True
+    assert result.payload["transaction_count"] == 18
+
+
+def test_classifier_uses_named_suspense_account_code_when_not_9999() -> None:
+    classifier = MockLLMClassifier()
+    coa = [
+        {"code": "1000", "name": "Cash", "account_type": "asset"},
+        {"code": "4000", "name": "Service Revenue", "account_type": "revenue"},
+        {"code": "9900", "name": "Suspense", "account_type": "expense"},
+    ]
+    result = classifier.classify(
+        kind_hint="generic",
+        extraction=ExtractionResult(text=_STATEMENT, fields=[]),
+        chart_of_accounts=coa,
+    )
+
+    txns = result.payload["transactions"]
+    assert any(t["proposed_account_code"] == "9900" for t in txns)
+    assert not any(t["proposed_account_code"] == "9999" for t in txns)

@@ -63,6 +63,37 @@ def _validate_payload(kind: str, payload: dict[str, Any]) -> list[str]:
     return errors
 
 
+def _resolve_suspense_code(
+    chart_of_accounts: list[dict[str, Any]] | None,
+) -> str:
+    """Return the best suspense account code for this client COA.
+
+    Prefer a named suspense/uncategorized account even if its code is not
+    9999. Fall back to 9999 when no better candidate exists.
+    """
+    if not chart_of_accounts:
+        return "9999"
+
+    suspense_named: list[str] = []
+    has_9999 = False
+    for row in chart_of_accounts:
+        code = str(row.get("code") or "").strip()
+        name = str(row.get("name") or "").lower()
+        if code == "9999":
+            has_9999 = True
+        if code and ("suspense" in name or "uncategor" in name):
+            suspense_named.append(code)
+
+    for code in suspense_named:
+        if code != "9999":
+            return code
+    if suspense_named:
+        return suspense_named[0]
+    if has_9999:
+        return "9999"
+    return "9999"
+
+
 # --------------------------------------------------------------------------- #
 # Interface
 # --------------------------------------------------------------------------- #
@@ -183,12 +214,17 @@ class MockLLMClassifier(LLMClassifier):
                 f"Beginning balance ${parsed['beginning_balance']} -> "
                 f"ending balance ${parsed['ending_balance']}."
             )
-        unmapped = [
-            t for t in txns if t.get("proposed_account_code") == "9999"
-        ]
-        if unmapped:
+        suspense_code = _resolve_suspense_code(chart_of_accounts)
+        unmapped_count = sum(
+            1 for t in txns if t.get("proposed_account_code") == "9999"
+        )
+        if suspense_code != "9999" and unmapped_count:
+            for t in txns:
+                if t.get("proposed_account_code") == "9999":
+                    t["proposed_account_code"] = suspense_code
+        if unmapped_count:
             reasons.append(
-                f"{len(unmapped)} transaction(s) routed to Suspense (9999) "
+                f"{unmapped_count} transaction(s) routed to Suspense ({suspense_code}) "
                 "because no merchant pattern matched — please reassign."
             )
         if recategorized_count:
@@ -239,7 +275,8 @@ class MockLLMClassifier(LLMClassifier):
             merchant = (fields.get("merchant", {}).get("value") or "").upper()
             amount = fields.get("amount", {}).get("value") or "0"
             txn_date = fields.get("date", {}).get("value") or ""
-            code, conf = self._MERCHANT_TO_CODE.get(merchant, ("9999", 0.40))
+            suspense_code = _resolve_suspense_code(chart_of_accounts)
+            code, conf = self._MERCHANT_TO_CODE.get(merchant, (suspense_code, 0.40))
             reasons: list[str] = []
             if merchant and merchant in self._MERCHANT_TO_CODE:
                 reasons.append(
@@ -249,7 +286,7 @@ class MockLLMClassifier(LLMClassifier):
             elif merchant:
                 reasons.append(
                     f"Merchant '{merchant.title()}' is not in the known-vendor "
-                    f"map; falling back to suspense account 9999 (low confidence)."
+                    f"map; falling back to suspense account {suspense_code} (low confidence)."
                 )
             else:
                 reasons.append(
@@ -333,8 +370,40 @@ class MockLLMClassifier(LLMClassifier):
         vendor = f.get("vendor", {}).get("value") or ""
         total = f.get("total", {}).get("value") or ""
 
+        # Bank statement fallback: OCR can surface summary fields without
+        # merchant/amount pairs. If we see statement-like keys, classify as a
+        # bank transaction batch so SourceDocument.kind is still corrected.
+        tx_count_raw = f.get("transaction_count", {}).get("value") or ""
+        try:
+            tx_count = int(str(tx_count_raw).strip()) if tx_count_raw != "" else 0
+        except ValueError:
+            tx_count = 0
+        statement_period = f.get("statement_period", {}).get("value") or ""
+        beginning_balance = f.get("beginning_balance", {}).get("value") or ""
+        ending_balance = f.get("ending_balance", {}).get("value") or ""
+        if statement_period or beginning_balance or ending_balance or tx_count > 0:
+            return Classification(
+                kind="bank_transaction",
+                confidence=Decimal("0.60"),
+                payload={
+                    "is_statement": True,
+                    "statement_period": statement_period,
+                    "beginning_balance": beginning_balance,
+                    "ending_balance": ending_balance,
+                    "transaction_count": tx_count,
+                    "_reasons": [
+                        "Kind hint was 'generic' but OCR fields look like a bank statement, "
+                        "so this was re-classified as bank transaction.",
+                        "A reviewer should confirm extracted transactions before posting.",
+                    ],
+                },
+                model="mock",
+                prompt_version=self.PROMPT_VERSION,
+            )
+
         if merchant and amount:
-            code, conf = self._MERCHANT_TO_CODE.get(merchant, ("9999", 0.45))
+            suspense_code = _resolve_suspense_code(chart_of_accounts)
+            code, conf = self._MERCHANT_TO_CODE.get(merchant, (suspense_code, 0.45))
             return Classification(
                 kind="bank_transaction",
                 confidence=Decimal(str(conf)),
@@ -351,7 +420,7 @@ class MockLLMClassifier(LLMClassifier):
                         + (
                             f"matched a known vendor -> account {code}."
                             if merchant in self._MERCHANT_TO_CODE
-                            else "is not in the known-vendor map; using suspense account 9999."
+                            else f"is not in the known-vendor map; using suspense account {suspense_code}."
                         ),
                     ],
                 },

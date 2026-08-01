@@ -76,6 +76,34 @@ def test_dev_token_client_role_requires_client_id(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_dev_login_options_lists_firms_and_clients(client: TestClient, world) -> None:
+    resp = client.get("/auth/dev-login-options")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "firms" in body
+    # World fixture seeds 2 firms total.
+    assert len(body["firms"]) >= 2
+    # At least one firm contains client options.
+    assert any(len(f.get("clients", [])) > 0 for f in body["firms"])
+
+
+def test_dev_token_can_default_firm_and_client_ids(client: TestClient, world) -> None:
+    # No firm_id/client_id in request body.
+    resp = client.post(
+        "/auth/dev-token",
+        json={
+            "sub": "auto-resolve-user",
+            "role": "client_portal",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    auth = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    listed = client.get("/clients", headers=auth)
+    assert listed.status_code == 200, listed.text
+    # Client portal token should be scoped to exactly one client.
+    assert len(listed.json()) == 1
+
+
 def test_dev_token_rejects_unknown_role(client: TestClient) -> None:
     resp = client.post(
         "/auth/dev-token",
@@ -141,6 +169,65 @@ def test_get_documents_returns_only_visible_docs(
         "/documents", headers={"Authorization": f"Bearer {portal_token}"}
     ).json()
     assert {d["filename"] for d in listed_portal} == {"a1.pdf"}
+
+
+def test_document_kind_can_be_manually_corrected(
+    client: TestClient, world, fake_integrations
+) -> None:
+    token = mint_test_token(
+        sub="firm-a-editor",
+        firm_id=world.firm_a,
+        role="firm_staff",
+        client_id=world.a1.client_id,
+    )
+    upload = client.post(
+        "/documents/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("doc.pdf", b"raw bytes", "application/pdf")},
+        data={"kind_hint": "generic"},
+    )
+    assert upload.status_code == 201, upload.text
+    doc_id = upload.json()["source_document_id"]
+
+    updated = client.post(
+        f"/documents/{doc_id}/kind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"kind": "invoice"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["kind"] == "invoice"
+
+    listed = client.get(
+        "/documents", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert listed.status_code == 200
+    assert listed.json()[0]["kind"] == "invoice"
+
+
+def test_document_kind_update_rejects_unknown_kind(
+    client: TestClient, world, fake_integrations
+) -> None:
+    token = mint_test_token(
+        sub="firm-a-editor-2",
+        firm_id=world.firm_a,
+        role="firm_staff",
+        client_id=world.a1.client_id,
+    )
+    upload = client.post(
+        "/documents/upload",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("doc2.pdf", b"raw bytes 2", "application/pdf")},
+        data={"kind_hint": "generic"},
+    )
+    assert upload.status_code == 201, upload.text
+    doc_id = upload.json()["source_document_id"]
+
+    bad = client.post(
+        f"/documents/{doc_id}/kind",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"kind": "bank_statement"},
+    )
+    assert bad.status_code == 400
 
 
 def test_get_drafts_visible_to_client_portal(

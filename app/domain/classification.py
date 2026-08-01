@@ -38,6 +38,18 @@ _KIND_TO_ENUM = {
     "generic": DraftKind.GENERIC,
 }
 
+_ALLOWED_SOURCE_KINDS = {
+    "generic",
+    "bank_transaction",
+    "invoice",
+    "receipt",
+    "tax_form",
+    "tax_form_w2",
+    "tax_form_1099_nec",
+    "tax_form_1099_int",
+    "tax_form_1098",
+}
+
 
 def run_classification(
     sess: Session,
@@ -100,6 +112,10 @@ def run_classification(
     # Translate the classifier's `kind` string into our enum, falling back to
     # GENERIC if the classifier returned something unexpected.
     kind_enum = _KIND_TO_ENUM.get(classification.kind, DraftKind.GENERIC)
+    doc.kind = _resolve_source_document_kind(
+        detected_kind=classification.kind,
+        kind_hint=kind_hint,
+    )
 
     high_conf = conf >= HIGH_CONFIDENCE_THRESHOLD
     needs_review = True  # ALWAYS true; humans approve everything
@@ -152,6 +168,28 @@ def _extraction_from_dict(extracted: dict) -> ExtractionResult:
         page_count=int(extracted.get("page_count", 0) or 0),
         warnings=list(extracted.get("warnings", []) or []),
     )
+
+
+def _resolve_source_document_kind(*, detected_kind: str, kind_hint: str) -> str:
+    """Choose the persisted SourceDocument.kind.
+
+    We prefer the classifier's detected kind, but keep explicit hint fidelity
+    for specific tax forms (e.g. tax_form_w2) and avoid degrading a specific
+    hint back to generic.
+    """
+    detected = (detected_kind or "").strip().lower() or "generic"
+    hint = (kind_hint or "").strip().lower() or "generic"
+
+    if detected not in _ALLOWED_SOURCE_KINDS:
+        detected = "generic"
+    if hint not in _ALLOWED_SOURCE_KINDS:
+        hint = "generic"
+
+    if detected == "tax_form" and hint.startswith("tax_form_"):
+        return hint
+    if detected == "generic" and hint != "generic":
+        return hint
+    return detected
 
 
 __all__ = [

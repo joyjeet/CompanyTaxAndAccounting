@@ -27,6 +27,7 @@ from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.session import tenant_session
 from app.db.tenant import AccessScope, TenantContext
+from app.domain.audit import write_audit
 from app.domain.auto_promote import auto_promote_eligible_drafts
 from app.domain.ingest import VirusScanError, ingest_document
 from app.integrations.registry import get_queue, get_storage
@@ -36,9 +37,23 @@ from app.models.accounting import (
     JournalEntry,
     SourceDocument,
 )
+from app.models.enums import AuditAction
 from app.workers.inline import drain_in_process
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+ALLOWED_DOCUMENT_KINDS = {
+    "generic",
+    "bank_transaction",
+    "invoice",
+    "receipt",
+    "tax_form",
+    "tax_form_w2",
+    "tax_form_1099_nec",
+    "tax_form_1099_int",
+    "tax_form_1098",
+}
 
 
 class UploadOut(BaseModel):
@@ -64,6 +79,10 @@ class DocumentOut(BaseModel):
     ocr_completed_at: datetime | None
     ocr_error: str | None
     received_at: datetime
+
+
+class DocumentKindUpdateIn(BaseModel):
+    kind: str
 
 
 @router.get("", response_model=list[DocumentOut])
@@ -98,6 +117,65 @@ def list_documents(
         )
         for d in rows
     ]
+
+
+@router.post("/{document_id}/kind", response_model=DocumentOut)
+def update_document_kind(
+    document_id: UUID,
+    body: DocumentKindUpdateIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> DocumentOut:
+    """Manually correct a document kind.
+
+    The source document remains in the same tenant/client scope (RLS enforced).
+    """
+    kind = (body.kind or "").strip().lower()
+    if kind not in ALLOWED_DOCUMENT_KINDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid kind: {body.kind}",
+        )
+
+    doc = sess.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document not found",
+        )
+
+    previous_kind = doc.kind
+    doc.kind = kind
+    sess.flush()
+
+    if previous_kind != kind:
+        write_audit(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=doc.client_id,
+            actor=identity.subject,
+            action=AuditAction.UPDATE,
+            entity_type="source_document",
+            entity_id=doc.id,
+            details={
+                "field": "kind",
+                "from": previous_kind,
+                "to": kind,
+            },
+        )
+
+    return DocumentOut(
+        id=doc.id,
+        client_id=doc.client_id,
+        kind=doc.kind,
+        filename=doc.original_filename,
+        content_type=doc.mime_type,
+        sha256=doc.sha256 or "",
+        ocr_status=doc.ocr_status.value,
+        ocr_completed_at=doc.ocr_completed_at,
+        ocr_error=doc.ocr_error,
+        received_at=doc.created_at,
+    )
 
 
 @router.post(

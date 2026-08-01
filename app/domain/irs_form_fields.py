@@ -267,8 +267,8 @@ COMPUTED_LINE_FIELDS: dict[TaxFormCode, dict[str, str]] = {
         "1c": "Page1[0].f1_19[0]",
         "3": "Page1[0].f1_21[0]",
         "6": "Page1[0].f1_24[0]",
-        "21": "Page1[0].f1_38[0]",
-        "22": "Page1[0].f1_39[0]",
+        "21": "Page1[0].f1_39[0]",
+        "22": "Page1[0].f1_40[0]",
     },
 }
 
