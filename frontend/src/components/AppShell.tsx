@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Caption1,
-  Divider,
   makeStyles,
   shorthands,
   Text,
@@ -18,13 +17,14 @@ import {
   DocumentBulletList24Regular,
   Home24Regular,
   PersonCircle24Regular,
-  ShieldCheckmark24Regular,
   TaskListSquareLtr24Regular,
   Wrench24Regular,
 } from "@fluentui/react-icons";
+import { useQuery } from "@tanstack/react-query";
 import { type ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
+import { useApi } from "../api/useApi";
 import { useAuth } from "../auth/AuthContext";
 import { shortId } from "../lib/format";
 
@@ -148,9 +148,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
   const { identity, client, isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const api = useApi();
 
   const isFirm = identity?.role === "firm_staff";
   const nav = isFirm ? FIRM_NAV : PORTAL_NAV;
+
+  // Drives the Review-queue badge. Shares its cache key with the Dashboard,
+  // which already fetches exactly this, so it costs no extra request.
+  const pending = useQuery({
+    queryKey: ["drafts", "pending"],
+    queryFn: () => api.listDrafts(true),
+    enabled: isFirm && isAuthenticated,
+  });
+  const pendingCount = pending.data?.length ?? 0;
 
   return (
     <div className={styles.root}>
@@ -215,17 +225,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
           >
             {n.icon}
             <span>{n.label}</span>
+            {/* How much work is waiting is the one thing worth knowing
+                without clicking through. */}
+            {n.to === "/review" && pendingCount > 0 && (
+              <Badge
+                appearance="filled"
+                color="danger"
+                size="small"
+                style={{ marginLeft: "auto" }}
+              >
+                {pendingCount}
+              </Badge>
+            )}
           </NavLink>
         ))}
-        <Divider style={{ margin: "12px 0" }} />
-        <div className={styles.sidebarHeader}>System</div>
-        <div
-          className={styles.navItem}
-          style={{ cursor: "default", color: tokens.colorNeutralForeground3 }}
-        >
-          <ShieldCheckmark24Regular />
-          <Caption1>RLS · audit · crypto-shred</Caption1>
-        </div>
       </aside>
 
       <main className={styles.content}>{children}</main>

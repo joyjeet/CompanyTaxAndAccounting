@@ -89,8 +89,21 @@ export default function App() {
                 </RequireAuth>
               }
             />
+            {/* The active tab lives in the URL so a client view can be
+                bookmarked, shared, and survives a refresh or Back. Bare
+                /clients/:id still works and lands on Overview. */}
             <Route
               path="/clients/:id"
+              element={
+                <RequireAuth roles={["firm_staff"]}>
+                  <AuthenticatedShell>
+                    <ClientDetail />
+                  </AuthenticatedShell>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/clients/:id/:tab"
               element={
                 <RequireAuth roles={["firm_staff"]}>
                   <AuthenticatedShell>

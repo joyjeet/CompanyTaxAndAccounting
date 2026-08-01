@@ -1,13 +1,26 @@
+/**
+ * One client, ten surfaces.
+ *
+ * Two things shape this page:
+ *
+ *  * The active tab lives in the URL (`/clients/:id/:tab`), not in component
+ *    state. Previously a refresh dropped you back on Overview, Back walked
+ *    out of the client entirely, and no client view could be linked to.
+ *  * The tabs are grouped by when you need them — Setup before Work before
+ *    Output — because a flat strip of ten gave no hint that periods and a
+ *    chart of accounts must exist before a document can be posted.
+ */
 import {
   Caption1,
-  makeStyles,
+  Divider,
   Tab,
   TabList,
-  tokens,
   Text,
+  makeStyles,
+  shorthands,
+  tokens,
 } from "@fluentui/react-components";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useApi } from "../../api/useApi";
@@ -24,29 +37,97 @@ import ReportsTab from "./ReportsTab";
 import StatementsTab from "./StatementsTab";
 import TaxTab from "./TaxTab";
 
-type TabId =
-  | "overview"
-  | "profile"
-  | "periods"
-  | "accounts"
-  | "documents"
-  | "journal"
-  | "statements"
-  | "reports"
-  | "tax"
-  | "artifacts";
+interface TabDef {
+  id: string;
+  label: string;
+}
+
+const TAB_GROUPS: Array<{ label: string; hint: string; tabs: TabDef[] }> = [
+  {
+    label: "Set up",
+    hint: "Do these first — everything else depends on them",
+    tabs: [
+      { id: "profile", label: "Profile" },
+      { id: "periods", label: "Periods" },
+      { id: "accounts", label: "Chart of accounts" },
+    ],
+  },
+  {
+    label: "Day-to-day",
+    hint: "Where the bookkeeping actually happens",
+    tabs: [
+      { id: "documents", label: "Documents" },
+      { id: "journal", label: "Journal entries" },
+    ],
+  },
+  {
+    label: "Results",
+    hint: "What comes out the other end",
+    tabs: [
+      { id: "statements", label: "Statements" },
+      { id: "reports", label: "Reports" },
+      { id: "tax", label: "Tax" },
+      { id: "artifacts", label: "Artifacts" },
+    ],
+  },
+];
+
+const ALL_TABS: string[] = [
+  "overview",
+  ...TAB_GROUPS.flatMap((g) => g.tabs.map((t) => t.id)),
+];
+type TabId = string;
 
 const useStyles = makeStyles({
   header: { marginBottom: "16px" },
-  tabs: { marginBottom: "20px", borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  crumbs: {
+    display: "flex",
+    alignItems: "center",
+    columnGap: "6px",
+    marginBottom: "2px",
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+  },
+  crumbLink: {
+    cursor: "pointer",
+    color: tokens.colorBrandForeground1,
+    ":hover": { textDecoration: "underline" },
+  },
+  nav: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    columnGap: "4px",
+    rowGap: "4px",
+    marginBottom: "20px",
+    paddingBottom: "4px",
+    ...shorthands.borderBottom("1px", "solid", tokens.colorNeutralStroke2),
+  },
+  groupLabel: {
+    ...shorthands.padding("0", "10px", "0", "4px"),
+    color: tokens.colorNeutralForeground3,
+    textTransform: "uppercase",
+    letterSpacing: "0.05em",
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    whiteSpace: "nowrap",
+  },
+  sep: { height: "22px", alignSelf: "center" },
 });
 
 export default function ClientDetail() {
   const styles = useStyles();
-  const { id = "" } = useParams<{ id: string }>();
+  const { id = "", tab: tabParam } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
   const api = useApi();
-  const [tab, setTab] = useState<TabId>("overview");
+
+  // An unknown tab in the URL falls back to Overview rather than rendering
+  // a blank page.
+  const tab: TabId =
+    tabParam && ALL_TABS.includes(tabParam) ? tabParam : "overview";
+
+  const selectTab = (next: string) =>
+    navigate(next === "overview" ? `/clients/${id}` : `/clients/${id}/${next}`);
 
   const client = useQuery({
     queryKey: ["client", id],
@@ -58,16 +139,32 @@ export default function ClientDetail() {
   if (client.error) return <ErrorState error={client.error} />;
   if (!client.data) return null;
 
+  const activeLabel =
+    tab === "overview"
+      ? "Overview"
+      : TAB_GROUPS.flatMap((g) => g.tabs).find((t) => t.id === tab)?.label ?? "";
+
   return (
     <div>
       <div className={styles.header}>
-        <Text
-          size={200}
-          style={{ color: tokens.colorNeutralForeground3, cursor: "pointer" }}
-          onClick={() => navigate("/clients")}
-        >
-          ← All clients
-        </Text>
+        <div className={styles.crumbs}>
+          <span className={styles.crumbLink} onClick={() => navigate("/clients")}>
+            Clients
+          </span>
+          <span>/</span>
+          <span
+            className={styles.crumbLink}
+            onClick={() => navigate(`/clients/${id}`)}
+          >
+            {client.data.name}
+          </span>
+          {tab !== "overview" && (
+            <>
+              <span>/</span>
+              <span>{activeLabel}</span>
+            </>
+          )}
+        </div>
         <Text size={700} weight="semibold" block>
           {client.data.name}
         </Text>
@@ -77,22 +174,29 @@ export default function ClientDetail() {
         </Caption1>
       </div>
 
-      <TabList
-        className={styles.tabs}
-        selectedValue={tab}
-        onTabSelect={(_, d) => setTab(d.value as TabId)}
-      >
-        <Tab value="overview">Overview</Tab>
-        <Tab value="profile">Profile</Tab>
-        <Tab value="periods">Periods</Tab>
-        <Tab value="accounts">Chart of accounts</Tab>
-        <Tab value="documents">Documents</Tab>
-        <Tab value="journal">Journal entries</Tab>
-        <Tab value="statements">Statements</Tab>
-        <Tab value="reports">Reports</Tab>
-        <Tab value="tax">Tax</Tab>
-        <Tab value="artifacts">Artifacts</Tab>
-      </TabList>
+      <div className={styles.nav}>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => selectTab(String(d.value))}>
+          <Tab value="overview">Overview</Tab>
+        </TabList>
+        {TAB_GROUPS.map((g) => (
+          <div key={g.label} style={{ display: "flex", alignItems: "center" }}>
+            <Divider vertical className={styles.sep} />
+            <span className={styles.groupLabel} title={g.hint}>
+              {g.label}
+            </span>
+            <TabList
+              selectedValue={tab}
+              onTabSelect={(_, d) => selectTab(String(d.value))}
+            >
+              {g.tabs.map((t) => (
+                <Tab key={t.id} value={t.id}>
+                  {t.label}
+                </Tab>
+              ))}
+            </TabList>
+          </div>
+        ))}
+      </div>
 
       {tab === "overview" && <OverviewTab clientId={id} />}
       {tab === "profile" && (
