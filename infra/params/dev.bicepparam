@@ -10,6 +10,8 @@ param locationShort = 'cus'
 // CI fills these in (built per commit).
 param apiImage = 'ctaadevcus.azurecr.io/ctaa-api:dev'
 param workerImage = 'ctaadevcus.azurecr.io/ctaa-worker:dev'
+param acrLoginServer = 'ctaxdemocusreg.azurecr.io'
+param acrName = 'ctaxdemocusreg'
 
 // Sourced at deploy time via:
 //   --parameters postgresAdminPassword=$(az keyvault secret show --vault-name <bootstrap-kv> --name pg-admin-pwd --query value -o tsv)

@@ -6,6 +6,8 @@ param locationShort = 'cus'
 
 param apiImage = 'ctaaprodcus.azurecr.io/ctaa-api:prod'
 param workerImage = 'ctaaprodcus.azurecr.io/ctaa-worker:prod'
+param acrLoginServer = 'ctaxdemocusreg.azurecr.io'
+param acrName = 'ctaxdemocusreg'
 
 param postgresAdminPassword = ''
 
