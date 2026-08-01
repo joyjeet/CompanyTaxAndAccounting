@@ -29,6 +29,9 @@ param postgresGeoRedundantBackup = 'Disabled'
 
 param logRetentionDays = 90
 
+// Disable alert resources in dev to avoid noisy costs and schema/API drift issues.
+param enableAlerts = false
+
 param apiMinReplicas = 1
 param apiMaxReplicas = 3
 param workerMinReplicas = 0
