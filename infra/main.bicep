@@ -301,6 +301,7 @@ module apiApp 'modules/containerapp.bicep' = {
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     postgresFqdn: postgres.outputs.serverFqdn
     postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
     storageAccountName: storage.outputs.storageName
     serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
     corsOrigins: corsOrigins
@@ -330,6 +331,7 @@ module workerApp 'modules/containerapp.bicep' = {
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     postgresFqdn: postgres.outputs.serverFqdn
     postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
     storageAccountName: storage.outputs.storageName
     serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
     acrLoginServer: acrLoginServer
@@ -357,6 +359,7 @@ module uiApp 'modules/containerapp.bicep' = {
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     postgresFqdn: postgres.outputs.serverFqdn
     postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
     storageAccountName: storage.outputs.storageName
     serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
     acrLoginServer: acrLoginServer

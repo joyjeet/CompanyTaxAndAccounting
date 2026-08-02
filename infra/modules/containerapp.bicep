@@ -20,6 +20,9 @@ param appInsightsConnectionString string
 param postgresFqdn string
 @description('Postgres database name.')
 param postgresDatabase string = 'ctaa'
+@secure()
+@description('Postgres admin password used to compose runtime and owner DB URLs.')
+param postgresAdminPassword string
 @description('Storage account name (for Blob via Identity).')
 param storageAccountName string
 @description('Service Bus FQDN.')
@@ -53,6 +56,8 @@ var commonEnv = [
   { name: 'APP_CORS_ORIGINS',            value: corsOrigins }
   { name: 'POSTGRES_FQDN',               value: postgresFqdn }
   { name: 'POSTGRES_DATABASE',           value: postgresDatabase }
+  { name: 'DATABASE_URL',                secretRef: 'database-url' }
+  { name: 'DATABASE_OWNER_URL',          secretRef: 'database-owner-url' }
   { name: 'AZURE_STORAGE_ACCOUNT',       value: storageAccountName }
   { name: 'AZURE_SERVICEBUS_FQDN',       value: serviceBusFqdn }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
@@ -60,6 +65,9 @@ var commonEnv = [
   { name: 'OTEL_SERVICE_NAME',           value: name }
   { name: 'OTEL_RESOURCE_ATTRIBUTES',    value: 'service.name=${name},service.role=${role}' }
 ]
+
+var databaseUrl = 'postgresql+psycopg://app_user:${postgresAdminPassword}@${postgresFqdn}:5432/${postgresDatabase}?sslmode=require'
+var databaseOwnerUrl = 'postgresql+psycopg://ctaa_owner:${postgresAdminPassword}@${postgresFqdn}:5432/${postgresDatabase}?sslmode=require'
 
 var appIngress = role == 'worker' ? null : {
   external: true
@@ -112,6 +120,16 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
       activeRevisionsMode: 'Single'
       ingress: appIngress
       maxInactiveRevisions: 3
+      secrets: [
+        {
+          name: 'database-url'
+          value: databaseUrl
+        }
+        {
+          name: 'database-owner-url'
+          value: databaseOwnerUrl
+        }
+      ]
       registries: empty(acrLoginServer) ? [] : [
         {
           server: acrLoginServer
