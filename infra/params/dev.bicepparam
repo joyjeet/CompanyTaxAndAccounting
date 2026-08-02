@@ -10,6 +10,7 @@ param locationShort = 'cus'
 // CI fills these in (built per commit).
 param apiImage = 'ctaadevcus.azurecr.io/ctaa-api:dev'
 param workerImage = 'ctaadevcus.azurecr.io/ctaa-worker:dev'
+param uiImage = 'ctaadevcus.azurecr.io/ctaa-ui:dev'
 param acrLoginServer = 'ctaxdemocusreg.azurecr.io'
 param acrName = 'ctaxdemocusreg'
 
@@ -38,6 +39,8 @@ param apiMinReplicas = 1
 param apiMaxReplicas = 3
 param workerMinReplicas = 0
 param workerMaxReplicas = 3
+param uiMinReplicas = 1
+param uiMaxReplicas = 2
 
 // Keep dev API healthy even when downstream dependencies are unstable.
 param apiReadinessPath = '/healthz'

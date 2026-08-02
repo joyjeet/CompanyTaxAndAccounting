@@ -10,7 +10,7 @@ param environmentId string
 param uamiId string
 param uamiClientId string
 param image string
-@allowed([ 'api', 'worker' ])
+@allowed([ 'api', 'worker', 'ui' ])
 param role string = 'api'
 param minReplicas int = 1
 param maxReplicas int = 10
@@ -55,13 +55,13 @@ var commonEnv = [
   { name: 'OTEL_RESOURCE_ATTRIBUTES',    value: 'service.name=${name},service.role=${role}' }
 ]
 
-var apiIngress = role == 'api' ? {
+var appIngress = role == 'worker' ? null : {
   external: true
-  targetPort: 8000
+  targetPort: role == 'ui' ? 8080 : 8000
   transport: 'auto'
   allowInsecure: false
   traffic: [ { latestRevision: true, weight: 100 } ]
-} : null
+}
 
 var workerScale = [
   {
@@ -85,6 +85,13 @@ var apiScale = [
   }
 ]
 
+var uiScale = [
+  {
+    name: 'http-concurrent'
+    http: { metadata: { concurrentRequests: '60' } }
+  }
+]
+
 resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
   name: name
   location: location
@@ -97,7 +104,7 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
     environmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
-      ingress: apiIngress
+      ingress: appIngress
       maxInactiveRevisions: 3
       registries: empty(acrLoginServer) ? [] : [
         {
@@ -114,30 +121,30 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
           image: image
           resources: { cpu: json('0.5'), memory: '1Gi' }
           env: commonEnv
-          probes: role == 'api' ? [
+          probes: role == 'worker' ? [] : [
             {
               type: 'Liveness'
-              httpGet: { path: '/healthz', port: 8000 }
+              httpGet: { path: role == 'ui' ? '/' : '/healthz', port: role == 'ui' ? 8080 : 8000 }
               initialDelaySeconds: 10
               periodSeconds: 30
             }
             {
               type: 'Readiness'
-              httpGet: { path: readinessPath, port: 8000 }
+              httpGet: { path: role == 'ui' ? '/' : readinessPath, port: role == 'ui' ? 8080 : 8000 }
               initialDelaySeconds: 5
               periodSeconds: 15
             }
-          ] : []
+          ]
         }
       ]
       scale: {
         minReplicas: minReplicas
         maxReplicas: maxReplicas
-        rules: role == 'api' ? apiScale : workerScale
+        rules: role == 'api' ? apiScale : (role == 'ui' ? uiScale : workerScale)
       }
     }
   }
 }
 
-output fqdn string = role == 'api' ? app.properties.configuration.ingress.fqdn : ''
+output fqdn string = role == 'worker' ? '' : app.properties.configuration.ingress.fqdn
 output appId string = app.id

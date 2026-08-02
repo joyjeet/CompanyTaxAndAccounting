@@ -41,6 +41,9 @@ param apiImage string
 @description('Container image for the worker role.')
 param workerImage string
 
+@description('Container image for the UI role.')
+param uiImage string
+
 @secure()
 @description('Postgres administrator password. Supplied from CI via KV reference; never committed.')
 param postgresAdminPassword string
@@ -86,6 +89,8 @@ param apiMinReplicas int = 1
 param apiMaxReplicas int = 10
 param workerMinReplicas int = 1
 param workerMaxReplicas int = 20
+param uiMinReplicas int = 1
+param uiMaxReplicas int = 3
 
 @description('Provision Front Door + WAF in front of the ACA app. Set false to save cost on dev/smoke deploys.')
 param enableFrontDoor bool = true
@@ -141,6 +146,7 @@ var names = {
   containerEnv: 'cae-${prefix}'
   apiApp:       'ca-${prefix}-api'
   workerApp:    'ca-${prefix}-worker'
+  uiApp:        'ca-${prefix}-ui'
   frontDoor:    'afd-${prefix}'
   wafPolicy:    take(replace('waf${namePrefix}${env}${locationShort}', '-', ''), 64)
   uami:         'id-${prefix}-app'
@@ -325,6 +331,31 @@ module workerApp 'modules/containerapp.bicep' = {
   dependsOn: [ acrPull ]
 }
 
+module uiApp 'modules/containerapp.bicep' = {
+  scope: rg
+  name: 'uiApp'
+  params: {
+    location: location
+    name: names.uiApp
+    tags: commonTags
+    environmentId: containerEnv.outputs.envId
+    uamiId: identity.outputs.uamiId
+    uamiClientId: identity.outputs.uamiClientId
+    image: uiImage
+    role: 'ui'
+    minReplicas: uiMinReplicas
+    maxReplicas: uiMaxReplicas
+    keyVaultUri: keyvault.outputs.keyVaultUri
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    postgresFqdn: postgres.outputs.serverFqdn
+    postgresDatabase: firmDatabases[0]
+    storageAccountName: storage.outputs.storageName
+    serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
+    acrLoginServer: acrLoginServer
+  }
+  dependsOn: [ acrPull ]
+}
+
 module frontdoor 'modules/frontdoor.bicep' = if (enableFrontDoor) {
   scope: rg
   name: 'frontdoor'
@@ -332,7 +363,8 @@ module frontdoor 'modules/frontdoor.bicep' = if (enableFrontDoor) {
     afdName: names.frontDoor
     wafPolicyName: names.wafPolicy
     tags: commonTags
-    originHostName: apiApp.outputs.fqdn
+    webOriginHostName: uiApp.outputs.fqdn
+    apiOriginHostName: apiApp.outputs.fqdn
     originPrivateLinkResourceId: containerEnv.outputs.envId
     wafMode: wafMode
   }

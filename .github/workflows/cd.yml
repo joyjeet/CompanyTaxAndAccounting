@@ -29,6 +29,7 @@ jobs:
     outputs:
       api_image: ${{ steps.image.outputs.api_image }}
       worker_image: ${{ steps.image.outputs.worker_image }}
+      ui_image: ${{ steps.image.outputs.ui_image }}
     steps:
       - uses: actions/checkout@v7
 
@@ -46,6 +47,7 @@ jobs:
           REG="${{ vars.ACR_NAME }}.azurecr.io"
           echo "api_image=${REG}/ctaa-api:${SHA}" >> "$GITHUB_OUTPUT"
           echo "worker_image=${REG}/ctaa-worker:${SHA}" >> "$GITHUB_OUTPUT"
+          echo "ui_image=${REG}/ctaa-ui:${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: ACR login
         run: az acr login --name "${{ vars.ACR_NAME }}"
@@ -69,6 +71,19 @@ jobs:
           docker pull "${{ steps.image.outputs.api_image }}"
           docker tag "${{ steps.image.outputs.api_image }}" "${{ steps.image.outputs.worker_image }}"
           docker push "${{ steps.image.outputs.worker_image }}"
+
+      - name: Build & push UI image
+        uses: docker/build-push-action@v7
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.ui_image }}
+          build-args: |
+            VITE_API_BASE=
+            VITE_AUTH_MODE=dev
+          provenance: true
+          sbom: true
 
   deploy-dev:
     needs: build-and-push
@@ -98,6 +113,7 @@ jobs:
             --parameters \
               apiImage="${{ needs.build-and-push.outputs.api_image }}" \
               workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD" \
             -o none
 
@@ -109,6 +125,7 @@ jobs:
             --parameters \
               apiImage="${{ needs.build-and-push.outputs.api_image }}" \
               workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
         run: |
@@ -157,6 +174,7 @@ jobs:
             --parameters \
               apiImage="${{ needs.build-and-push.outputs.api_image }}" \
               workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD" \
             -o json > whatif-prod.json
 
@@ -181,6 +199,7 @@ jobs:
             --parameters \
               apiImage="${{ needs.build-and-push.outputs.api_image }}" \
               workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
         run: |
