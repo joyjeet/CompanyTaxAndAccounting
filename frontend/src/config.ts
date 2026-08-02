@@ -23,7 +23,9 @@ export interface AppConfig {
 
 function read(name: string, fallback = ""): string {
   const v = (import.meta.env as Record<string, string | undefined>)[name];
-  return v ?? fallback;
+  if (v == null) return fallback;
+  const trimmed = v.trim();
+  return trimmed === "" ? fallback : trimmed;
 }
 
 const cfg: AppConfig = {

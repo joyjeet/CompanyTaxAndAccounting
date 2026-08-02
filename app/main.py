@@ -67,16 +67,20 @@ def create_app() -> FastAPI:
             allow_headers=["Authorization", "Content-Type"],
         )
 
-    app.include_router(health.router)
-    app.include_router(clients.router)
-    app.include_router(documents.router)
-    app.include_router(drafts.router)
-    app.include_router(journal_entries.router)
-    app.include_router(statements_preview.router)
-    app.include_router(tax.router)
-    app.include_router(reports.router)
-    app.include_router(rules_engine.router)
-    app.include_router(team.router)
+    def include_core_routers(prefix: str = "") -> None:
+        app.include_router(health.router, prefix=prefix)
+        app.include_router(clients.router, prefix=prefix)
+        app.include_router(documents.router, prefix=prefix)
+        app.include_router(drafts.router, prefix=prefix)
+        app.include_router(journal_entries.router, prefix=prefix)
+        app.include_router(statements_preview.router, prefix=prefix)
+        app.include_router(tax.router, prefix=prefix)
+        app.include_router(reports.router, prefix=prefix)
+        app.include_router(rules_engine.router, prefix=prefix)
+        app.include_router(team.router, prefix=prefix)
+
+    include_core_routers()
+    include_core_routers("/api")
 
     # Admin routes (Phase 7) — crypto-shred + audit export. Gated on firm
     # admin scope inside the router itself.
@@ -84,6 +88,8 @@ def create_app() -> FastAPI:
 
     app.include_router(admin.router)
     app.include_router(audit_export.router)
+    app.include_router(admin.router, prefix="/api")
+    app.include_router(audit_export.router, prefix="/api")
 
     # Dev-only routes: only mount when the server is in non-prod test-mode.
     # The router itself also performs a runtime check.
@@ -91,6 +97,7 @@ def create_app() -> FastAPI:
         from app.api.routes import auth_dev
 
         app.include_router(auth_dev.router)
+        app.include_router(auth_dev.router, prefix="/api")
 
     # Demo / seed helpers: mounted whenever we're not in prod. Gated to
     # firm-scope inside the router so portal users can't use it.
@@ -98,6 +105,7 @@ def create_app() -> FastAPI:
         from app.api.routes import dev
 
         app.include_router(dev.router)
+        app.include_router(dev.router, prefix="/api")
 
     return app
 
