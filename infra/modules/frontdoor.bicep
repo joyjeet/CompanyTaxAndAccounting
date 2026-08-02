@@ -181,7 +181,7 @@ resource policy 'Microsoft.Cdn/profiles/securityPolicies@2024-09-01' = {
 }
 
 resource webRoute 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-09-01' = {
-  name: 'default-route'
+  name: 'web-route'
   parent: endpoint
   properties: {
     originGroup: { id: webOriginGroup.id }
