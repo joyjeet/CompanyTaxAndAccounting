@@ -21,6 +21,7 @@ from app.domain.promotion import (
 )
 from app.integrations.account_categorizer import load_rules_from_file
 from app.models.accounting import (
+    AccountingPeriod,
     DraftClassification,
     JournalEntry,
     JournalLine,
@@ -403,16 +404,26 @@ def test_promote_statement_persists_override_into_rules_file(
     assert learned[0].conditions[1].value == "staples order"
 
 
-def test_promote_statement_skips_dates_outside_the_period(
+def test_promote_statement_uses_open_period_for_transaction_date(
     world: SeededWorld,
 ) -> None:
-    """Out-of-period rows are skipped, NOT clamped to a period boundary.
-
-    The seeded period is 2026-01-01..2026-12-31. Clamping used to rewrite
-    both outlying dates to a period edge and post them with the right amount
-    and the wrong date, silently.
-    """
+    """Rows post against the open period that covers each transaction date."""
     a1 = world.a1
+
+    period_2025_id = uuid4()
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        sess.add(
+            AccountingPeriod(
+                id=period_2025_id,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                name="2025",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 12, 31),
+                is_locked=False,
+            )
+        )
+
     txns = [
         {
             "date": "2026-07-05",  # inside the period
@@ -422,16 +433,9 @@ def test_promote_statement_skips_dates_outside_the_period(
             "proposed_account_code": "4000",
         },
         {
-            "date": "2025-12-28",  # before the period
+            "date": "2025-12-28",  # outside selected period, but in open 2025 period
             "description": "Prior-year payment",
             "amount": "60.00",
-            "direction": "payment",
-            "proposed_account_code": "5000",
-        },
-        {
-            "date": "2027-01-03",  # after the period
-            "description": "Next-year payment",
-            "amount": "80.00",
             "direction": "payment",
             "proposed_account_code": "5000",
         },
@@ -449,26 +453,34 @@ def test_promote_statement_skips_dates_outside_the_period(
             period_id=a1.period_id,
         )
 
-    # Only the in-period row posts; the other two are surfaced.
-    assert len(result.journal_entry_ids) == 1
-    assert [s["index"] for s in result.skipped] == ["1", "2"]
-    for s in result.skipped:
-        assert "outside the selected period" in s["reason"]
-        assert "2026-01-01..2026-12-31" in s["reason"]
-    assert "2025-12-28" in result.skipped[0]["reason"]
-    assert "2027-01-03" in result.skipped[1]["reason"]
+    assert len(result.journal_entry_ids) == 2
+    assert result.skipped == []
 
-    # The surviving entry kept its true date — no clamping happened.
     with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
-        je = sess.get(JournalEntry, result.journal_entry_ids[0])
-        assert je is not None
-        assert je.entry_date == date(2026, 7, 5)
+        entries = (
+            sess.execute(
+                select(JournalEntry).where(
+                    JournalEntry.id.in_(result.journal_entry_ids)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(entries) == 2
+        by_date = {je.entry_date: je for je in entries}
+        assert date(2026, 7, 5) in by_date
+        assert date(2025, 12, 28) in by_date
+
+        je_2026 = by_date[date(2026, 7, 5)]
+        je_2025 = by_date[date(2025, 12, 28)]
+        assert je_2026.period_id == a1.period_id
+        assert je_2025.period_id == period_2025_id
 
 
-def test_promote_statement_refuses_when_every_row_is_out_of_period(
+def test_promote_statement_refuses_when_no_open_period_covers_dates(
     world: SeededWorld,
 ) -> None:
-    """A wholly-mismatched period posts nothing and leaves the draft open."""
+    """A wholly-mismatched date range posts nothing and leaves draft open."""
     a1 = world.a1
     txns = [
         {
@@ -500,6 +512,7 @@ def test_promote_statement_refuses_when_every_row_is_out_of_period(
                 period_id=a1.period_id,
             )
     assert "No transactions could be posted" in str(exc.value)
+    assert "no open accounting period covers transaction date" in str(exc.value)
 
     with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
         d = sess.get(DraftClassification, draft_id)
