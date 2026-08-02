@@ -89,3 +89,80 @@ rules:
       - field: description
         operator: regex
         value: "\\b(mr|mrs|ms|dr)\\.?\\s+[A-Za-z]+|\\b[A-Z][a-z]+\\s+[A-Z][a-z]+\\b"
+
+  - name: Meta/Facebook ads
+    target_code: "8010"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: regex
+        value: "(facebook|meta\\s+ads?)"
+
+  - name: Google ads
+    target_code: "8010"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: regex
+        value: "google\\s+ads?"
+
+  - name: SaaS subscriptions and software tools
+    target_code: "7520"
+    match: any
+    conditions:
+      - field: description
+        operator: regex
+        value: "(quickbooks|intuit|adobe|canva|slack|zoom|notion|airtable|microsoft\\s+365|google\\s+workspace)"
+      - field: description
+        operator: regex
+        value: "(vidiq|invideo|freshbooks|godaddy|namecheap|cloudflare)"
+
+  - name: Contractor marketplaces
+    target_code: "6030"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: regex
+        value: "(fiverr|upwork|freelancer)"
+
+  - name: Merchant processing fees
+    target_code: "7580"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: regex
+        value: "(stripe\\s+fee|square\\s+fee|processing\\s+fee|merchant\\s+fee)"
+
+  - name: Stripe/Square card settlements
+    target_code: "4000"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: deposit
+      - field: description
+        operator: regex
+        value: "(stripe|square|shopify\\s+payments?)"
+
+  - name: Payroll and payroll processing
+    target_code: "6020"
+    match: all
+    conditions:
+      - field: direction
+        operator: equals
+        value: payment
+      - field: description
+        operator: regex
+        value: "(gusto|adp|paychex|payroll)"

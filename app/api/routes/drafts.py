@@ -185,6 +185,7 @@ class StatementPromoteOut(BaseModel):
     excluded_indexes: list[int]
     pending_indexes: list[int]
     review_complete: bool
+    learned_rule_count: int
 
 
 @router.post("/{draft_id}/promote-all", response_model=StatementPromoteOut)
@@ -246,6 +247,7 @@ def promote_all(
         excluded_indexes=result.excluded_indexes,
         pending_indexes=result.pending_indexes,
         review_complete=result.review_complete,
+        learned_rule_count=result.learned_rule_count,
     )
 
 

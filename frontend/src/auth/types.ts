@@ -38,6 +38,7 @@ export interface StatementPromoteOut {
   excluded_indexes: number[];
   pending_indexes: number[];
   review_complete: boolean;
+  learned_rule_count: number;
 }
 
 // --------------------------------------------------------------------- //

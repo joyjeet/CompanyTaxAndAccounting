@@ -393,6 +393,7 @@ export default function DraftDetail() {
 
       const postedNow = res.journal_entry_ids.length;
       const excludedNow = vars.mode === "reject" ? vars.indexes.length : 0;
+      const learnedNow = res.learned_rule_count;
 
       dispatchToast(
         <Toast>
@@ -400,6 +401,7 @@ export default function DraftDetail() {
             {vars.mode === "accept"
               ? `Posted ${postedNow} transaction${postedNow === 1 ? "" : "s"}`
               : `Excluded ${excludedNow} transaction${excludedNow === 1 ? "" : "s"}`}
+            {learnedNow > 0 ? ` · Learned ${learnedNow} rule${learnedNow === 1 ? "" : "s"}` : ""}
           </ToastTitle>
         </Toast>,
         { intent: "success" },

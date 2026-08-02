@@ -199,6 +199,7 @@ class StatementPromotionResult:
     excluded_indexes: list[int]
     pending_indexes: list[int]
     review_complete: bool
+    learned_rule_count: int
 
 
 def _resolve_rules_file() -> Path:
@@ -722,6 +723,7 @@ def promote_statement_draft(
         excluded_indexes=next_excluded_indexes,
         pending_indexes=next_pending_indexes,
         review_complete=review_complete,
+        learned_rule_count=learned_rule_count,
     )
 
 
