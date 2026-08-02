@@ -107,6 +107,8 @@ export default function Dashboard() {
   const api = useApi();
   const { identity } = useAuth();
 
+  const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
+
   const clients = useQuery({ queryKey: ["clients"], queryFn: () => api.listClients() });
   const drafts = useQuery({
     queryKey: ["drafts", "pending"],
@@ -126,11 +128,16 @@ export default function Dashboard() {
   const anyLoading =
     clients.isLoading || drafts.isLoading || docs.isLoading || artifacts.isLoading || team.isLoading;
 
-  const teamMembersCount = team.data?.members.length ?? 0;
-  const pendingInvitesCount =
-    team.data?.invites.filter((i) => i.status === "pending").length ?? 0;
-  const disabledMembersCount =
-    team.data?.members.filter((m) => m.status === "disabled").length ?? 0;
+  const clientsList = asArray<typeof clients.data extends (infer U)[] ? U : never>(clients.data);
+  const draftsList = asArray<typeof drafts.data extends (infer U)[] ? U : never>(drafts.data);
+  const docsList = asArray<typeof docs.data extends (infer U)[] ? U : never>(docs.data);
+  const artifactsList = asArray<typeof artifacts.data extends (infer U)[] ? U : never>(artifacts.data);
+  const teamMembers = asArray<typeof team.data extends { members: (infer U)[] } ? U : never>(team.data?.members);
+  const teamInvites = asArray<typeof team.data extends { invites: (infer U)[] } ? U : never>(team.data?.invites);
+
+  const teamMembersCount = teamMembers.length;
+  const pendingInvitesCount = teamInvites.filter((i) => i.status === "pending").length;
+  const disabledMembersCount = teamMembers.filter((m) => m.status === "disabled").length;
 
   return (
     <div>
@@ -149,22 +156,22 @@ export default function Dashboard() {
         <Kpi
           icon={<BookContacts24Regular />}
           label="Clients"
-          value={anyLoading ? "…" : clients.data?.length ?? 0}
+          value={anyLoading ? "…" : clientsList.length}
         />
         <Kpi
           icon={<ClipboardTaskListLtr24Regular />}
           label="Pending drafts"
-          value={anyLoading ? "…" : drafts.data?.length ?? 0}
+          value={anyLoading ? "…" : draftsList.length}
         />
         <Kpi
           icon={<Document24Regular />}
           label="Documents"
-          value={anyLoading ? "…" : docs.data?.length ?? 0}
+          value={anyLoading ? "…" : docsList.length}
         />
         <Kpi
           icon={<DocumentBulletList24Regular />}
           label="Artifacts"
-          value={anyLoading ? "…" : artifacts.data?.length ?? 0}
+          value={anyLoading ? "…" : artifactsList.length}
         />
         <Kpi
           icon={<PeopleTeam24Regular />}
@@ -194,14 +201,14 @@ export default function Dashboard() {
           }}
         >
           {clients.isLoading && <LoadingState />}
-          {clients.data && clients.data.length === 0 && (
+          {clientsList.length === 0 && !clients.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               No clients yet.
             </Body1>
           )}
-          {clients.data && clients.data.length > 0 && (
+          {clientsList.length > 0 && (
             <div className={styles.list}>
-              {clients.data.slice(0, 6).map((c) => (
+              {clientsList.slice(0, 6).map((c) => (
                 <Link
                   to={`/clients/${c.id}`}
                   key={c.id}
@@ -240,14 +247,14 @@ export default function Dashboard() {
           }}
         >
           {docs.isLoading && <LoadingState />}
-          {docs.data && docs.data.length === 0 && (
+          {docsList.length === 0 && !docs.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               No uploads yet.
             </Body1>
           )}
-          {docs.data && docs.data.length > 0 && (
+          {docsList.length > 0 && (
             <div className={styles.list}>
-              {docs.data.slice(0, 6).map((d) => (
+              {docsList.slice(0, 6).map((d) => (
                 <div className={styles.listItem} key={d.id}>
                   <div>
                     <Text weight="semibold">{d.filename ?? "(no filename)"}</Text>
@@ -295,14 +302,14 @@ export default function Dashboard() {
           }}
         >
           {drafts.isLoading && <LoadingState />}
-          {drafts.data && drafts.data.length === 0 && (
+          {draftsList.length === 0 && !drafts.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               Inbox zero — nothing waiting.
             </Body1>
           )}
-          {drafts.data && drafts.data.length > 0 && (
+          {draftsList.length > 0 && (
             <div className={styles.list}>
-              {drafts.data.slice(0, 6).map((d) => {
+              {draftsList.slice(0, 6).map((d) => {
                 const conf = Number.parseFloat(d.confidence);
                 return (
                   <Link
@@ -404,14 +411,14 @@ export default function Dashboard() {
           }}
         >
           {artifacts.isLoading && <LoadingState />}
-          {artifacts.data && artifacts.data.length === 0 && (
+          {artifactsList.length === 0 && !artifacts.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               No artifacts generated yet.
             </Body1>
           )}
-          {artifacts.data && artifacts.data.length > 0 && (
+          {artifactsList.length > 0 && (
             <div className={styles.list}>
-              {artifacts.data.slice(0, 6).map((a) => (
+              {artifactsList.slice(0, 6).map((a) => (
                 <div key={a.id} className={styles.listItem}>
                   <div>
                     <Text weight="semibold">{a.title}</Text>
