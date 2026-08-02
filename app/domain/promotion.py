@@ -625,10 +625,11 @@ def promote_statement_draft(
             skipped.append({"index": str(idx), "reason": "no account code"})
             continue
         # If the categorizer flagged this row as needs_review (low confidence)
-        # and the reviewer did NOT explicitly override the code, skip — the
-        # reviewer must address it before it can post.
+        # and the reviewer did NOT explicitly accept or override the code,
+        # skip — the reviewer must address it before it can post.
         if (
             idx not in overrides
+            and idx not in accepted
             and txn.get("_categorizer_needs_review") is True
         ):
             skipped.append(
@@ -696,8 +697,10 @@ def promote_statement_draft(
         posted_indexes_this_call.add(idx)
 
     if not posted_ids and not target_reject:
+        first_reason = skipped[0]["reason"] if skipped else "unknown reason"
         raise AlreadyPromotedError(
-            "No transactions could be posted; draft left in pending review."
+            "No transactions could be posted; draft left in pending review. "
+            f"First blocking reason: {first_reason}"
         )
 
     learned_rule_count = _learn_rules_from_overrides(txns, overrides)

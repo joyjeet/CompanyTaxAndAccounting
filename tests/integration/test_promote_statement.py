@@ -305,6 +305,40 @@ def test_promote_statement_honors_accept_reject_indexes(
     assert "rejected by reviewer" in result.skipped[0]["reason"]
 
 
+def test_promote_statement_explicit_accept_confirms_low_confidence_row(
+    world: SeededWorld,
+) -> None:
+    a1 = world.a1
+    txns = [
+        {
+            "date": "2026-07-05",
+            "raw_date": "07/05",
+            "description": "Low confidence payment",
+            "amount": "100.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+            "_categorizer_needs_review": True,
+            "_categorizer_confidence": 0.45,
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+            accepted_indexes={0},
+        )
+
+    assert len(result.journal_entry_ids) == 1
+    assert result.skipped == []
+
+
 def test_promote_statement_persists_override_into_rules_file(
     world: SeededWorld,
     tmp_path,
