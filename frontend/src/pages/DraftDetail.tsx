@@ -44,8 +44,6 @@ import {
   periodCoversRange,
   pickBestPeriod,
   statementRangeFromTxns,
-  suggestPeriodName,
-  toWholeMonths,
 } from "../lib/statementPeriod";
 import {
   promoteAllDisabledReason,
@@ -347,54 +345,6 @@ export default function DraftDetail() {
     if (best) setPeriodId(best.id);
   }, [isStatement, statementRange, periods.data, periodId, id, clientId]);
 
-  // "Custom period" inline form state.
-  const [customOpen, setCustomOpen] = useState(false);
-  const [customName, setCustomName] = useState("");
-  const [customStart, setCustomStart] = useState("");
-  const [customEnd, setCustomEnd] = useState("");
-
-  const createPeriod = useMutation({
-    mutationFn: (body: { name: string; start_date: string; end_date: string }) =>
-      api.createPeriod(clientId, body),
-    onSuccess: (created) => {
-      dispatchToast(
-        <Toast>
-          <ToastTitle>Period “{created.name}” created</ToastTitle>
-        </Toast>,
-        { intent: "success" },
-      );
-      // Refresh the dropdown, then select the period we just made.
-      qc.invalidateQueries({ queryKey: ["periods", clientId] });
-      setPeriodId(created.id);
-      setCustomOpen(false);
-    },
-    onError: (err: Error) => {
-      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
-    },
-  });
-
-  /** Create a period snapped to the whole month(s) the statement falls in. */
-  const createPeriodFromStatement = () => {
-    if (!statementRange) return;
-    const snapped = toWholeMonths(statementRange);
-    createPeriod.mutate({
-      name: suggestPeriodName(statementRange),
-      start_date: snapped.start,
-      end_date: snapped.end,
-    });
-  };
-
-  const openCustomPeriod = () => {
-    // Pre-fill from the statement so the common case is one click away.
-    if (statementRange) {
-      const snapped = toWholeMonths(statementRange);
-      setCustomName(suggestPeriodName(statementRange));
-      setCustomStart(snapped.start);
-      setCustomEnd(snapped.end);
-    }
-    setCustomOpen(true);
-  };
-
   const promoteAll = useMutation({
     mutationFn: () => {
       const overrides: Record<string, string> = {};
@@ -688,12 +638,12 @@ export default function DraftDetail() {
                 <Table size="extra-small" style={{ marginTop: 8 }}>
                   <TableHeader>
                     <TableRow>
-                      <TableHeaderCell>Decision</TableHeaderCell>
                       <TableHeaderCell>Date</TableHeaderCell>
                       <TableHeaderCell>Description</TableHeaderCell>
                       <TableHeaderCell>Direction</TableHeaderCell>
                       <TableHeaderCell>Amount</TableHeaderCell>
                       <TableHeaderCell>Account</TableHeaderCell>
+                      <TableHeaderCell>Decision</TableHeaderCell>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -709,28 +659,6 @@ export default function DraftDetail() {
                       const decision = txnDecisions[i] ?? "accept";
                       return (
                         <TableRow key={i}>
-                          <TableCell>
-                            <div style={{ display: "flex", gap: 6 }}>
-                              <Button
-                                size="small"
-                                appearance={decision === "accept" ? "primary" : "secondary"}
-                                onClick={() =>
-                                  setTxnDecisions((prev) => ({ ...prev, [i]: "accept" }))
-                                }
-                              >
-                                Accept
-                              </Button>
-                              <Button
-                                size="small"
-                                appearance={decision === "reject" ? "primary" : "secondary"}
-                                onClick={() =>
-                                  setTxnDecisions((prev) => ({ ...prev, [i]: "reject" }))
-                                }
-                              >
-                                Reject
-                              </Button>
-                            </div>
-                          </TableCell>
                           <TableCell>
                             <code>{String(t.raw_date ?? t.date ?? "")}</code>
                           </TableCell>
@@ -762,6 +690,28 @@ export default function DraftDetail() {
                             >
                               {renderAccountOptions()}
                             </Dropdown>
+                          </TableCell>
+                          <TableCell>
+                            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                              <Button
+                                size="small"
+                                appearance={decision === "accept" ? "primary" : "secondary"}
+                                onClick={() =>
+                                  setTxnDecisions((prev) => ({ ...prev, [i]: "accept" }))
+                                }
+                              >
+                                Accept
+                              </Button>
+                              <Button
+                                size="small"
+                                appearance={decision === "reject" ? "primary" : "secondary"}
+                                onClick={() =>
+                                  setTxnDecisions((prev) => ({ ...prev, [i]: "reject" }))
+                                }
+                              >
+                                Reject
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
@@ -823,76 +773,10 @@ export default function DraftDetail() {
                     </MessageBarBody>
                   </MessageBar>
                 )}
-                <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
-                  {!identity?.clientId && (
-                    <Field label="Client" required>
-                      <Dropdown
-                        placeholder="Select client"
-                        value={
-                          clients.data?.find((c) => c.id === clientId)?.name ?? ""
-                        }
-                        selectedOptions={clientId ? [clientId] : []}
-                        onOptionSelect={(_, dd) => setClientId(dd.optionValue ?? "")}
-                      >
-                        {(clients.data ?? []).map((c) => (
-                          <Option key={c.id} value={c.id}>{c.name}</Option>
-                        ))}
-                      </Dropdown>
-                    </Field>
-                  )}
-                  <Field
-                    label="Period"
-                    required
-                    hint={
-                      statementRange
-                        ? `Statement covers ${statementRange.start} → ${statementRange.end}`
-                        : "No dated rows found on this statement"
-                    }
-                  >
-                    <Dropdown
-                      placeholder="Select period"
-                      value={selectedPeriod?.name ?? ""}
-                      selectedOptions={periodId ? [periodId] : []}
-                      onOptionSelect={(_, dd) => setPeriodId(dd.optionValue ?? "")}
-                    >
-                      {(periods.data ?? []).map((p) => {
-                        const covers =
-                          statementRange !== null && periodCoversRange(p, statementRange);
-                        const label = p.is_locked
-                          ? `${p.name} (locked)`
-                          : covers
-                            ? `${p.name} ✓ matches statement`
-                            : p.name;
-                        return (
-                          <Option
-                            key={p.id}
-                            value={p.id}
-                            text={label}
-                            disabled={p.is_locked}
-                          >
-                            {label}
-                          </Option>
-                        );
-                      })}
-                    </Dropdown>
-                  </Field>
-                  {statementRange && (
-                    <Button
-                      appearance="secondary"
-                      disabled={!clientId || createPeriod.isPending}
-                      onClick={createPeriodFromStatement}
-                      icon={createPeriod.isPending ? <Spinner size="tiny" /> : undefined}
-                    >
-                      Use statement period ({suggestPeriodName(statementRange)})
-                    </Button>
-                  )}
-                  <Button
-                    appearance="secondary"
-                    disabled={!clientId || createPeriod.isPending}
-                    onClick={openCustomPeriod}
-                  >
-                    Custom period…
-                  </Button>
+                <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Client and period are auto-selected for this statement.
+                  </Caption1>
                   <Button
                     appearance="primary"
                     disabled={!canPromoteDrafts || !clientId || !periodId || promoteAll.isPending || acceptedTxnCount === 0}
@@ -910,73 +794,6 @@ export default function DraftDetail() {
                   <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 6 }}>
                     Accept at least one transaction to post, or use Reject draft below.
                   </Caption1>
-                )}
-                {customOpen && (
-                  <div
-                    style={{
-                      marginTop: 12,
-                      padding: 12,
-                      display: "flex",
-                      gap: 12,
-                      alignItems: "flex-end",
-                      flexWrap: "wrap",
-                      backgroundColor: tokens.colorNeutralBackground2,
-                      borderRadius: tokens.borderRadiusMedium,
-                    }}
-                  >
-                    <Field label="Period name" required>
-                      <Input
-                        value={customName}
-                        onChange={(_, dd) => setCustomName(dd.value)}
-                        placeholder="e.g. Jul 2025"
-                      />
-                    </Field>
-                    <Field label="Start date" required>
-                      <Input
-                        type="date"
-                        value={customStart}
-                        onChange={(_, dd) => setCustomStart(dd.value)}
-                      />
-                    </Field>
-                    <Field label="End date" required>
-                      <Input
-                        type="date"
-                        value={customEnd}
-                        onChange={(_, dd) => setCustomEnd(dd.value)}
-                      />
-                    </Field>
-                    <Button
-                      appearance="primary"
-                      disabled={
-                        !customName.trim() ||
-                        !customStart ||
-                        !customEnd ||
-                        customStart > customEnd ||
-                        createPeriod.isPending
-                      }
-                      onClick={() =>
-                        createPeriod.mutate({
-                          name: customName.trim(),
-                          start_date: customStart,
-                          end_date: customEnd,
-                        })
-                      }
-                    >
-                      {createPeriod.isPending ? <Spinner size="tiny" /> : "Create & select"}
-                    </Button>
-                    <Button
-                      appearance="subtle"
-                      disabled={createPeriod.isPending}
-                      onClick={() => setCustomOpen(false)}
-                    >
-                      Cancel
-                    </Button>
-                    {customStart > customEnd && customStart && customEnd && (
-                      <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>
-                        Start date must be on or before the end date.
-                      </Caption1>
-                    )}
-                  </div>
                 )}
                 {!canPromoteDrafts && (
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
