@@ -2,8 +2,8 @@
 # ============================================================================
 # schedule_azure_teardown.sh
 #
-# Creates a one-shot Azure Logic App in a separate "teardown" RG that fires
-# at a target ISO timestamp and DELETEs the demo resource group via ARM.
+# Creates a one-shot Azure Logic App inside the target RG that fires at a
+# target ISO timestamp and DELETEs that same resource group via ARM.
 #
 # The Logic App uses a System-Assigned Managed Identity. The script grants
 # that MI Contributor on the target RG so the delete call succeeds.
@@ -43,18 +43,15 @@ done
 }
 
 LOCATION_SHORT="$(echo "$LOCATION" | tr -d ' ' | cut -c1-3 | tr '[:upper:]' '[:lower:]')"
-TEARDOWN_RG="rg-${NAME_PREFIX}-teardown-${LOCATION_SHORT}"
 TS_SHORT="$(date -u +%Y%m%d%H%M%S)"
 LA_NAME="la-teardown-${TARGET_RG}-${TS_SHORT}"
 # Logic App names are limited to 80 chars.
 LA_NAME="$(echo "$LA_NAME" | cut -c1-80)"
 
-echo "Teardown RG:  $TEARDOWN_RG"
+echo "Teardown RG:  $TARGET_RG"
 echo "Logic App:    $LA_NAME"
 echo "Fires at:     $EXPIRES_AT"
 echo "Will delete:  $TARGET_RG"
-
-az group create -n "$TEARDOWN_RG" -l "$LOCATION" --tags purpose=teardown app="$NAME_PREFIX" -o none
 
 # Logic App workflow definition: a single Recurrence trigger that fires once,
 # at the target time, then an HTTP action that DELETEs the target RG using
@@ -88,20 +85,6 @@ WORKFLOW_JSON=$(cat <<EOF
         },
         "runAfter": {}
       },
-      "DeleteSelf": {
-        "type": "Http",
-        "inputs": {
-          "method": "DELETE",
-          "uri": "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$TEARDOWN_RG/providers/Microsoft.Logic/workflows/$LA_NAME?api-version=2019-05-01",
-          "authentication": {
-            "type": "ManagedServiceIdentity",
-            "audience": "https://management.azure.com/"
-          }
-        },
-        "runAfter": {
-          "DeleteResourceGroup": [ "Succeeded", "Failed", "TimedOut" ]
-        }
-      }
     },
     "outputs": {}
   },
@@ -116,7 +99,7 @@ echo "$WORKFLOW_JSON" > "$WF_TMP"
 echo "Creating Logic App workflow..."
 # `az logic workflow create` was previously in preview; fall back to az resource create.
 az resource create \
-    --resource-group "$TEARDOWN_RG" \
+  --resource-group "$TARGET_RG" \
     --name "$LA_NAME" \
     --resource-type "Microsoft.Logic/workflows" \
     --is-full-object \
@@ -131,25 +114,25 @@ az resource create \
         # If jq isn't installed, fall back to a simpler path.
         echo "jq missing or composition failed; using az logic workflow create..."
         az logic workflow create \
-            --resource-group "$TEARDOWN_RG" \
+      --resource-group "$TARGET_RG" \
             --name "$LA_NAME" \
             --location "$LOCATION" \
             --definition "$WF_TMP" \
             -o none
         # Then patch to add MSI.
-        az resource update --resource-group "$TEARDOWN_RG" --name "$LA_NAME" \
+    az resource update --resource-group "$TARGET_RG" --name "$LA_NAME" \
             --resource-type "Microsoft.Logic/workflows" \
             --set identity.type=SystemAssigned -o none
     }
 
 rm -f "$WF_TMP"
 
-# Grab the MSI principalId and grant it Contributor on the target RG (so it
-# can DELETE) and on its own RG (so DeleteSelf works).
+# Grab the MSI principalId and grant it Contributor on the target RG so it
+# can DELETE the RG when the timer fires.
 echo "Waiting for Managed Identity to propagate..."
 PRINCIPAL_ID=""
 for i in $(seq 1 10); do
-    PRINCIPAL_ID=$(az resource show -g "$TEARDOWN_RG" -n "$LA_NAME" --resource-type Microsoft.Logic/workflows --query identity.principalId -o tsv 2>/dev/null || true)
+  PRINCIPAL_ID=$(az resource show -g "$TARGET_RG" -n "$LA_NAME" --resource-type Microsoft.Logic/workflows --query identity.principalId -o tsv 2>/dev/null || true)
     [[ -n "$PRINCIPAL_ID" && "$PRINCIPAL_ID" != "null" ]] && break
     sleep 3
 done
@@ -159,18 +142,12 @@ if [[ -z "$PRINCIPAL_ID" || "$PRINCIPAL_ID" == "null" ]]; then
     exit 1
 fi
 
-echo "MSI principalId: $PRINCIPAL_ID — granting Contributor on $TARGET_RG and $TEARDOWN_RG"
+echo "MSI principalId: $PRINCIPAL_ID — granting Contributor on $TARGET_RG"
 az role assignment create \
     --assignee-object-id "$PRINCIPAL_ID" \
     --assignee-principal-type ServicePrincipal \
     --role "Contributor" \
     --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$TARGET_RG" \
     -o none || echo "(role may already exist)"
-az role assignment create \
-    --assignee-object-id "$PRINCIPAL_ID" \
-    --assignee-principal-type ServicePrincipal \
-    --role "Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$TEARDOWN_RG" \
-    -o none || echo "(role may already exist)"
 
-echo "Auto-teardown scheduled. Logic App: $TEARDOWN_RG/$LA_NAME — fires at $EXPIRES_AT (UTC)."
+echo "Auto-teardown scheduled. Logic App: $TARGET_RG/$LA_NAME — fires at $EXPIRES_AT (UTC)."
