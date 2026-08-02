@@ -477,10 +477,10 @@ def test_promote_statement_uses_open_period_for_transaction_date(
         assert je_2025.period_id == period_2025_id
 
 
-def test_promote_statement_refuses_when_no_open_period_covers_dates(
+def test_promote_statement_falls_back_to_selected_period_when_no_open_period_covers_dates(
     world: SeededWorld,
 ) -> None:
-    """A wholly-mismatched date range posts nothing and leaves draft open."""
+    """A wholly-mismatched date range still posts via selected-period fallback."""
     a1 = world.a1
     txns = [
         {
@@ -500,24 +500,34 @@ def test_promote_statement_refuses_when_no_open_period_covers_dates(
     ]
     _, draft_id = _seed_statement_draft(a1, transactions=txns)
 
-    with pytest.raises(AlreadyPromotedError) as exc:
-        with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
-            promote_statement_draft(
-                sess,
-                firm_id=a1.firm_id,
-                client_id=a1.client_id,
-                actor="reviewer",
-                scope=AccessScope.FIRM,
-                draft_id=draft_id,
-                period_id=a1.period_id,
-            )
-    assert "No transactions could be posted" in str(exc.value)
-    assert "no open accounting period covers transaction date" in str(exc.value)
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+        )
+
+    assert len(result.journal_entry_ids) == 2
+    assert result.skipped == []
 
     with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
-        d = sess.get(DraftClassification, draft_id)
-        assert d is not None
-        assert d.status is DraftStatus.PENDING_REVIEW
+        entries = (
+            sess.execute(
+                select(JournalEntry).where(
+                    JournalEntry.id.in_(result.journal_entry_ids)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(entries) == 2
+        assert all(je.period_id == a1.period_id for je in entries)
+        # Both 2025 dates clamp to selected period start (2026-01-01).
+        assert all(je.entry_date == date(2026, 1, 1) for je in entries)
 
 
 def test_promote_statement_skips_unparseable_dates(world: SeededWorld) -> None:

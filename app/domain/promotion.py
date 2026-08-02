@@ -480,7 +480,8 @@ def promote_statement_draft(
     The selected `period_id` acts as the default for undated rows. Dated rows
     keep their own transaction date and are posted into whichever open
     accounting period contains that date. If no open period covers the date,
-    that row is skipped with a clear reason.
+    the row still posts into the selected period at that period boundary so
+    review flow is never blocked by period setup.
 
     The draft is marked PROMOTED iff at least one JE was posted, and
     `promoted_journal_entry_id` is set to the first posted entry. All JE
@@ -621,12 +622,16 @@ def promote_statement_draft(
             return None, None, f"unparseable date '{iso}'"
 
         posting_period = _open_period_for_date(d)
-        if posting_period is None:
-            return None, None, (
-                "no open accounting period covers transaction date "
-                f"{d.isoformat()}"
-            )
-        return d, posting_period.id, ""
+        if posting_period is not None:
+            return d, posting_period.id, ""
+
+        # If period configuration does not cover this transaction date,
+        # keep posting unblocked by falling back to the selected period.
+        if d < period.start_date:
+            return period.start_date, period.id, ""
+        if d > period.end_date:
+            return period.end_date, period.id, ""
+        return d, period.id, ""
 
     for idx, txn in enumerate(txns):
         if idx in target_reject:
