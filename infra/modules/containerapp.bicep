@@ -50,6 +50,7 @@ param revisionSuffix string = take(uniqueString(image, readinessPath), 10)
 var commonEnv = [
   { name: 'APP_ENV',                     value: appEnv }
   { name: 'APP_AUTH_MODE',               value: appAuthMode }
+  { name: 'APP_QUEUE_BACKEND',           value: appEnv == 'prod' ? 'redis' : 'memory' }
   { name: 'APP_KEK_PROVIDER',            value: 'keyvault' }
   { name: 'AZURE_KEYVAULT_URL',          value: keyVaultUri }
   { name: 'AZURE_CLIENT_ID',             value: uamiClientId }
