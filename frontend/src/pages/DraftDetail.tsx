@@ -414,6 +414,29 @@ export default function DraftDetail() {
     },
   });
 
+  const learnTxnRule = useMutation({
+    mutationFn: (input: { index: number; code: string }) =>
+      api.learnStatementRule(id, {
+        client_id: clientId || undefined,
+        transaction_index: input.index,
+        target_account_code: input.code,
+      }),
+    onSuccess: (res) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>
+            Learned {res.learned_rule_count} rule{res.learned_rule_count === 1 ? "" : "s"} for future categorization.
+          </ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["rules-engine"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
   if (draft.isLoading) return <LoadingState />;
   if (draft.error) return <ErrorState error={draft.error} />;
   if (!draft.data) return <Body1>Draft not found.</Body1>;
@@ -752,7 +775,7 @@ export default function DraftDetail() {
                                 <Button
                                   size="small"
                                   appearance="primary"
-                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending}
+                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending || learnTxnRule.isPending}
                                   onClick={() => applyTxnDecision.mutate({ mode: "accept", indexes: [i] })}
                                 >
                                   Accept
@@ -760,16 +783,34 @@ export default function DraftDetail() {
                                 <Button
                                   size="small"
                                   appearance="secondary"
-                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending}
+                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending || learnTxnRule.isPending}
                                   onClick={() => applyTxnDecision.mutate({ mode: "reject", indexes: [i] })}
                                 >
                                   Reject
                                 </Button>
+                                <Button
+                                  size="small"
+                                  appearance="subtle"
+                                  disabled={!canPromoteDrafts || !current || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  onClick={() => learnTxnRule.mutate({ index: i, code: current })}
+                                >
+                                  Learn rule
+                                </Button>
                               </div>
                             ) : (
-                              <Badge appearance="filled" color={status === "posted" ? "success" : "danger"}>
-                                {status === "posted" ? "Posted" : "Excluded"}
-                              </Badge>
+                              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center" }}>
+                                <Badge appearance="filled" color={status === "posted" ? "success" : "danger"}>
+                                  {status === "posted" ? "Posted" : "Excluded"}
+                                </Badge>
+                                <Button
+                                  size="small"
+                                  appearance="subtle"
+                                  disabled={!canPromoteDrafts || !current || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  onClick={() => learnTxnRule.mutate({ index: i, code: current })}
+                                >
+                                  Learn rule
+                                </Button>
+                              </div>
                             )}
                           </TableCell>
                         </TableRow>

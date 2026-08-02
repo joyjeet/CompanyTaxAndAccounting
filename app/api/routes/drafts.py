@@ -25,6 +25,7 @@ from app.domain.promotion import (
     AlreadyPromotedError,
     PromoteLineInput,
     PromotionForbiddenError,
+    learn_statement_rule,
     promote_draft,
     promote_statement_draft,
     reject_draft,
@@ -188,6 +189,16 @@ class StatementPromoteOut(BaseModel):
     learned_rule_count: int
 
 
+class LearnRuleIn(BaseModel):
+    client_id: UUID | None = None
+    transaction_index: int
+    target_account_code: str
+
+
+class LearnRuleOut(BaseModel):
+    learned_rule_count: int
+
+
 @router.post("/{draft_id}/promote-all", response_model=StatementPromoteOut)
 def promote_all(
     draft_id: UUID,
@@ -249,6 +260,44 @@ def promote_all(
         review_complete=result.review_complete,
         learned_rule_count=result.learned_rule_count,
     )
+
+
+@router.post("/{draft_id}/learn-rule", response_model=LearnRuleOut)
+def learn_rule(
+    draft_id: UUID,
+    body: LearnRuleIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> LearnRuleOut:
+    if identity.scope is not AccessScope.FIRM:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only firm-scope users can learn rules.",
+        )
+
+    client_id = _resolve_promote_client_id(
+        sess,
+        draft_id=draft_id,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
+
+    try:
+        learned = learn_statement_rule(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            scope=identity.scope,
+            draft_id=draft_id,
+            transaction_index=body.transaction_index,
+            target_account_code=body.target_account_code,
+        )
+    except PromotionForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except AlreadyPromotedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+
+    return LearnRuleOut(learned_rule_count=learned)
 
 
 # --------------------------------------------------------------------------- #

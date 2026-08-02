@@ -2,6 +2,9 @@ import {
   Badge,
   Button,
   Caption1,
+  Toast,
+  Toaster,
+  ToastTitle,
   Table,
   TableBody,
   TableCell,
@@ -10,8 +13,10 @@ import {
   TableRow,
   Text,
   tokens,
+  useId,
+  useToastController,
 } from "@fluentui/react-components";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
@@ -91,7 +96,10 @@ function buildRows(draft: DraftOut): TxnRow[] {
 
 export default function BankTransactions() {
   const api = useApi();
+  const qc = useQueryClient();
   const { capabilities, role, isLoading: roleLoading } = useFirmRole();
+  const toasterId = useId("bank-tx-toaster");
+  const { dispatchToast } = useToastController(toasterId);
 
   const drafts = useQuery({
     queryKey: ["drafts", "all"],
@@ -119,8 +127,31 @@ export default function BankTransactions() {
   const posted = postedRows.length;
   const excluded = excludedRows.length;
 
+  const learnRule = useMutation({
+    mutationFn: (input: { draftId: string; transactionIndex: number; code: string }) =>
+      api.learnStatementRule(input.draftId, {
+        transaction_index: input.transactionIndex,
+        target_account_code: input.code,
+      }),
+    onSuccess: (res) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>
+            Learned {res.learned_rule_count} rule{res.learned_rule_count === 1 ? "" : "s"} for future categorization.
+          </ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["rules-engine"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
   return (
     <div style={{ display: "grid", rowGap: 16 }}>
+      <Toaster toasterId={toasterId} />
       <div>
         <Text size={700} weight="semibold" block>
           Bank transactions
@@ -165,6 +196,7 @@ export default function BankTransactions() {
                   <TableHeaderCell>Amount</TableHeaderCell>
                   <TableHeaderCell>Account</TableHeaderCell>
                   <TableHeaderCell>Draft</TableHeaderCell>
+                  <TableHeaderCell>Rule</TableHeaderCell>
                   <TableHeaderCell></TableHeaderCell>
                 </TableRow>
               </TableHeader>
@@ -198,6 +230,22 @@ export default function BankTransactions() {
                     </TableCell>
                     <TableCell>
                       <code>{shortId(row.draftId)}</code>
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="small"
+                        appearance="subtle"
+                        disabled={!capabilities.canPromoteDrafts || !row.accountCode || learnRule.isPending}
+                        onClick={() =>
+                          learnRule.mutate({
+                            draftId: row.draftId,
+                            transactionIndex: row.txnIndex,
+                            code: row.accountCode,
+                          })
+                        }
+                      >
+                        Learn rule
+                      </Button>
                     </TableCell>
                     <TableCell>
                       <Link to={`/drafts/${row.draftId}`}>

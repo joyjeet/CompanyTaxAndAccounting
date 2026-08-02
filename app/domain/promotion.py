@@ -401,6 +401,46 @@ def _learn_rule_from_single_promote(
     return _learn_rules_from_overrides(txns, {0: chosen_non_cash[0]})
 
 
+def learn_statement_rule(
+    sess: Session,
+    *,
+    firm_id: UUID,
+    client_id: UUID,
+    scope: AccessScope,
+    draft_id: UUID,
+    transaction_index: int,
+    target_account_code: str,
+) -> int:
+    """Learn one categorization rule from a reviewed statement transaction."""
+    if scope is not AccessScope.FIRM:
+        raise PromotionForbiddenError("Only firm-scope users can learn rules.")
+
+    draft = sess.get(DraftClassification, draft_id)
+    if draft is None:
+        raise AlreadyPromotedError("Draft not found in this tenant.")
+    if draft.firm_id != firm_id or draft.client_id != client_id:
+        raise AlreadyPromotedError("Draft belongs to another tenant.")
+
+    payload = draft.payload or {}
+    if not payload.get("is_statement"):
+        raise PromotionForbiddenError("Only bank-statement drafts support per-row rule learning.")
+
+    txns = payload.get("transactions") or []
+    if transaction_index < 0 or transaction_index >= len(txns):
+        raise PromotionForbiddenError("Transaction index is out of range for this draft.")
+
+    learned = _learn_rules_from_overrides(
+        txns,
+        {transaction_index: str(target_account_code or "").strip()},
+    )
+    if learned <= 0:
+        raise PromotionForbiddenError(
+            "No rule learned. Ensure the selected account differs from the proposed "
+            "account and that the row has a usable description and direction."
+        )
+    return learned
+
+
 def promote_statement_draft(
     sess: Session,
     *,
@@ -729,6 +769,7 @@ def promote_statement_draft(
 
 __all__ = [
     "AlreadyPromotedError",
+    "learn_statement_rule",
     "PromoteLineInput",
     "PromotionForbiddenError",
     "promote_draft",

@@ -41,6 +41,10 @@ export interface StatementPromoteOut {
   learned_rule_count: number;
 }
 
+export interface LearnRuleOut {
+  learned_rule_count: number;
+}
+
 // --------------------------------------------------------------------- //
 // Documents
 // --------------------------------------------------------------------- //

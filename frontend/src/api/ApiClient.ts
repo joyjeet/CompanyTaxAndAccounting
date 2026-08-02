@@ -23,6 +23,7 @@ import type {
   GeneralLedgerOut,
   JournalEntryCreateIn,
   JournalEntryOut,
+  LearnRuleOut,
   MappingOut,
   RulesetOut,
   PeriodOut,
@@ -302,6 +303,17 @@ export class ApiClient {
     },
   ): Promise<StatementPromoteOut> {
     return this.json(`/drafts/${draftId}/promote-all`, "POST", body);
+  }
+
+  learnStatementRule(
+    draftId: string,
+    body: {
+      client_id?: string;
+      transaction_index: number;
+      target_account_code: string;
+    },
+  ): Promise<LearnRuleOut> {
+    return this.json(`/drafts/${draftId}/learn-rule`, "POST", body);
   }
 
   // ----- Journal entries ----------------------------------------- //
