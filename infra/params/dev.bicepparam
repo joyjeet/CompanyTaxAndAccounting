@@ -38,3 +38,6 @@ param apiMinReplicas = 1
 param apiMaxReplicas = 3
 param workerMinReplicas = 0
 param workerMaxReplicas = 3
+
+// Keep dev API healthy even when downstream dependencies are unstable.
+param apiReadinessPath = '/healthz'
