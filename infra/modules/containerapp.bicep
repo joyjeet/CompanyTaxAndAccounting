@@ -24,6 +24,12 @@ param postgresDatabase string = 'ctaa'
 param storageAccountName string
 @description('Service Bus FQDN.')
 param serviceBusFqdn string
+@description('Application runtime environment value consumed by app.core.config.Settings.app_env.')
+@allowed([ 'local', 'test', 'staging', 'prod' ])
+param appEnv string = 'prod'
+@description('Application auth mode consumed by app.core.config.Settings.app_auth_mode.')
+@allowed([ 'jwt', 'test' ])
+param appAuthMode string = 'jwt'
 @description('Comma-separated CORS origins (API only).')
 param corsOrigins string = ''
 @description('Service Bus queue name (worker scale target).')
@@ -39,8 +45,8 @@ param readinessPath string = '/readyz'
 param revisionSuffix string = take(uniqueString(image, readinessPath), 10)
 
 var commonEnv = [
-  { name: 'APP_ENV',                     value: 'prod' }
-  { name: 'APP_AUTH_MODE',               value: 'jwt' }
+  { name: 'APP_ENV',                     value: appEnv }
+  { name: 'APP_AUTH_MODE',               value: appAuthMode }
   { name: 'APP_KEK_PROVIDER',            value: 'keyvault' }
   { name: 'AZURE_KEYVAULT_URL',          value: keyVaultUri }
   { name: 'AZURE_CLIENT_ID',             value: uamiClientId }

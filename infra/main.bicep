@@ -134,6 +134,8 @@ var commonTags = {
 // ---------------------------------------------------------------------------
 var prefix = '${namePrefix}-${env}-${locationShort}'
 var u = uniqueString(subscription().id, env, locationShort, namePrefix)
+var runtimeAppEnv = env == 'dev' ? 'test' : (env == 'staging' ? 'staging' : 'prod')
+var runtimeAppAuthMode = env == 'dev' ? 'test' : 'jwt'
 var names = {
   rg:           'rg-${prefix}'
   vnet:         'vnet-${prefix}'
@@ -291,6 +293,8 @@ module apiApp 'modules/containerapp.bicep' = {
     uamiClientId: identity.outputs.uamiClientId
     image: apiImage
     role: 'api'
+    appEnv: runtimeAppEnv
+    appAuthMode: runtimeAppAuthMode
     minReplicas: apiMinReplicas
     maxReplicas: apiMaxReplicas
     keyVaultUri: keyvault.outputs.keyVaultUri
@@ -318,6 +322,8 @@ module workerApp 'modules/containerapp.bicep' = {
     uamiClientId: identity.outputs.uamiClientId
     image: workerImage
     role: 'worker'
+    appEnv: runtimeAppEnv
+    appAuthMode: runtimeAppAuthMode
     minReplicas: workerMinReplicas
     maxReplicas: workerMaxReplicas
     keyVaultUri: keyvault.outputs.keyVaultUri
@@ -343,6 +349,8 @@ module uiApp 'modules/containerapp.bicep' = {
     uamiClientId: identity.outputs.uamiClientId
     image: uiImage
     role: 'ui'
+    appEnv: runtimeAppEnv
+    appAuthMode: runtimeAppAuthMode
     minReplicas: uiMinReplicas
     maxReplicas: uiMaxReplicas
     keyVaultUri: keyvault.outputs.keyVaultUri
