@@ -30,7 +30,7 @@ function read(name: string, fallback = ""): string {
 
 const cfg: AppConfig = {
   authMode: (read("VITE_AUTH_MODE", "dev") as AuthMode),
-  apiBase: read("VITE_API_BASE", "/api"),
+  apiBase: read("VITE_API_BASE", ""),
   msal: {
     clientId: read("VITE_MSAL_CLIENT_ID"),
     authority: read("VITE_MSAL_AUTHORITY"),

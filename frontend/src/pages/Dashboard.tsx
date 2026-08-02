@@ -107,8 +107,6 @@ export default function Dashboard() {
   const api = useApi();
   const { identity } = useAuth();
 
-  const asArray = <T,>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
-
   const clients = useQuery({ queryKey: ["clients"], queryFn: () => api.listClients() });
   const drafts = useQuery({
     queryKey: ["drafts", "pending"],
@@ -128,12 +126,12 @@ export default function Dashboard() {
   const anyLoading =
     clients.isLoading || drafts.isLoading || docs.isLoading || artifacts.isLoading || team.isLoading;
 
-  const clientsList = asArray<typeof clients.data extends (infer U)[] ? U : never>(clients.data);
-  const draftsList = asArray<typeof drafts.data extends (infer U)[] ? U : never>(drafts.data);
-  const docsList = asArray<typeof docs.data extends (infer U)[] ? U : never>(docs.data);
-  const artifactsList = asArray<typeof artifacts.data extends (infer U)[] ? U : never>(artifacts.data);
-  const teamMembers = asArray<typeof team.data extends { members: (infer U)[] } ? U : never>(team.data?.members);
-  const teamInvites = asArray<typeof team.data extends { invites: (infer U)[] } ? U : never>(team.data?.invites);
+  const clientsList = Array.isArray(clients.data) ? clients.data : [];
+  const draftsList = Array.isArray(drafts.data) ? drafts.data : [];
+  const docsList = Array.isArray(docs.data) ? docs.data : [];
+  const artifactsList = Array.isArray(artifacts.data) ? artifacts.data : [];
+  const teamMembers = Array.isArray(team.data?.members) ? team.data.members : [];
+  const teamInvites = Array.isArray(team.data?.invites) ? team.data.invites : [];
 
   const teamMembersCount = teamMembers.length;
   const pendingInvitesCount = teamInvites.filter((i) => i.status === "pending").length;
