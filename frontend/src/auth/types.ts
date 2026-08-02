@@ -31,6 +31,15 @@ export interface DraftOut {
   payload: Record<string, unknown>;
 }
 
+export interface StatementPromoteOut {
+  journal_entry_ids: string[];
+  skipped: Array<{ index: string; reason: string }>;
+  posted_indexes: number[];
+  excluded_indexes: number[];
+  pending_indexes: number[];
+  review_complete: boolean;
+}
+
 // --------------------------------------------------------------------- //
 // Documents
 // --------------------------------------------------------------------- //

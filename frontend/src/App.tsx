@@ -12,6 +12,7 @@ import { AuthProvider, useAuth } from "./auth/AuthContext";
 import AppShell from "./components/AppShell";
 import RequireAuth from "./components/RequireAuth";
 import ArtifactsLibrary from "./pages/ArtifactsLibrary";
+import BankTransactions from "./pages/BankTransactions";
 import ClientList from "./pages/ClientList";
 import ClientDetail from "./pages/client/ClientDetail";
 import Dashboard from "./pages/Dashboard";
@@ -119,6 +120,16 @@ export default function App() {
                 <RequireAuth roles={["firm_staff"]}>
                   <AuthenticatedShell>
                     <ReviewQueue />
+                  </AuthenticatedShell>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/bank-transactions"
+              element={
+                <RequireAuth roles={["firm_staff"]}>
+                  <AuthenticatedShell>
+                    <BankTransactions />
                   </AuthenticatedShell>
                 </RequireAuth>
               }

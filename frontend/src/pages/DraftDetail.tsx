@@ -46,7 +46,6 @@ import {
   statementRangeFromTxns,
 } from "../lib/statementPeriod";
 import {
-  promoteAllDisabledReason,
   promoteDisabledReason,
   rejectDisabledReason,
 } from "./draftActionGate";
@@ -304,14 +303,31 @@ export default function DraftDetail() {
     ? (payload.transactions as Array<Record<string, unknown>>)
     : [];
   const [txnOverrides, setTxnOverrides] = useState<Record<number, string>>({});
-  const [txnDecisions, setTxnDecisions] = useState<Record<number, "accept" | "reject">>({});
+  const [activeTxnTab, setActiveTxnTab] = useState<"pending" | "posted" | "excluded">("pending");
+  const [postedIndexes, setPostedIndexes] = useState<number[]>([]);
+  const [excludedIndexes, setExcludedIndexes] = useState<number[]>([]);
 
-  const acceptedTxnCount = useMemo(
-    () => rawTxns.reduce((n, _t, i) => n + ((txnDecisions[i] ?? "accept") === "accept" ? 1 : 0), 0),
-    [rawTxns, txnDecisions],
-  );
+  const persistedPostedIndexes = useMemo(() => {
+    const raw = payload._posted_indexes;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n >= 0);
+  }, [payload._posted_indexes]);
 
-  const rejectTxnCount = rawTxns.length - acceptedTxnCount;
+  const persistedExcludedIndexes = useMemo(() => {
+    const raw = payload._excluded_indexes;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n >= 0);
+  }, [payload._excluded_indexes]);
+
+  useEffect(() => {
+    setPostedIndexes(persistedPostedIndexes);
+    setExcludedIndexes(persistedExcludedIndexes);
+    setActiveTxnTab("pending");
+  }, [id, persistedPostedIndexes, persistedExcludedIndexes]);
 
   // ----- Statement period alignment --------------------------------------
   // The backend clamps every transaction date into the selected period
@@ -334,32 +350,34 @@ export default function DraftDetail() {
   // reviewer's manual choice is never overwritten by a re-render or refetch.
   const periodAutoRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isStatement || !statementRange) return;
+    if (!isStatement) return;
     const rows = periods.data;
     if (!rows || rows.length === 0) return;
     const key = `${id}:${clientId}`;
     if (periodAutoRef.current === key) return;
     periodAutoRef.current = key;
     if (periodId) return; // reviewer already chose one
-    const best = pickBestPeriod(rows, statementRange);
-    if (best) setPeriodId(best.id);
+    if (statementRange) {
+      const best = pickBestPeriod(rows, statementRange);
+      if (best) {
+        setPeriodId(best.id);
+        return;
+      }
+    }
+    const firstOpen = rows.find((p) => !p.is_locked);
+    if (firstOpen) setPeriodId(firstOpen.id);
   }, [isStatement, statementRange, periods.data, periodId, id, clientId]);
 
-  const promoteAll = useMutation({
-    mutationFn: () => {
+  const applyTxnDecision = useMutation({
+    mutationFn: (input: { mode: "accept" | "reject"; indexes: number[] }) => {
       const overrides: Record<string, string> = {};
       for (const [idx, code] of Object.entries(txnOverrides)) {
         if (code) overrides[String(idx)] = code;
       }
-      const acceptedIndexes: number[] = [];
-      const rejectedIndexes: number[] = [];
-      for (let i = 0; i < rawTxns.length; i += 1) {
-        if ((txnDecisions[i] ?? "accept") === "accept") {
-          acceptedIndexes.push(i);
-        } else {
-          rejectedIndexes.push(i);
-        }
-      }
+
+      const acceptedIndexes = input.mode === "accept" ? input.indexes : [];
+      const rejectedIndexes = input.mode === "reject" ? input.indexes : [];
+
       return api.promoteStatementDraft(id, {
         client_id: clientId || undefined,
         period_id: periodId,
@@ -369,21 +387,25 @@ export default function DraftDetail() {
         rejected_indexes: rejectedIndexes,
       });
     },
-    onSuccess: (res) => {
-      const skipped = res.skipped.length;
-      const posted = res.journal_entry_ids.length;
+    onSuccess: (res, vars) => {
+      setPostedIndexes(res.posted_indexes);
+      setExcludedIndexes(res.excluded_indexes);
+
+      const postedNow = res.journal_entry_ids.length;
+      const excludedNow = vars.mode === "reject" ? vars.indexes.length : 0;
+
       dispatchToast(
         <Toast>
           <ToastTitle>
-            Posted {posted} journal entr{posted === 1 ? "y" : "ies"}
-            {skipped > 0 ? ` (${skipped} skipped — see audit)` : ""}
+            {vars.mode === "accept"
+              ? `Posted ${postedNow} transaction${postedNow === 1 ? "" : "s"}`
+              : `Excluded ${excludedNow} transaction${excludedNow === 1 ? "" : "s"}`}
           </ToastTitle>
         </Toast>,
-        { intent: skipped > 0 ? "warning" : "success" },
+        { intent: "success" },
       );
       qc.invalidateQueries({ queryKey: ["drafts"] });
       qc.invalidateQueries({ queryKey: ["entries"] });
-      navigate("/review", { replace: true });
     },
     onError: (err: Error) => {
       dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
@@ -398,12 +420,6 @@ export default function DraftDetail() {
   const conf = Number.parseFloat(d.confidence);
   const canPromoteDrafts = capabilities.canPromoteDrafts;
   const blockedReason = rejectDisabledReason({ canPromoteDrafts, role });
-  const promoteAllReason = promoteAllDisabledReason({
-    canPromoteDrafts,
-    role,
-    clientId,
-    periodId,
-  });
   const promoteReason = promoteDisabledReason({
     canPromoteDrafts,
     role,
@@ -425,6 +441,18 @@ export default function DraftDetail() {
       ))}
     </>
   );
+
+  const postedSet = new Set(postedIndexes);
+  const excludedSet = new Set(excludedIndexes);
+  const pendingIndexes = rawTxns
+    .map((_, i) => i)
+    .filter((i) => !postedSet.has(i) && !excludedSet.has(i));
+  const displayedIndexes =
+    activeTxnTab === "pending"
+      ? pendingIndexes
+      : activeTxnTab === "posted"
+        ? rawTxns.map((_, i) => i).filter((i) => postedSet.has(i))
+        : rawTxns.map((_, i) => i).filter((i) => excludedSet.has(i));
 
   return (
     <div style={{ display: "grid", rowGap: 16 }}>
@@ -568,24 +596,19 @@ export default function DraftDetail() {
 
       {isStatement && (
         <Section
-          title={`Bank statement transactions (${rawTxns.length})`}
+          title={`Bank transactions (${rawTxns.length})`}
           help={{
-            title: "Posting a multi-transaction statement",
+            title: "Pending, posted, and excluded workflow",
             body: (
               <>
-                The classifier parsed each line of the statement into a
-                proposed transaction. You can mark rows as <b>Accept</b> or
-                <b>Reject</b> individually (or all at once). Clicking
-                <b> Post accepted transactions</b> creates <b>one balanced
-                journal entry per accepted row</b> against
-                the selected period — deposits get DR Cash / CR &lt;income
-                or other&gt;, payments get DR &lt;expense&gt; / CR Cash.
+                Each row starts in <b>Pending</b>. Clicking <b>Accept</b>
+                posts it immediately (one journal entry per row) and moves it
+                to <b>Posted</b>. Clicking <b>Reject</b> excludes it
+                immediately and moves it to <b>Excluded</b>.
                 <br /><br />
-                You can <b>override the account code</b> on any row before
-                posting (e.g. move a Suspense 9999 row to the right
-                expense account). Rows whose code does not exist in this
-                client's chart of accounts will be reported as
-                &ldquo;skipped&rdquo; in the result toast.
+                Use <b>Accept all pending</b> or <b>Reject all pending</b> to
+                process all remaining rows in one click. The tabs let you
+                switch between pending work and historical posted/excluded rows.
               </>
             ),
           }}
@@ -635,6 +658,27 @@ export default function DraftDetail() {
                     </strong>
                   </span>
                 </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                  <Button
+                    appearance={activeTxnTab === "pending" ? "primary" : "secondary"}
+                    onClick={() => setActiveTxnTab("pending")}
+                  >
+                    Pending ({pendingIndexes.length})
+                  </Button>
+                  <Button
+                    appearance={activeTxnTab === "posted" ? "primary" : "secondary"}
+                    onClick={() => setActiveTxnTab("posted")}
+                  >
+                    Posted ({postedIndexes.length})
+                  </Button>
+                  <Button
+                    appearance={activeTxnTab === "excluded" ? "primary" : "secondary"}
+                    onClick={() => setActiveTxnTab("excluded")}
+                  >
+                    Excluded ({excludedIndexes.length})
+                  </Button>
+                </div>
+
                 <Table size="extra-small" style={{ marginTop: 8 }}>
                   <TableHeader>
                     <TableRow>
@@ -643,11 +687,12 @@ export default function DraftDetail() {
                       <TableHeaderCell>Direction</TableHeaderCell>
                       <TableHeaderCell>Amount</TableHeaderCell>
                       <TableHeaderCell>Account</TableHeaderCell>
-                      <TableHeaderCell>Decision</TableHeaderCell>
+                      <TableHeaderCell>Status / Action</TableHeaderCell>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {rawTxns.map((t, i) => {
+                    {displayedIndexes.map((i) => {
+                      const t = rawTxns[i] ?? {};
                       const proposed = String(t.proposed_account_code ?? "");
                       const normalizedProposed =
                         accountCodeMap.has(proposed)
@@ -656,7 +701,11 @@ export default function DraftDetail() {
                       const current = txnOverrides[i] ?? normalizedProposed;
                       const acct = accountCodeMap.get(current);
                       const dir = String(t.direction ?? "");
-                      const decision = txnDecisions[i] ?? "accept";
+                      const status = postedSet.has(i)
+                        ? "posted"
+                        : excludedSet.has(i)
+                          ? "excluded"
+                          : "pending";
                       return (
                         <TableRow key={i}>
                           <TableCell>
@@ -675,43 +724,51 @@ export default function DraftDetail() {
                             <code>{String(t.amount ?? "")}</code>
                           </TableCell>
                           <TableCell>
-                            <Dropdown
-                              placeholder="Account"
-                              selectedOptions={acct ? [acct.id] : []}
-                              value={accountLabelByCode(current)}
-                              onOptionSelect={(_, dd) => {
-                                const next = { ...txnOverrides };
-                                const newAcct = (accounts.data ?? []).find(
-                                  (a) => a.id === dd.optionValue,
-                                );
-                                if (newAcct) next[i] = newAcct.code;
-                                setTxnOverrides(next);
-                              }}
-                            >
-                              {renderAccountOptions()}
-                            </Dropdown>
+                            {status === "pending" ? (
+                              <Dropdown
+                                placeholder="Account"
+                                selectedOptions={acct ? [acct.id] : []}
+                                value={accountLabelByCode(current)}
+                                onOptionSelect={(_, dd) => {
+                                  const next = { ...txnOverrides };
+                                  const newAcct = (accounts.data ?? []).find(
+                                    (a) => a.id === dd.optionValue,
+                                  );
+                                  if (newAcct) next[i] = newAcct.code;
+                                  setTxnOverrides(next);
+                                }}
+                              >
+                                {renderAccountOptions()}
+                              </Dropdown>
+                            ) : (
+                              <Body1>{accountLabelByCode(current) || "—"}</Body1>
+                            )}
                           </TableCell>
                           <TableCell>
-                            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                              <Button
-                                size="small"
-                                appearance={decision === "accept" ? "primary" : "secondary"}
-                                onClick={() =>
-                                  setTxnDecisions((prev) => ({ ...prev, [i]: "accept" }))
-                                }
-                              >
-                                Accept
-                              </Button>
-                              <Button
-                                size="small"
-                                appearance={decision === "reject" ? "primary" : "secondary"}
-                                onClick={() =>
-                                  setTxnDecisions((prev) => ({ ...prev, [i]: "reject" }))
-                                }
-                              >
-                                Reject
-                              </Button>
-                            </div>
+                            {status === "pending" ? (
+                              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                                <Button
+                                  size="small"
+                                  appearance="primary"
+                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending}
+                                  onClick={() => applyTxnDecision.mutate({ mode: "accept", indexes: [i] })}
+                                >
+                                  Accept
+                                </Button>
+                                <Button
+                                  size="small"
+                                  appearance="secondary"
+                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending}
+                                  onClick={() => applyTxnDecision.mutate({ mode: "reject", indexes: [i] })}
+                                >
+                                  Reject
+                                </Button>
+                              </div>
+                            ) : (
+                              <Badge appearance="filled" color={status === "posted" ? "success" : "danger"}>
+                                {status === "posted" ? "Posted" : "Excluded"}
+                              </Badge>
+                            )}
                           </TableCell>
                         </TableRow>
                       );
@@ -721,26 +778,32 @@ export default function DraftDetail() {
                 <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <Button
                     appearance="secondary"
-                    onClick={() => {
-                      const next: Record<number, "accept" | "reject"> = {};
-                      for (let i = 0; i < rawTxns.length; i += 1) next[i] = "accept";
-                      setTxnDecisions(next);
-                    }}
+                    disabled={
+                      !canPromoteDrafts ||
+                      !clientId ||
+                      !periodId ||
+                      applyTxnDecision.isPending ||
+                      pendingIndexes.length === 0
+                    }
+                    onClick={() => applyTxnDecision.mutate({ mode: "accept", indexes: pendingIndexes })}
                   >
-                    Accept all on page
+                    Accept all pending
                   </Button>
                   <Button
                     appearance="secondary"
-                    onClick={() => {
-                      const next: Record<number, "accept" | "reject"> = {};
-                      for (let i = 0; i < rawTxns.length; i += 1) next[i] = "reject";
-                      setTxnDecisions(next);
-                    }}
+                    disabled={
+                      !canPromoteDrafts ||
+                      !clientId ||
+                      !periodId ||
+                      applyTxnDecision.isPending ||
+                      pendingIndexes.length === 0
+                    }
+                    onClick={() => applyTxnDecision.mutate({ mode: "reject", indexes: pendingIndexes })}
                   >
-                    Reject all on page
+                    Reject all pending
                   </Button>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                    {acceptedTxnCount} accepted, {rejectTxnCount} rejected.
+                    {pendingIndexes.length} pending, {postedIndexes.length} posted, {excludedIndexes.length} excluded.
                   </Caption1>
                 </div>
                 {periodMismatch && statementRange && selectedPeriod && (
@@ -773,27 +836,13 @@ export default function DraftDetail() {
                     </MessageBarBody>
                   </MessageBar>
                 )}
-                <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                    Client and period are auto-selected for this statement.
-                  </Caption1>
-                  <Button
-                    appearance="primary"
-                    disabled={!canPromoteDrafts || !clientId || !periodId || promoteAll.isPending || acceptedTxnCount === 0}
-                    title={promoteAllReason}
-                    onClick={() => promoteAll.mutate()}
-                  >
-                    {promoteAll.isPending ? (
-                      <Spinner size="tiny" />
-                    ) : (
-                      `Post ${acceptedTxnCount} accepted transaction${acceptedTxnCount === 1 ? "" : "s"}`
-                    )}
-                  </Button>
-                </div>
-                {acceptedTxnCount === 0 && (
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 6 }}>
-                    Accept at least one transaction to post, or use Reject draft below.
-                  </Caption1>
+                {applyTxnDecision.isPending && (
+                  <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+                    <Spinner size="tiny" />
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Processing transactions...
+                    </Caption1>
+                  </div>
                 )}
                 {!canPromoteDrafts && (
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>

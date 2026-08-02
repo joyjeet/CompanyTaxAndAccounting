@@ -30,6 +30,7 @@ import type {
   ResetOut,
   RollupTreeOut,
   SeedOut,
+  StatementPromoteOut,
   TaxFormDetailOut,
   TaxFormOut,
   TrialBalanceOut,
@@ -299,7 +300,7 @@ export class ApiClient {
       accepted_indexes?: number[];
       rejected_indexes?: number[];
     },
-  ): Promise<{ journal_entry_ids: string[]; skipped: Array<{ index: string; reason: string }> }> {
+  ): Promise<StatementPromoteOut> {
     return this.json(`/drafts/${draftId}/promote-all`, "POST", body);
   }
 

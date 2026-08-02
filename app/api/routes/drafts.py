@@ -181,6 +181,10 @@ class StatementPromoteIn(BaseModel):
 class StatementPromoteOut(BaseModel):
     journal_entry_ids: list[UUID]
     skipped: list[dict[str, str]]
+    posted_indexes: list[int]
+    excluded_indexes: list[int]
+    pending_indexes: list[int]
+    review_complete: bool
 
 
 @router.post("/{draft_id}/promote-all", response_model=StatementPromoteOut)
@@ -238,6 +242,10 @@ def promote_all(
     return StatementPromoteOut(
         journal_entry_ids=result.journal_entry_ids,
         skipped=result.skipped,
+        posted_indexes=result.posted_indexes,
+        excluded_indexes=result.excluded_indexes,
+        pending_indexes=result.pending_indexes,
+        review_complete=result.review_complete,
     )
 
 

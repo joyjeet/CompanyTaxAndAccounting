@@ -195,6 +195,10 @@ def reject_draft(
 class StatementPromotionResult:
     journal_entry_ids: list[UUID]
     skipped: list[dict[str, str]]  # [{"index": "3", "reason": "..."}]
+    posted_indexes: list[int]
+    excluded_indexes: list[int]
+    pending_indexes: list[int]
+    review_complete: bool
 
 
 def _resolve_rules_file() -> Path:
@@ -493,19 +497,50 @@ def promote_statement_draft(
         )
 
     overrides = account_overrides or {}
-    accepted = {
-        i
-        for i in (accepted_indexes or set())
-        if i >= 0
-    }
-    rejected = {
-        i
-        for i in (rejected_indexes or set())
-        if i >= 0
-    }
+    existing_payload = draft.payload or {}
+
+    def _to_int_set(value: object) -> set[int]:
+        out: set[int] = set()
+        if not isinstance(value, list):
+            return out
+        for raw in value:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n >= 0:
+                out.add(n)
+        return out
+
+    existing_posted_indexes = _to_int_set(existing_payload.get("_posted_indexes"))
+    existing_excluded_indexes = _to_int_set(existing_payload.get("_excluded_indexes"))
+    decided_indexes = existing_posted_indexes | existing_excluded_indexes
+
+    accepted = {i for i in (accepted_indexes or set()) if i >= 0}
+    rejected = {i for i in (rejected_indexes or set()) if i >= 0}
+
+    if accepted & rejected:
+        overlap = sorted(accepted & rejected)
+        raise PromotionForbiddenError(
+            f"accepted_indexes and rejected_indexes overlap: {overlap}"
+        )
+
+    all_indexes = set(range(len(txns)))
+    if accepted or rejected:
+        target_accept = (accepted & all_indexes) - decided_indexes
+        target_reject = (rejected & all_indexes) - decided_indexes
+    else:
+        # Backward-compatible behavior for callers that don't pass decisions:
+        # post all still-pending transactions.
+        target_accept = all_indexes - decided_indexes
+        target_reject = set()
+
+    if not target_accept and not target_reject:
+        raise AlreadyPromotedError("No pending transactions left to process.")
 
     posted_ids: list[UUID] = []
     skipped: list[dict[str, str]] = []
+    posted_indexes_this_call: set[int] = set()
     ledger = LedgerService(sess, firm_id=firm_id, client_id=client_id, actor=actor)
 
     def _resolve_entry_date(txn: dict) -> tuple[date | None, str]:
@@ -537,11 +572,10 @@ def promote_statement_draft(
         return d, ""
 
     for idx, txn in enumerate(txns):
-        if accepted and idx not in accepted:
+        if idx in target_reject:
             skipped.append({"index": str(idx), "reason": "rejected by reviewer"})
             continue
-        if idx in rejected:
-            skipped.append({"index": str(idx), "reason": "rejected by reviewer"})
+        if idx not in target_accept:
             continue
 
         code = overrides.get(idx) or txn.get("proposed_account_code") or ""
@@ -618,22 +652,45 @@ def promote_statement_draft(
             source_document_id=draft.source_document_id,
         )
         posted_ids.append(entry.id)
+        posted_indexes_this_call.add(idx)
 
-    if not posted_ids:
+    if not posted_ids and not target_reject:
         raise AlreadyPromotedError(
             "No transactions could be posted; draft left in pending review."
         )
 
     learned_rule_count = _learn_rules_from_overrides(txns, overrides)
 
-    draft.status = DraftStatus.PROMOTED
-    draft.promoted_journal_entry_id = posted_ids[0]
-    draft.reviewed_at = datetime.now(tz=UTC)
-    draft.reviewed_by = actor
+    persisted_posted_ids: list[str] = []
+    for raw in existing_payload.get("_posted_journal_entry_ids", []):
+        if isinstance(raw, str) and raw:
+            persisted_posted_ids.append(raw)
+    persisted_posted_ids.extend(str(j) for j in posted_ids)
+
+    next_posted_indexes = sorted(existing_posted_indexes | posted_indexes_this_call)
+    next_excluded_indexes = sorted(existing_excluded_indexes | target_reject)
+    next_pending_indexes = sorted(
+        all_indexes - set(next_posted_indexes) - set(next_excluded_indexes)
+    )
+    review_complete = len(next_pending_indexes) == 0
+
+    if review_complete:
+        if persisted_posted_ids:
+            draft.status = DraftStatus.PROMOTED
+            draft.promoted_journal_entry_id = UUID(persisted_posted_ids[0])
+        else:
+            draft.status = DraftStatus.REJECTED
+            draft.promoted_journal_entry_id = None
+        draft.reviewed_at = datetime.now(tz=UTC)
+        draft.reviewed_by = actor
+
     draft.payload = {
-        **(draft.payload or {}),
-        "_posted_journal_entry_ids": [str(j) for j in posted_ids],
-        "_posted_count": len(posted_ids),
+        **existing_payload,
+        "_posted_journal_entry_ids": persisted_posted_ids,
+        "_posted_count": len(persisted_posted_ids),
+        "_posted_indexes": next_posted_indexes,
+        "_excluded_indexes": next_excluded_indexes,
+        "_pending_indexes": next_pending_indexes,
         "_skipped": skipped,
         "_learned_rule_count": learned_rule_count,
     }
@@ -650,15 +707,21 @@ def promote_statement_draft(
         details={
             "journal_entry_ids": [str(j) for j in posted_ids],
             "skipped_count": len(skipped),
-            "accepted_count": len(accepted),
-            "rejected_count": len(rejected),
+            "accepted_count": len(target_accept),
+            "rejected_count": len(target_reject),
+            "pending_count": len(next_pending_indexes),
             "period_id": str(period_id),
             "kind": "bank_statement",
         },
     )
 
     return StatementPromotionResult(
-        journal_entry_ids=posted_ids, skipped=skipped
+        journal_entry_ids=posted_ids,
+        skipped=skipped,
+        posted_indexes=next_posted_indexes,
+        excluded_indexes=next_excluded_indexes,
+        pending_indexes=next_pending_indexes,
+        review_complete=review_complete,
     )
 
 
