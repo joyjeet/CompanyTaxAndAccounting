@@ -1,4 +1,5 @@
 import {
+  Badge,
   Button,
   Caption1,
   Dialog,
@@ -18,6 +19,7 @@ import {
   MessageBarTitle,
   Option,
   Spinner,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -33,14 +35,20 @@ import {
   ToastTitle,
   ToastBody,
 } from "@fluentui/react-components";
-import { AddRegular, OpenRegular } from "@fluentui/react-icons";
+import {
+  AddRegular,
+  ArchiveRegular,
+  ArrowUndoRegular,
+  DeleteRegular,
+  OpenRegular,
+} from "@fluentui/react-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
 import { roleDisplayName } from "../auth/firmRole";
-import type { EntityType, Industry } from "../auth/types";
+import type { ClientOut, EntityType, Industry } from "../auth/types";
 import { useFirmRole } from "../auth/useFirmRole";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
@@ -162,6 +170,10 @@ export default function ClientList() {
   const [seedGap, setSeedGap] = useState<
     { clientId: string; clientName: string; industry: Industry; reason: string } | null
   >(null);
+  const [showArchived, setShowArchived] = useState(false);
+  // The client awaiting delete confirmation. Kept separate from the list so
+  // the dialog survives a background refetch.
+  const [deleteTarget, setDeleteTarget] = useState<ClientOut | null>(null);
 
   function resetForm() {
     setName("");
@@ -177,7 +189,10 @@ export default function ClientList() {
     setPhone("");
   }
 
-  const clients = useQuery({ queryKey: ["clients"], queryFn: () => api.listClients() });
+  const clients = useQuery({
+    queryKey: ["clients", showArchived],
+    queryFn: () => api.listClients(showArchived),
+  });
   const create = useMutation({
     mutationFn: () =>
       api.createClient({
@@ -284,6 +299,71 @@ export default function ClientList() {
         { intent: "error" },
       );
     },
+  });
+
+  function toastError(title: string) {
+    return (err: Error) =>
+      dispatchToast(
+        <Toast>
+          <ToastTitle>{title}</ToastTitle>
+          <ToastBody>{err.message}</ToastBody>
+        </Toast>,
+        { intent: "error" },
+      );
+  }
+
+  const archive = useMutation({
+    mutationFn: (c: ClientOut) => api.archiveClient(c.id),
+    onSuccess: (c) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>{c.name} archived</ToastTitle>
+          <ToastBody>
+            Its books are intact. Turn on "Show archived" to restore it.
+          </ToastBody>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["clients"] });
+    },
+    onError: toastError("Archive failed"),
+  });
+
+  const restore = useMutation({
+    mutationFn: (c: ClientOut) => api.restoreClient(c.id),
+    onSuccess: (c) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>{c.name} restored</ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["clients"] });
+    },
+    onError: toastError("Restore failed"),
+  });
+
+  // Asked only when the confirm dialog is open, so the dialog can explain
+  // exactly what is blocking a delete instead of just refusing.
+  const deletability = useQuery({
+    queryKey: ["client-deletability", deleteTarget?.id],
+    queryFn: () => api.clientDeletability(deleteTarget!.id),
+    enabled: Boolean(deleteTarget),
+  });
+
+  const remove = useMutation({
+    mutationFn: (c: ClientOut) => api.deleteClient(c.id),
+    onSuccess: (_v, c) => {
+      setDeleteTarget(null);
+      dispatchToast(
+        <Toast>
+          <ToastTitle>{c.name} deleted</ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["clients"] });
+    },
+    onError: toastError("Delete failed"),
   });
 
   return (
@@ -513,7 +593,16 @@ export default function ClientList() {
         </Caption1>
       )}
 
-      <Section title={`${clients.data?.length ?? 0} clients`}>
+      <Section
+        title={`${clients.data?.length ?? 0} clients`}
+        toolbar={
+          <Switch
+            label="Show archived"
+            checked={showArchived}
+            onChange={(_, d) => setShowArchived(d.checked)}
+          />
+        }
+      >
         {clients.isLoading && <LoadingState />}
         {clients.error && <ErrorState error={clients.error} />}
         {clients.data && clients.data.length === 0 && (
@@ -537,17 +626,53 @@ export default function ClientList() {
                 <TableRow key={c.id}>
                   <TableCell>
                     <Text weight="semibold">{c.name}</Text>
+                    {!c.is_active && (
+                      <Badge appearance="tint" color="warning" style={{ marginLeft: 8 }}>
+                        Archived
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell>{c.external_code ?? "—"}</TableCell>
                   <TableCell>
                     <code>{shortId(c.id)}</code>
                   </TableCell>
                   <TableCell>
-                    <Link to={`/clients/${c.id}`}>
-                      <Button appearance="subtle" icon={<OpenRegular />}>
-                        Open
-                      </Button>
-                    </Link>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <Link to={`/clients/${c.id}`}>
+                        <Button appearance="subtle" icon={<OpenRegular />}>
+                          Open
+                        </Button>
+                      </Link>
+                      {capabilities.canCreateClient &&
+                        (c.is_active ? (
+                          <Button
+                            appearance="subtle"
+                            icon={<ArchiveRegular />}
+                            disabled={archive.isPending}
+                            onClick={() => archive.mutate(c)}
+                          >
+                            Archive
+                          </Button>
+                        ) : (
+                          <Button
+                            appearance="subtle"
+                            icon={<ArrowUndoRegular />}
+                            disabled={restore.isPending}
+                            onClick={() => restore.mutate(c)}
+                          >
+                            Restore
+                          </Button>
+                        ))}
+                      {capabilities.canCreateClient && (
+                        <Button
+                          appearance="subtle"
+                          icon={<DeleteRegular />}
+                          onClick={() => setDeleteTarget(c)}
+                        >
+                          Delete
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -555,6 +680,80 @@ export default function ClientList() {
           </Table>
         )}
       </Section>
+
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(_, d) => {
+          if (!d.open) setDeleteTarget(null);
+        }}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete {deleteTarget?.name}?</DialogTitle>
+            <DialogContent>
+              {deletability.isLoading && <Spinner size="tiny" label="Checking…" />}
+              {deletability.error && <ErrorState error={deletability.error} />}
+              {deletability.data?.can_delete && (
+                <Text>
+                  This client has no books yet, so it can be removed permanently.
+                  Its chart of accounts, periods and profile go with it. This
+                  cannot be undone — archive instead if you may need it later.
+                </Text>
+              )}
+              {deletability.data && !deletability.data.can_delete && (
+                <div>
+                  <Text block>
+                    This client already has records, so it can't be deleted.
+                    Retention rules require the books to survive. Archive it
+                    instead — it will disappear from pickers and refuse new
+                    postings, but nothing is lost.
+                  </Text>
+                  <ul>
+                    {Object.entries(deletability.data.blocking_counts).map(
+                      ([label, count]) => (
+                        <li key={label}>
+                          <Text>
+                            {count} {label}
+                            {count === 1 ? "" : "s"}
+                          </Text>
+                        </li>
+                      ),
+                    )}
+                  </ul>
+                </div>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="secondary">Cancel</Button>
+              </DialogTrigger>
+              {deletability.data && !deletability.data.can_delete && (
+                <Button
+                  appearance="primary"
+                  icon={<ArchiveRegular />}
+                  disabled={archive.isPending || !deleteTarget?.is_active}
+                  onClick={() => {
+                    if (deleteTarget) archive.mutate(deleteTarget);
+                    setDeleteTarget(null);
+                  }}
+                >
+                  Archive instead
+                </Button>
+              )}
+              {deletability.data?.can_delete && (
+                <Button
+                  appearance="primary"
+                  icon={remove.isPending ? <Spinner size="tiny" /> : <DeleteRegular />}
+                  disabled={remove.isPending}
+                  onClick={() => deleteTarget && remove.mutate(deleteTarget)}
+                >
+                  Delete permanently
+                </Button>
+              )}
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }

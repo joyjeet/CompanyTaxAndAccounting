@@ -150,9 +150,20 @@ export interface ClientOut {
   firm_id: string;
   name: string;
   external_code: string | null;
+  /** Archived clients are hidden by default and refuse new postings. */
+  is_active: boolean;
+  archived_at: string | null;
   /** Only returned by the create call — null elsewhere. */
   coa_seeded?: boolean | null;
   coa_seed_error?: string | null;
+}
+
+/** Whether a client can be hard-deleted, and what is blocking it. */
+export interface ClientDeletabilityOut {
+  client_id: string;
+  can_delete: boolean;
+  /** Label -> count, e.g. `{ "journal entry": 12 }`. Empty when deletable. */
+  blocking_counts: Record<string, number>;
 }
 
 /**

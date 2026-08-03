@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
+from app.domain.exceptions import ClientArchivedError
 from app.domain.promotion import (
     AlreadyPromotedError,
     PromoteLineInput,
@@ -174,7 +175,7 @@ def promote(
         )
     except PromotionForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
-    except AlreadyPromotedError as e:
+    except (AlreadyPromotedError, ClientArchivedError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     return PromoteOut(journal_entry_id=je_id)
 
@@ -263,7 +264,7 @@ def promote_all(
         )
     except PromotionForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
-    except AlreadyPromotedError as e:
+    except (AlreadyPromotedError, ClientArchivedError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     return StatementPromoteOut(
         journal_entry_ids=result.journal_entry_ids,

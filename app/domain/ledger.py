@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.audit import write_audit
 from app.domain.exceptions import (
+    ClientArchivedError,
     CrossTenantError,
     InvalidAccountError,
     UnbalancedJournalEntryError,
@@ -31,6 +32,7 @@ from app.domain.exceptions import (
 from app.models.accounting import (
     AccountingPeriod,
     ChartOfAccounts,
+    Client,
     JournalEntry,
     JournalLine,
 )
@@ -153,6 +155,16 @@ class LedgerService:
         optional: when omitted the period is derived from `entry_date`.
         """
         v = _validate_lines(lines)
+
+        # An archived client is read-only. Checked here rather than in the
+        # route so every posting path -- API, draft promotion, auto-promote --
+        # is covered by one rule.
+        client = self.sess.get(Client, self.client_id)
+        if client is not None and not client.is_active:
+            raise ClientArchivedError(
+                f"'{client.name}' is archived and cannot accept new entries. "
+                "Restore the client first."
+            )
 
         if period_id is None:
             period = self._period_for_date(entry_date)

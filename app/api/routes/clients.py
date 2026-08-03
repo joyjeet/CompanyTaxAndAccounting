@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,6 +21,14 @@ from app.api.deps import db_session
 from app.db.tenant import AccessScope
 from app.domain.account_classification import coerce_sub_type
 from app.domain.audit import write_audit
+from app.domain.client_lifecycle import (
+    ClientHasDataError,
+    ClientNotFoundError,
+    archive_client,
+    client_data_counts,
+    delete_client,
+    restore_client,
+)
 from app.domain.client_profile import (
     ClientProfileValidationError,
     upsert_profile,
@@ -64,6 +72,10 @@ class ClientOut(BaseModel):
     firm_id: UUID
     name: str
     external_code: str | None
+    # Archived clients keep every row they ever had, but drop out of the
+    # default list and refuse new postings.
+    is_active: bool = True
+    archived_at: datetime | None = None
     # Populated only by the create endpoint, so the UI can tell the user
     # whether onboarding finished or still needs a manual COA step.
     coa_seeded: bool | None = None
@@ -253,16 +265,52 @@ def _coa_out(
     )
 
 
+def _client_out(c: Client, **extra: object) -> ClientOut:
+    return ClientOut(
+        id=c.id,
+        firm_id=c.firm_id,
+        name=c.name,
+        external_code=c.external_code,
+        is_active=c.is_active,
+        archived_at=c.archived_at,
+        **extra,  # type: ignore[arg-type]
+    )
+
+
+@contextmanager
+def _lifecycle_errors() -> Iterator[None]:
+    """Map archive/restore/delete domain errors onto HTTP status codes.
+
+    409 rather than 422 for "has books": the request is well-formed, it
+    conflicts with the state of the resource.
+    """
+    try:
+        yield
+    except ClientNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(e)
+        ) from e
+    except ClientHasDataError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(e)
+        ) from e
+
+
 # --------------------------------------------------------------------------- #
 # Clients
 # --------------------------------------------------------------------------- #
 @router.get("", response_model=list[ClientOut])
-def list_clients(sess: Session = Depends(db_session)) -> list[ClientOut]:
-    rows = sess.execute(select(Client).order_by(Client.name)).scalars().all()
-    return [
-        ClientOut(id=c.id, firm_id=c.firm_id, name=c.name, external_code=c.external_code)
-        for c in rows
-    ]
+def list_clients(
+    include_archived: bool = Query(
+        False, description="Include archived clients in the result."
+    ),
+    sess: Session = Depends(db_session),
+) -> list[ClientOut]:
+    stmt = select(Client).order_by(Client.name)
+    if not include_archived:
+        stmt = stmt.where(Client.is_active.is_(True))
+    rows = sess.execute(stmt).scalars().all()
+    return [_client_out(c) for c in rows]
 
 
 @router.post("", response_model=ClientOut, status_code=status.HTTP_201_CREATED)
@@ -329,14 +377,96 @@ def create_client(
             coa_seed_error = str(e)
 
     sess.flush()
-    return ClientOut(
-        id=c.id,
-        firm_id=c.firm_id,
-        name=c.name,
-        external_code=c.external_code,
-        coa_seeded=coa_seeded,
-        coa_seed_error=coa_seed_error,
+    return _client_out(
+        c, coa_seeded=coa_seeded, coa_seed_error=coa_seed_error
     )
+
+
+# --------------------------------------------------------------------------- #
+# Client lifecycle (archive / restore / delete)
+# --------------------------------------------------------------------------- #
+class ClientDeletabilityOut(BaseModel):
+    """Whether this client can be hard-deleted, and why not if it can't."""
+
+    client_id: UUID
+    can_delete: bool
+    # Label -> count, e.g. {"journal entry": 12}. Empty when can_delete.
+    blocking_counts: dict[str, int]
+
+
+@router.post("/{client_id}/archive", response_model=ClientOut)
+def archive_client_endpoint(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> ClientOut:
+    """Hide a client and stop new postings. Reversible, nothing is removed."""
+    _require_firm_scope(identity)
+    with _lifecycle_errors():
+        c = archive_client(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+        )
+    return _client_out(c)
+
+
+@router.post("/{client_id}/restore", response_model=ClientOut)
+def restore_client_endpoint(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> ClientOut:
+    """Bring an archived client back into active use."""
+    _require_firm_scope(identity)
+    with _lifecycle_errors():
+        c = restore_client(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+        )
+    return _client_out(c)
+
+
+@router.get("/{client_id}/deletability", response_model=ClientDeletabilityOut)
+def client_deletability(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> ClientDeletabilityOut:
+    """Report whether a hard delete is allowed, so the UI can say why not."""
+    _require_firm_scope(identity)
+    _load_client_or_404(sess, client_id)
+    counts = client_data_counts(sess, client_id=client_id)
+    return ClientDeletabilityOut(
+        client_id=client_id,
+        can_delete=not counts,
+        blocking_counts=counts,
+    )
+
+
+@router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_client_endpoint(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> None:
+    """Permanently remove a client that has no books.
+
+    Returns 409 the moment any real history exists — those clients are
+    archived instead. Records the firm is required to keep are never
+    destroyed by this endpoint.
+    """
+    _require_firm_scope(identity)
+    with _lifecycle_errors():
+        delete_client(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -454,7 +584,7 @@ def get_client(
 ) -> ClientOut:
     _require_client_access(identity, client_id)
     c = _load_client_or_404(sess, client_id)
-    return ClientOut(id=c.id, firm_id=c.firm_id, name=c.name, external_code=c.external_code)
+    return _client_out(c)
 
 
 # --------------------------------------------------------------------------- #

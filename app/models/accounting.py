@@ -83,6 +83,13 @@ class Client(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     external_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Archived clients keep every row they ever had; they are hidden from
+    # pickers and refuse new postings. Retention rules mean a departed
+    # client's books have to survive long after the engagement ends.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

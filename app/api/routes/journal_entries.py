@@ -20,6 +20,7 @@ from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
 from app.domain.exceptions import (
+    ClientArchivedError,
     CrossTenantError,
     InvalidAccountError,
     UnbalancedJournalEntryError,
@@ -194,6 +195,9 @@ def post_journal_entry(
         )
     except UnbalancedJournalEntryError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except ClientArchivedError as e:
+        # Well-formed request, wrong state for the resource.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except (CrossTenantError, InvalidAccountError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     sess.flush()

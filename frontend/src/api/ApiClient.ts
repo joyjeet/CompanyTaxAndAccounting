@@ -10,6 +10,7 @@ import type {
   BalanceSheetOut,
   CashFlowOut,
   ClientCreateIn,
+  ClientDeletabilityOut,
   ClientOut,
   CoaCreateIn,
   CoaOut,
@@ -102,8 +103,9 @@ export class ApiClient {
   }
 
   // ----- Clients -------------------------------------------------- //
-  listClients(): Promise<ClientOut[]> {
-    return this.request<ClientOut[]>("/clients");
+  listClients(includeArchived = false): Promise<ClientOut[]> {
+    const q = includeArchived ? "?include_archived=true" : "";
+    return this.request<ClientOut[]>(`/clients${q}`);
   }
 
   getClient(id: string): Promise<ClientOut> {
@@ -112,6 +114,22 @@ export class ApiClient {
 
   createClient(body: ClientCreateIn): Promise<ClientOut> {
     return this.json<ClientOut>("/clients", "POST", body);
+  }
+
+  archiveClient(id: string): Promise<ClientOut> {
+    return this.json<ClientOut>(`/clients/${id}/archive`, "POST", {});
+  }
+
+  restoreClient(id: string): Promise<ClientOut> {
+    return this.json<ClientOut>(`/clients/${id}/restore`, "POST", {});
+  }
+
+  clientDeletability(id: string): Promise<ClientDeletabilityOut> {
+    return this.request<ClientDeletabilityOut>(`/clients/${id}/deletability`);
+  }
+
+  async deleteClient(id: string): Promise<void> {
+    await this.request<void>(`/clients/${id}`, { method: "DELETE" });
   }
 
   // ----- COA templates ------------------------------------------- //
