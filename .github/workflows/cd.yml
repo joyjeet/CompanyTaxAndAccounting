@@ -135,15 +135,10 @@ jobs:
               uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
-        run: |
-          if [[ -n "${{ vars.MIGRATION_JOB_NAME }}" && -n "${{ vars.RESOURCE_GROUP }}" ]]; then
-            az containerapp job start \
-              --name "${{ vars.MIGRATION_JOB_NAME }}" \
-              --resource-group "${{ vars.RESOURCE_GROUP }}" || \
-              echo "Migration job not found — first deploy. Skipping."
-          else
-            echo "MIGRATION_JOB_NAME or RESOURCE_GROUP vars not configured for dev environment; skipping migration job trigger."
-          fi
+        env:
+          MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+        run: ./scripts/run_migration_job.sh
 
   deploy-prod:
     needs: build-and-push
@@ -209,11 +204,7 @@ jobs:
               uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
-        run: |
-          if [[ -n "${{ vars.MIGRATION_JOB_NAME }}" && -n "${{ vars.RESOURCE_GROUP }}" ]]; then
-            az containerapp job start \
-              --name "${{ vars.MIGRATION_JOB_NAME }}" \
-              --resource-group "${{ vars.RESOURCE_GROUP }}"
-          else
-            echo "MIGRATION_JOB_NAME or RESOURCE_GROUP vars not configured for prod environment; skipping migration job trigger."
-          fi
+        env:
+          MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+        run: ./scripts/run_migration_job.sh
