@@ -35,16 +35,36 @@ slug="$(printf '%s' "$MSG" \
   | cut -c1-50)"
 [[ -n "$slug" ]] || slug="change"
 
-# Only branch off if we are sitting on a protected branch. If you are already
-# on a feature branch, keep using it -- that is how you add a follow-up commit
-# to a PR that is already open.
+# Decide which branch this work belongs on. We start a fresh branch when we are
+# sitting on a protected branch, and also when the current branch's PR has
+# already been merged or closed -- pushing more commits to a merged branch is a
+# silent no-op that strands your work.
+new_branch=0
 if [[ "$current" == "$BASE" || "$current" == "main" ]]; then
-  branch="${slug}-$(date +%m%d-%H%M)"
-  echo "==> Creating branch $branch off $current"
-  git checkout -q -b "$branch"
+  new_branch=1
+else
+  pr_state="$(gh pr view --json state --jq .state 2>/dev/null || echo NONE)"
+  if [[ "$pr_state" == "MERGED" || "$pr_state" == "CLOSED" ]]; then
+    echo "==> The PR for $current is already $pr_state; starting a fresh branch"
+    new_branch=1
+  fi
+fi
+
+if (( new_branch )); then
+  branch="${slug}-$(date +%m%d-%H%M%S)"
+  echo "==> Creating branch $branch from origin/$BASE"
+  git fetch -q origin "$BASE"
+  # Branch from origin/$BASE, not from wherever HEAD happens to be. PRs are
+  # squash-merged, so a branch cut from an already-merged branch carries the
+  # pre-squash commits and conflicts on every file it touched. GitHub then
+  # refuses to run checks on the conflicted PR. Uncommitted work carries over.
+  git checkout -q -b "$branch" "origin/$BASE" || {
+    echo "Could not branch from origin/$BASE — commit or stash your changes first." >&2
+    exit 1
+  }
 else
   branch="$current"
-  echo "==> Already on branch $branch"
+  echo "==> Adding to existing branch $branch"
 fi
 
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -63,14 +83,13 @@ fi
 echo "==> Pushing $branch"
 git push -q -u origin "$branch"
 
-if pr_url="$(gh pr view --json url --jq .url 2>/dev/null)"; then
-  echo "==> Updated existing pull request"
+if [[ "$(gh pr view --json state --jq .state 2>/dev/null || echo NONE)" == "OPEN" ]]; then
+  echo "==> Updated the open pull request"
 else
   echo "==> Opening pull request against $BASE"
-  gh pr create --base "$BASE" --head "$branch" --title "$MSG" --fill-verbose >/dev/null \
-    || gh pr create --base "$BASE" --head "$branch" --title "$MSG" --body "$MSG" >/dev/null
-  pr_url="$(gh pr view --json url --jq .url)"
+  gh pr create --base "$BASE" --head "$branch" --title "$MSG" --body "$MSG" >/dev/null
 fi
+pr_url="$(gh pr view --json url --jq .url)"
 
 # Merge on green rather than on a human refreshing the page. If auto-merge is
 # not enabled on the repo this is a no-op and the PR simply waits.
