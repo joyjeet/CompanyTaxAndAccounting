@@ -1,7 +1,10 @@
-.PHONY: help install run dev test test-isolation lint typecheck migrate migrate-create migrate-down up down logs psql shell fmt seed-demo frontend-install frontend-dev frontend-build frontend-test
+.PHONY: help install run dev test test-isolation lint typecheck migrate migrate-create migrate-down up down logs psql shell fmt seed-demo frontend-install frontend-dev frontend-build frontend-test pr
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
+
+pr: ## Open a PR for your work and auto-merge when green: make pr m="what changed"
+	@./scripts/open_pr.sh "$(m)"
 
 install: ## Install deps with pip into .venv (use `uv pip install -e .[dev]` if you prefer uv)
 	python3.12 -m venv .venv
