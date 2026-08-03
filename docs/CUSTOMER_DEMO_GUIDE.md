@@ -55,7 +55,7 @@ top bar.
    |---|---|
    | **Subject** | Anything you like, e.g. `tester@example.com`. It is recorded in the audit log so we can trace your actions. |
    | **Role** | Pick **`firm_staff`** for your first session. |
-   | **Firm ID** | `9dc15cf3-fe12-45e8-ad8f-2700b96d4f54` |
+   | **Firm ID** | The `firm_id` we sent you with your demo invite. |
    | **Client ID** | Leave blank for `firm_staff`. |
 
 4. Click **Sign in**. You will land on the **Dashboard**.
@@ -65,8 +65,12 @@ To try the customer-facing portal later, sign out and sign back in with:
 | Field | Value |
 |---|---|
 | **Role** | `client_portal` |
-| **Firm ID** | `9dc15cf3-fe12-45e8-ad8f-2700b96d4f54` |
-| **Client ID** | `38f2a46d-254e-4d9e-b948-a6c9c98d2ecb` |
+| **Firm ID** | The same `firm_id` as above. |
+| **Client ID** | The `client_id` we sent you with your demo invite. |
+
+> Each demo stack is rebuilt from scratch, so the firm and client IDs are new
+> every time. Operators: the current values are in the deploy receipt at
+> `results/azure-demo-<timestamp>/deploy.json`. Do not commit them here.
 
 There is no password — this demo uses a short-lived test token so you can
 get straight to clicking through the product.

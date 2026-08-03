@@ -7,7 +7,7 @@
 # all secrets baked as plain Container App secrets, auto-teardown at T+24h.
 #
 # Pre-reqs:
-#   * az CLI signed in to subscription 0270f50b-... (verified at start).
+#   * az CLI signed in, and SUBSCRIPTION_ID set (see .azure.env.example).
 #   * Docker NOT required locally — images are built with `az acr build`.
 #   * Run from repo root: ./scripts/deploy_azure_customer.sh
 #
@@ -36,7 +36,9 @@ export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH
 # ----------------------------------------------------------------------------
 # Config
 # ----------------------------------------------------------------------------
-SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-0270f50b-f296-40a3-9f05-3f8ff04ba8bc}"
+# Resolves SUBSCRIPTION_ID from the environment or the untracked .azure.env.
+# shellcheck source=scripts/_azure_env.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_azure_env.sh"
 # centralus picked because eastus2 / eastus / westus2 are offer-restricted
 # for Postgres Flexible Server on this Visual Studio Enterprise subscription.
 # centralus + westus3 are the unrestricted US regions for this sub today.
