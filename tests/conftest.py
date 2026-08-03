@@ -1,7 +1,9 @@
 """Pytest fixtures.
 
 Strategy:
-  * `db_setup` (session-scoped) runs Alembic upgrade once against the dev DB.
+  * `guard_test_database` (session-scoped) refuses to run unless the configured
+    database name ends in `_test`, because `clean_db` truncates as it goes.
+  * `db_setup` (session-scoped) runs Alembic upgrade once against the test DB.
   * `clean_db` (function-scoped) truncates all tenant tables between tests so
     isolation tests start from a known state. Truncation runs as the OWNER
     role and is the ONLY thing in the test suite that uses the owner role.
@@ -20,7 +22,9 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 
+from app.core.config import get_settings
 from app.db.session import get_owner_engine, tenant_session, unscoped_session
 from app.db.tenant import AccessScope, TenantContext
 from app.models.accounting import (
@@ -80,7 +84,42 @@ def _alembic_upgrade() -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def db_setup() -> Iterator[None]:
+def guard_test_database() -> None:
+    """Refuse to run unless pointed at a dedicated test database.
+
+    ``clean_db`` TRUNCATEs every tenant table between tests. Nothing in the
+    suite checks *which* database that is, and the local ``.env`` points at
+    the same ``ctaa`` used by the dev app and ``scripts/seed_demo.py`` — so a
+    bare ``pytest`` silently destroys the developer's demo data, forcing a
+    re-seed that mints new tenant UUIDs.
+
+    Requiring a ``_test`` suffix costs nothing in CI, which already provisions
+    ``ctaa_test``. Set ``CTAA_ALLOW_DESTRUCTIVE_TESTS=1`` to override when you
+    genuinely mean to truncate another database.
+    """
+    if os.environ.get("CTAA_ALLOW_DESTRUCTIVE_TESTS") == "1":
+        return
+
+    settings = get_settings()
+    for field, url in (
+        ("DATABASE_URL", settings.database_url),
+        ("DATABASE_OWNER_URL", settings.database_owner_url),
+    ):
+        name = make_url(url).database or ""
+        if not name.endswith("_test"):
+            pytest.exit(
+                f"Refusing to run: {field} points at database {name!r}, which is not a "
+                "test database. The suite TRUNCATEs every tenant table between tests "
+                "and would destroy its contents.\n\n"
+                "Point both DATABASE_URL and DATABASE_OWNER_URL at a database whose "
+                "name ends in '_test', or set CTAA_ALLOW_DESTRUCTIVE_TESTS=1 if that "
+                "is genuinely what you want.",
+                returncode=4,
+            )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def db_setup(guard_test_database: None) -> Iterator[None]:
     _alembic_upgrade()
     yield
 
