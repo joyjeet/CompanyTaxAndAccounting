@@ -1,7 +1,9 @@
 """Pytest fixtures.
 
 Strategy:
-  * `db_setup` (session-scoped) runs Alembic upgrade once against the dev DB.
+  * `pytest_configure` refuses to run against a non-disposable database, since
+    the suite truncates tables (see `make test-db` / `make test-local`).
+  * `db_setup` (session-scoped) runs Alembic upgrade once against the test DB.
   * `clean_db` (function-scoped) truncates all tenant tables between tests so
     isolation tests start from a known state. Truncation runs as the OWNER
     role and is the ONLY thing in the test suite that uses the owner role.
@@ -20,7 +22,9 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 
+from app.core.config import get_settings
 from app.db.session import get_owner_engine, tenant_session, unscoped_session
 from app.db.tenant import AccessScope, TenantContext
 from app.models.accounting import (
@@ -77,6 +81,34 @@ def _alembic_upgrade() -> None:
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "migrations")),
     )
     command.upgrade(cfg, "head")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Refuse to run against a database that is not obviously disposable.
+
+    `clean_db` truncates every tenant table before each test. Pointed at the
+    local dev database (`ctaa`) that silently destroys seeded demo data, which
+    only surfaces much later as a mysteriously broken dev login. Fail loudly
+    before a single table is dropped.
+    """
+    del config
+    if os.environ.get("CTAA_TEST_ALLOW_DEV_DB") == "1":
+        return
+
+    name = make_url(get_settings().database_url).database or ""
+    if "test" in name.lower():
+        return
+
+    raise pytest.UsageError(
+        f"Refusing to run the test suite against database {name!r}: the suite "
+        "TRUNCATES every tenant table before each test and would destroy your "
+        "dev data.\n\n"
+        "Use the disposable test database instead:\n"
+        "    make test-db     # one-time: creates 'ctaa_test'\n"
+        "    make test-local  # runs pytest against it\n\n"
+        "To override anyway (this WILL wipe the dev data; reseed afterwards "
+        "with `make seed-demo`), set CTAA_TEST_ALLOW_DEV_DB=1."
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
