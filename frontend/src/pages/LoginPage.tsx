@@ -14,10 +14,10 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
-import config from "../config";
+import config, { type Audience } from "../config";
 
 const useStyles = makeStyles({
   shell: {
@@ -63,8 +63,14 @@ const useStyles = makeStyles({
 
 export default function LoginPage() {
   const styles = useStyles();
-  const { client, isAuthenticated } = useAuth();
+  const { client, isAuthenticated, signIn } = useAuth();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+
+  // Which desk the user came through on the landing page. A routing hint for
+  // choosing the authority and pre-filling this dev form — the backend still
+  // decides what the account can actually reach.
+  const audience: Audience = params.get("as") === "client" ? "client" : "firm";
 
   // During dev/test we keep only a few UX defaults in storage.
   const lsFirm = typeof window !== "undefined"
@@ -78,7 +84,9 @@ export default function LoginPage() {
     : "";
 
   const [sub, setSub] = useState(lsSub || "dev-user@example.com");
-  const [role, setRole] = useState<"firm_staff" | "client_portal">("firm_staff");
+  const [role, setRole] = useState<"firm_staff" | "client_portal">(
+    audience === "client" ? "client_portal" : "firm_staff"
+  );
   const [firmId, setFirmId] = useState(lsFirm || config.dev.defaultFirmId);
   const [clientId, setClientId] = useState(lsClient || config.dev.defaultClientId);
   const [optionsLoading, setOptionsLoading] = useState(false);
@@ -166,7 +174,7 @@ export default function LoginPage() {
           <div style={{ marginTop: 16 }}>
             <Button
               appearance="primary"
-              onClick={() => client.login().catch((e) => setError(String(e)))}
+              onClick={() => signIn(audience).catch((e) => setError(String(e)))}
             >
               Continue
             </Button>

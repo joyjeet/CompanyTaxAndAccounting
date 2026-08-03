@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import Select, and_, select, update
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,24 @@ from app.models.identity import FirmInvite, FirmMembership, UserAccount
 router = APIRouter(prefix="/team", tags=["team"])
 
 _ADMIN_ROLES = {StaffRole.FIRM_OWNER, StaffRole.FIRM_ADMIN}
+
+
+def _reject_portal_role(role: StaffRole) -> StaffRole:
+    """Keep `client_portal` out of the staff team API.
+
+    A portal membership must name the single client it is scoped to
+    (`firm_membership.client_id`), which these endpoints have no way to supply.
+    Granting it here would produce a membership that either fails the
+    `ck_firm_membership_client_scope` CHECK or, worse, resolves to firm-wide
+    scope — handing an external client the whole practice. Portal access is
+    granted through the client-portal invite flow instead.
+    """
+    if role is StaffRole.CLIENT_PORTAL:
+        raise ValueError(
+            "client_portal is not a staff role; invite portal users from the "
+            "client's portal access page"
+        )
+    return role
 
 
 class TeamMemberOut(BaseModel):
@@ -52,6 +70,8 @@ class InviteCreateIn(BaseModel):
     role: StaffRole
     expires_in_days: int = Field(default=7, ge=1, le=30)
 
+    _no_portal = field_validator("role")(_reject_portal_role)
+
 
 class InviteCreateOut(InviteOut):
     invite_token: str
@@ -63,6 +83,8 @@ class InviteAcceptIn(BaseModel):
 
 class MembershipRoleIn(BaseModel):
     role: StaffRole
+
+    _no_portal = field_validator("role")(_reject_portal_role)
 
 
 class MembershipStatusIn(BaseModel):

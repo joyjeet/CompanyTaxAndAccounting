@@ -20,7 +20,7 @@ import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
-import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtDateTime, shortId } from "../lib/format";
@@ -105,7 +105,7 @@ function Kpi({
 export default function Dashboard() {
   const styles = useStyles();
   const api = useApi();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
 
   const clients = useQuery({ queryKey: ["clients"], queryFn: () => api.listClients() });
   const drafts = useQuery({
