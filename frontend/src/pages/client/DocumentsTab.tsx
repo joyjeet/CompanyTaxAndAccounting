@@ -41,9 +41,11 @@ import { useNavigate } from "react-router-dom";
 import { useApi } from "../../api/useApi";
 import type { DocumentKind } from "../../auth/types";
 import InfoHint from "../../components/InfoHint";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
 import { fmtDateTime, shortId } from "../../lib/format";
+import { isWithinRange } from "../../lib/reportPeriods";
 import DocumentDetailDialog from "./DocumentDetailDialog";
 
 const useStyles = makeStyles({
@@ -121,6 +123,7 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
   } | null>(null);
   const [highlightedDocumentId, setHighlightedDocumentId] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLElement | null>>({});
+  const dateFilter = useReportPeriod("all");
 
   // Setup-state checks: a brand-new client has no periods/accounts, so any
   // upload would land as a draft with nowhere to be promoted to. We surface
@@ -297,7 +300,9 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
     },
   });
 
-  const clientDocs = (docs.data ?? []).filter((d) => d.client_id === clientId);
+  const clientDocs = (docs.data ?? []).filter(
+    (d) => d.client_id === clientId && isWithinRange(d.received_at, dateFilter.range),
+  );
 
   return (
     <div>
@@ -482,6 +487,11 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
       <Section
         title={`${clientDocs.length} documents for this client`}
         subtitle="Click a row to inspect OCR fields, derived drafts, and open the original file. The list auto-refreshes while a document is still processing."
+        toolbar={
+          <div style={{ display: "flex", columnGap: 12 }}>
+            <ReportPeriodPicker state={dateFilter} />
+          </div>
+        }
         help={{
           title: "Reading the OCR badge",
           body: (
@@ -506,7 +516,14 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         {docs.isLoading && <LoadingState />}
         {docs.error && <ErrorState error={docs.error} />}
         {!docs.isLoading && clientDocs.length === 0 && (
-          <EmptyState title="No documents" description="Upload a file to get started." />
+          <EmptyState
+            title="No documents"
+            description={
+              dateFilter.preset === "all"
+                ? "Upload a file to get started."
+                : `No documents received in ${dateFilter.range.label}. Widen the date range to see more.`
+            }
+          />
         )}
         {clientDocs.length > 0 && (
           <Table size="small">

@@ -1,9 +1,9 @@
 """Journal entries API: list (with lines) and manual posting.
 
-The list endpoint filters by client_id (and optionally period_id) and pulls
-each entry's lines so the UI can render the full T-account view. The post
-endpoint routes through `LedgerService.post()` which enforces the books-
-balance invariant before any SQL is emitted.
+The list endpoint filters by client_id (and optionally period_id or an
+entry-date range) and pulls each entry's lines so the UI can render the full
+T-account view. The post endpoint routes through `LedgerService.post()` which
+enforces the books-balance invariant before any SQL is emitted.
 """
 from __future__ import annotations
 
@@ -106,6 +106,8 @@ def _entry_to_out(e: JournalEntry) -> JournalEntryOut:
 def list_journal_entries(
     client_id: UUID = Query(...),
     period_id: UUID | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> list[JournalEntryOut]:
@@ -114,6 +116,11 @@ def list_journal_entries(
     # but this gives a clean 404.
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="date_to must be on or after date_from",
+        )
     q = (
         select(JournalEntry)
         .where(JournalEntry.client_id == client_id)
@@ -122,6 +129,10 @@ def list_journal_entries(
     )
     if period_id is not None:
         q = q.where(JournalEntry.period_id == period_id)
+    if date_from is not None:
+        q = q.where(JournalEntry.entry_date >= date_from)
+    if date_to is not None:
+        q = q.where(JournalEntry.entry_date <= date_to)
     rows = sess.execute(q).scalars().all()
     return [_entry_to_out(e) for e in rows]
 

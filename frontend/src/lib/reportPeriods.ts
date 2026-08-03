@@ -150,3 +150,18 @@ export function resolveReportPeriod(input: ReportPeriodInput): ReportPeriodRange
     }
   }
 }
+
+/**
+ * Client-side counterpart to the server's date filtering, for lists that are
+ * fetched whole (documents, artifacts). `value` may be a plain `YYYY-MM-DD`
+ * or an ISO timestamp — only the date part is compared, so string comparison
+ * is safe and timezone-free.
+ */
+export function isWithinRange(
+  value: string | null | undefined,
+  range: { startDate: string; endDate: string },
+): boolean {
+  if (!value) return false;
+  const day = value.slice(0, 10);
+  return day >= range.startDate && day <= range.endDate;
+}

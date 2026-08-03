@@ -5,12 +5,6 @@ import {
   Divider,
   Link as FluentLink,
   makeStyles,
-  Menu,
-  MenuButton,
-  MenuItem,
-  MenuList,
-  MenuPopover,
-  MenuTrigger,
   shorthands,
   Spinner,
   Subtitle2,
@@ -29,7 +23,7 @@ import {
   Sparkle24Regular,
 } from "@fluentui/react-icons";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
@@ -45,8 +39,10 @@ import type {
 } from "../auth/types";
 import DashboardCard from "../components/DashboardCard";
 import { AreaTrend, BarPair, DonutChart } from "../components/MiniCharts";
+import ReportPeriodPicker, { useReportPeriod } from "../components/ReportPeriodPicker";
 import { ErrorState } from "../components/States";
 import { fmtDate, fmtDateTime, shortId } from "../lib/format";
+import { isWithinRange } from "../lib/reportPeriods";
 
 // --------------------------------------------------------------------------- //
 // Helpers                                                                     //
@@ -211,27 +207,26 @@ export default function PortalHome() {
   });
 
   const period = useMemo(() => pickPeriod(periods.data), [periods.data]);
-  const periodId = period?.id;
-  const periodLocked = !!period?.is_locked;
+  const dateFilter = useReportPeriod("all");
 
-  // The API gates portal users to LOCKED periods; firm users see drafts too.
-  // We still issue the requests — if they 403, we show a friendly empty card.
+  // The API clamps portal users to FINALIZED (locked) days; if nothing in the
+  // chosen range is finalized it 403s and we show a friendly empty card.
   const pnl = useQuery({
-    queryKey: ["pnl", clientId, periodId],
-    queryFn: () => api.getProfitAndLoss(clientId!, periodId!),
-    enabled: !!clientId && !!periodId,
+    queryKey: ["pnl", clientId, dateFilter.query],
+    queryFn: () => api.getProfitAndLoss(clientId!, dateFilter.query),
+    enabled: !!clientId,
     retry: false,
   });
   const bs = useQuery({
-    queryKey: ["bs", clientId, periodId],
-    queryFn: () => api.getBalanceSheet(clientId!, periodId!),
-    enabled: !!clientId && !!periodId,
+    queryKey: ["bs", clientId, dateFilter.query],
+    queryFn: () => api.getBalanceSheet(clientId!, dateFilter.query),
+    enabled: !!clientId,
     retry: false,
   });
   const cf = useQuery({
-    queryKey: ["cf", clientId, periodId],
-    queryFn: () => api.getCashFlow(clientId!, periodId!),
-    enabled: !!clientId && !!periodId,
+    queryKey: ["cf", clientId, dateFilter.query],
+    queryFn: () => api.getCashFlow(clientId!, dateFilter.query),
+    enabled: !!clientId,
     retry: false,
   });
 
@@ -241,9 +236,9 @@ export default function PortalHome() {
     [accounts.data],
   );
   const ar = useQuery({
-    queryKey: ["ar-aging", clientId, periodId, arAccount?.id],
-    queryFn: () => api.getArAging(clientId!, periodId!, [arAccount!.code]),
-    enabled: !!clientId && !!periodId && !!arAccount,
+    queryKey: ["ar-aging", clientId, dateFilter.query, arAccount?.id],
+    queryFn: () => api.getArAging(clientId!, dateFilter.query, [arAccount!.code]),
+    enabled: !!clientId && !!arAccount,
     retry: false,
   });
 
@@ -275,7 +270,20 @@ export default function PortalHome() {
       <PeriodBanner period={period} loading={periods.isLoading} />
 
       {/* ===== Business at a glance ===== */}
-      <Caption1 className={styles.glanceLabel}>Business at a glance</Caption1>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          columnGap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <Caption1 className={styles.glanceLabel}>Business at a glance</Caption1>
+        <div style={{ display: "flex", columnGap: 8 }}>
+          <ReportPeriodPicker state={dateFilter} />
+        </div>
+      </div>
 
       {/* Row 1: Sales funnel + Bank accounts */}
       <div className={styles.rowSplit}>
@@ -283,15 +291,15 @@ export default function PortalHome() {
           ar={ar.data}
           isLoading={ar.isLoading}
           error={ar.error}
-          period={period}
-          unavailable={!periodId || (!periodLocked && ar.isError)}
+          asOf={dateFilter.range.endDate}
+          unavailable={ar.isError}
           styles={styles}
         />
         <BankAccountsCard
           bs={bs.data}
           accounts={accounts.data}
           isLoading={bs.isLoading}
-          unavailable={!periodId || (!periodLocked && bs.isError)}
+          unavailable={bs.isError}
           styles={styles}
         />
       </div>
@@ -301,14 +309,14 @@ export default function PortalHome() {
         <ProfitAndLossCard
           pnl={pnl.data}
           isLoading={pnl.isLoading}
-          unavailable={!periodId || (!periodLocked && pnl.isError)}
-          periodLabel={period?.name}
+          unavailable={pnl.isError}
+          periodLabel={dateFilter.range.label}
           styles={styles}
         />
         <ExpensesDonutCard
           pnl={pnl.data}
           isLoading={pnl.isLoading}
-          unavailable={!periodId || (!periodLocked && pnl.isError)}
+          unavailable={pnl.isError}
         />
         <NeedHelpCard />
       </div>
@@ -317,13 +325,14 @@ export default function PortalHome() {
       <CashFlowCard
         cf={cf.data}
         isLoading={cf.isLoading}
-        unavailable={!periodId || (!periodLocked && cf.isError)}
-        period={period}
+        unavailable={cf.isError}
+        rangeLabel={dateFilter.range.label}
+        rangeStart={dateFilter.range.startDate}
       />
 
       {/* Row 4: Recent activity */}
       <RecentActivityCard
-        docs={docs.data}
+        docs={docs.data?.filter((d) => isWithinRange(d.received_at, dateFilter.range))}
         isLoading={docs.isLoading}
         error={docs.error as Error | null}
         styles={styles}
@@ -451,22 +460,21 @@ function SalesGetPaidCard({
   ar,
   isLoading,
   error,
-  period,
+  asOf,
   unavailable,
   styles,
 }: {
   ar?: AgingReportOut;
   isLoading: boolean;
   error: unknown;
-  period: PeriodOut | null;
+  asOf: string;
   unavailable: boolean;
   styles: ReturnType<typeof useStyles>;
 }) {
   return (
     <DashboardCard
       overline="Sales & Get Paid"
-      subtitle={period ? `As of ${fmtDate(period.end_date)}` : undefined}
-      toolbar={<DateRangeMenu />}
+      subtitle={`As of ${fmtDate(asOf)}`}
       footer={
         <Link
           to="/portal/reports"
@@ -621,7 +629,6 @@ function ProfitAndLossCard({
     <DashboardCard
       overline="Profit & Loss"
       subtitle={periodLabel}
-      toolbar={<DateRangeMenu />}
       footer={
         <Link
           to="/portal/reports"
@@ -854,12 +861,14 @@ function CashFlowCard({
   cf,
   isLoading,
   unavailable,
-  period,
+  rangeLabel,
+  rangeStart,
 }: {
   cf?: CashFlowOut;
   isLoading: boolean;
   unavailable: boolean;
-  period: PeriodOut | null;
+  rangeLabel: string;
+  rangeStart: string;
 }) {
   // Build a synthetic 12-point trend from opening → closing cash for the
   // selected period. Until we have monthly periods this is a stand-in shape
@@ -879,19 +888,18 @@ function CashFlowCard({
   }, [cf]);
 
   const monthLabels = useMemo(() => {
-    if (!period) return [] as string[];
-    const start = new Date(period.start_date);
+    const start = new Date(rangeStart);
+    if (Number.isNaN(start.getTime())) return [] as string[];
     return Array.from({ length: 12 }, (_, i) => {
       const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
       return d.toLocaleDateString(undefined, { month: "short" });
     });
-  }, [period]);
+  }, [rangeStart]);
 
   return (
     <DashboardCard
       overline="Cash Flow"
-      subtitle={period ? `${period.name} — opening to closing` : undefined}
-      toolbar={<DateRangeMenu />}
+      subtitle={`${rangeLabel} — opening to closing`}
       footer={
         <Link
           to="/portal/reports"
@@ -1112,29 +1120,3 @@ function EmptyHint({ message }: { message: string }) {
   );
 }
 
-function DateRangeMenu() {
-  const [label, setLabel] = useState("This fiscal year");
-  return (
-    <Menu>
-      <MenuTrigger disableButtonEnhancement>
-        <MenuButton appearance="subtle" size="small">
-          {label}
-        </MenuButton>
-      </MenuTrigger>
-      <MenuPopover>
-        <MenuList>
-          {[
-            "Last 30 days",
-            "Last quarter",
-            "This fiscal year",
-            "Last 12 months",
-          ].map((opt) => (
-            <MenuItem key={opt} onClick={() => setLabel(opt)}>
-              {opt}
-            </MenuItem>
-          ))}
-        </MenuList>
-      </MenuPopover>
-    </Menu>
-  );
-}

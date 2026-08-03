@@ -2,10 +2,7 @@ import {
   Badge,
   Button,
   Caption1,
-  Dropdown,
-  Input,
   makeStyles,
-  Option,
   Tab,
   TabList,
   Table,
@@ -27,14 +24,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { useApi } from "../../api/useApi";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
-import { fmtMoney, todayIso } from "../../lib/format";
-import {
-  REPORT_PERIOD_OPTIONS,
-  type ReportPeriodPreset,
-  resolveReportPeriod,
-} from "../../lib/reportPeriods";
+import { fmtMoney } from "../../lib/format";
 
 type StatementTab = "tb" | "pl" | "bs" | "cf";
 
@@ -68,11 +61,8 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
   const { dispatchToast } = useToastController(toasterId);
 
   const [tab, setTab] = useState<StatementTab>("tb");
-  const [periodPreset, setPeriodPreset] = useState<ReportPeriodPreset>("all");
-  const [customStart, setCustomStart] = useState(todayIso());
-  const [customEnd, setCustomEnd] = useState(todayIso());
-
-  const period = resolveReportPeriod({ preset: periodPreset, customStart, customEnd });
+  const dateFilter = useReportPeriod("all");
+  const period = dateFilter.range;
 
   const tb = useQuery({
     queryKey: ["tb", clientId, period.startDate, period.endDate],
@@ -128,46 +118,11 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
     },
   });
 
-  const periodLabel = period.label;
-
   return (
     <div>
       <Toaster toasterId={toasterId} />
       <div className={styles.toolbar}>
-        <Dropdown
-          value={periodLabel}
-          selectedOptions={periodPreset ? [periodPreset] : []}
-          onOptionSelect={(_, d) => {
-            const next = (d.optionValue as ReportPeriodPreset | undefined) ?? "all";
-            setPeriodPreset(next);
-            if (next === "custom") {
-              setCustomStart(todayIso());
-              setCustomEnd(todayIso());
-            }
-          }}
-        >
-          {REPORT_PERIOD_OPTIONS.map((option) => (
-            <Option key={option.value} value={option.value} text={option.label}>
-              {option.label}
-            </Option>
-          ))}
-        </Dropdown>
-        {periodPreset === "custom" && (
-          <>
-            <Input
-              type="date"
-              value={customStart}
-              onChange={(_, d) => setCustomStart(d.value)}
-              style={{ width: 160 }}
-            />
-            <Input
-              type="date"
-              value={customEnd}
-              onChange={(_, d) => setCustomEnd(d.value)}
-              style={{ width: 160 }}
-            />
-          </>
-        )}
+        <ReportPeriodPicker state={dateFilter} />
         <Button
           appearance="secondary"
           icon={<DocumentPdfRegular />}

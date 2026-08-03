@@ -50,14 +50,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { useApi } from "../../api/useApi";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
-import { fmtDate, fmtMoney, shortId, todayIso } from "../../lib/format";
-import {
-  REPORT_PERIOD_OPTIONS,
-  type ReportPeriodPreset,
-  resolveReportPeriod,
-} from "../../lib/reportPeriods";
+import { fmtDate, fmtMoney, shortId } from "../../lib/format";
 import type { RollupNodeOut, RollupTreeOut } from "../../auth/types";
 
 type ReportTab = "gl" | "ar" | "ap" | "rollup";
@@ -120,9 +116,7 @@ export default function ReportsTab({
   useToastController(toasterId);
 
   const [tab, setTab] = useState<ReportTab>("gl");
-  const [periodPreset, setPeriodPreset] = useState<ReportPeriodPreset>("all");
-  const [customStart, setCustomStart] = useState(todayIso());
-  const [customEnd, setCustomEnd] = useState(todayIso());
+  const dateFilter = useReportPeriod("all");
   const [accountId, setAccountId] = useState<string>(""); // for general ledger
   const [arCodes, setArCodes] = useState<string>("1100");
   const [apCodes, setApCodes] = useState<string>("2000");
@@ -152,15 +146,7 @@ export default function ReportsTab({
     },
   });
 
-  const reportPeriod = resolveReportPeriod({
-    preset: periodPreset,
-    customStart,
-    customEnd,
-  });
-  const periodQuery = {
-    periodStart: reportPeriod.startDate,
-    periodEnd: reportPeriod.endDate,
-  };
+  const periodQuery = dateFilter.query;
 
   const gl = useQuery({
     queryKey: ["gl", clientId, periodQuery, accountId],
@@ -218,7 +204,6 @@ export default function ReportsTab({
     );
   }
 
-  const periodLabel = reportPeriod.label;
   const selectedAccount = accounts.data?.find((a) => a.id === accountId);
   const accountLabel = selectedAccount
     ? `${selectedAccount.code} ${selectedAccount.name}`
@@ -229,32 +214,9 @@ export default function ReportsTab({
       <Toaster toasterId={toasterId} />
 
       <div className={styles.toolbar}>
+        <ReportPeriodPicker state={dateFilter} />
         {portalView ? (
           <>
-            <Dropdown
-              value={periodLabel}
-              selectedOptions={[periodPreset]}
-              onOptionSelect={(_, d) => {
-                const next = (d.optionValue as ReportPeriodPreset | undefined) ?? "all";
-                setPeriodPreset(next);
-                if (next === "custom") {
-                  setCustomStart(todayIso());
-                  setCustomEnd(todayIso());
-                }
-              }}
-            >
-              {REPORT_PERIOD_OPTIONS.map((option) => (
-                <Option key={option.value} value={option.value} text={option.label}>
-                  {option.label}
-                </Option>
-              ))}
-            </Dropdown>
-            {periodPreset === "custom" && (
-              <>
-                <Input type="date" value={customStart} onChange={(_, d) => setCustomStart(d.value)} />
-                <Input type="date" value={customEnd} onChange={(_, d) => setCustomEnd(d.value)} />
-              </>
-            )}
             <Badge appearance="tint" color="success">
               Finalized only
             </Badge>
@@ -263,35 +225,9 @@ export default function ReportsTab({
             </Caption1>
           </>
         ) : (
-          <>
-            <Dropdown
-              value={periodLabel}
-              selectedOptions={[periodPreset]}
-              onOptionSelect={(_, d) => {
-                const next = (d.optionValue as ReportPeriodPreset | undefined) ?? "all";
-                setPeriodPreset(next);
-                if (next === "custom") {
-                  setCustomStart(todayIso());
-                  setCustomEnd(todayIso());
-                }
-              }}
-            >
-              {REPORT_PERIOD_OPTIONS.map((option) => (
-                <Option key={option.value} value={option.value} text={option.label}>
-                  {option.label}
-                </Option>
-              ))}
-            </Dropdown>
-            {periodPreset === "custom" && (
-              <>
-                <Input type="date" value={customStart} onChange={(_, d) => setCustomStart(d.value)} />
-                <Input type="date" value={customEnd} onChange={(_, d) => setCustomEnd(d.value)} />
-              </>
-            )}
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              Reports below use the selected date range.
-            </Caption1>
-          </>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Reports below use the selected date range.
+          </Caption1>
         )}
       </div>
 

@@ -32,6 +32,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApi } from "../../api/useApi";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
 import { fmtDate, fmtMoney, shortId, todayIso } from "../../lib/format";
@@ -82,11 +83,15 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
     queryFn: () => api.listAccounts(clientId),
   });
 
-  const [periodFilter, setPeriodFilter] = useState<string | undefined>(undefined);
+  const dateFilter = useReportPeriod("all");
 
   const entries = useQuery({
-    queryKey: ["entries", clientId, periodFilter],
-    queryFn: () => api.listJournalEntries(clientId, periodFilter),
+    queryKey: ["entries", clientId, dateFilter.range.startDate, dateFilter.range.endDate],
+    queryFn: () =>
+      api.listJournalEntries(clientId, {
+        dateFrom: dateFilter.range.startDate,
+        dateTo: dateFilter.range.endDate,
+      }),
   });
 
   const accountMap = useMemo(
@@ -174,19 +179,7 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
         }}
         toolbar={
           <div style={{ display: "flex", columnGap: 12 }}>
-            <Dropdown
-              placeholder="All periods"
-              value={periods.data?.find((p) => p.id === periodFilter)?.name ?? "All periods"}
-              selectedOptions={periodFilter ? [periodFilter] : []}
-              onOptionSelect={(_, d) => setPeriodFilter(d.optionValue || undefined)}
-            >
-              <Option value="">All periods</Option>
-              {(periods.data ?? []).map((p) => (
-                <Option key={p.id} value={p.id}>
-                  {p.name}
-                </Option>
-              ))}
-            </Dropdown>
+            <ReportPeriodPicker state={dateFilter} />
             <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="primary" icon={<AddRegular />}>

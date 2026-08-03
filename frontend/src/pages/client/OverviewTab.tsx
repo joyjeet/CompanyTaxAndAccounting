@@ -20,9 +20,11 @@ import { Link } from "react-router-dom";
 
 import { useApi } from "../../api/useApi";
 import type { AccountBalanceOut, CoaOut, PeriodOut } from "../../auth/types";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { ErrorState, LoadingState } from "../../components/States";
 import { fmtDate, fmtDateTime, shortId } from "../../lib/format";
+import { isWithinRange } from "../../lib/reportPeriods";
 
 const useStyles = makeStyles({
   page: {
@@ -143,13 +145,18 @@ export default function OverviewTab({ clientId }: { clientId: string }) {
     queryKey: ["periods", clientId],
     queryFn: () => api.listPeriods(clientId),
   });
+  const dateFilter = useReportPeriod("all");
   const accounts = useQuery({
     queryKey: ["accounts", clientId],
     queryFn: () => api.listAccounts(clientId),
   });
   const entries = useQuery({
-    queryKey: ["entries", clientId],
-    queryFn: () => api.listJournalEntries(clientId),
+    queryKey: ["entries", clientId, dateFilter.range.startDate, dateFilter.range.endDate],
+    queryFn: () =>
+      api.listJournalEntries(clientId, {
+        dateFrom: dateFilter.range.startDate,
+        dateTo: dateFilter.range.endDate,
+      }),
   });
   const docs = useQuery({
     queryKey: ["documents", clientId],
@@ -162,24 +169,20 @@ export default function OverviewTab({ clientId }: { clientId: string }) {
 
   const periodRows = periods.data ?? [];
   const latestPeriod = pickLatestPeriod(periodRows);
-  const periodId = latestPeriod?.id ?? null;
 
   const pnl = useQuery({
-    queryKey: ["pnl", clientId, periodId],
-    queryFn: () => api.getProfitAndLoss(clientId, periodId!),
-    enabled: !!periodId,
+    queryKey: ["pnl", clientId, dateFilter.query],
+    queryFn: () => api.getProfitAndLoss(clientId, dateFilter.query),
     retry: false,
   });
   const bs = useQuery({
-    queryKey: ["bs", clientId, periodId],
-    queryFn: () => api.getBalanceSheet(clientId, periodId!),
-    enabled: !!periodId,
+    queryKey: ["bs", clientId, dateFilter.query],
+    queryFn: () => api.getBalanceSheet(clientId, dateFilter.query),
     retry: false,
   });
   const ar = useQuery({
-    queryKey: ["ar", clientId, periodId],
-    queryFn: () => api.getArAging(clientId, periodId!),
-    enabled: !!periodId,
+    queryKey: ["ar", clientId, dateFilter.query],
+    queryFn: () => api.getArAging(clientId, dateFilter.query),
     retry: false,
   });
 
@@ -190,7 +193,9 @@ export default function OverviewTab({ clientId }: { clientId: string }) {
   if (loading) return <LoadingState />;
 
   const clientArtifacts = (artifacts.data ?? []).filter((a) => a.client_id === clientId);
-  const clientDocs = (docs.data ?? []).filter((d) => d.client_id === clientId);
+  const clientDocs = (docs.data ?? []).filter(
+    (d) => d.client_id === clientId && isWithinRange(d.received_at, dateFilter.range),
+  );
   const accountRows = accounts.data ?? [];
   const journalRows = entries.data ?? [];
 
@@ -215,6 +220,11 @@ export default function OverviewTab({ clientId }: { clientId: string }) {
       <Section
         title="Client dashboard"
         subtitle="Quick accounting snapshot and actions"
+        toolbar={
+          <div style={{ display: "flex", columnGap: 12 }}>
+            <ReportPeriodPicker state={dateFilter} />
+          </div>
+        }
       >
         <div className={styles.shortcuts}>
           <Link to={`/clients/${clientId}/documents`} className={styles.shortcut}>
@@ -240,7 +250,7 @@ export default function OverviewTab({ clientId }: { clientId: string }) {
         <div className={styles.card}>
           <div className={styles.cardHeader}>
             <Text className={styles.cardTitle}>Bank accounts</Text>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>As of {latestPeriod?.end_date ?? "-"}</Caption1>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>As of {dateFilter.range.endDate}</Caption1>
           </div>
           {(bankRows.length > 0 ? bankRows : fallbackBank).map((r) => (
             <div className={styles.listRow} key={`${r.code}-${r.name}`}>
@@ -259,7 +269,7 @@ export default function OverviewTab({ clientId }: { clientId: string }) {
         <div className={styles.card}>
           <div className={styles.cardHeader}>
             <Text className={styles.cardTitle}>Profit and loss</Text>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{latestPeriod?.name ?? "Current"}</Caption1>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{dateFilter.range.label}</Caption1>
           </div>
           <Text className={styles.moneyBig}>{money(netIncome)}</Text>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Net profit to date</Caption1>

@@ -323,9 +323,15 @@ export class ApiClient {
   }
 
   // ----- Journal entries ----------------------------------------- //
-  listJournalEntries(clientId: string, periodId?: string): Promise<JournalEntryOut[]> {
+  listJournalEntries(
+    clientId: string,
+    filter?: string | { periodId?: string; dateFrom?: string; dateTo?: string },
+  ): Promise<JournalEntryOut[]> {
     const params = new URLSearchParams({ client_id: clientId });
-    if (periodId) params.set("period_id", periodId);
+    const f = typeof filter === "string" ? { periodId: filter } : (filter ?? {});
+    if (f.periodId) params.set("period_id", f.periodId);
+    if (f.dateFrom) params.set("date_from", f.dateFrom);
+    if (f.dateTo) params.set("date_to", f.dateTo);
     return this.request<JournalEntryOut[]>(`/journal-entries?${params.toString()}`);
   }
 
