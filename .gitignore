@@ -29,3 +29,4 @@ frontend/tsconfig.tsbuildinfo
 frontend/node_modules/
 # Bicep compiled output
 infra/main.json
+.azure.env

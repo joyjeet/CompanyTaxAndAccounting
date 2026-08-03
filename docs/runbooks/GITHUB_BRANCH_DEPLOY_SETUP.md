@@ -11,7 +11,8 @@ Workflow file in this repo:
 ## 1) Prerequisites
 
 1. Azure subscription to use for this project:
-   - `0270f50b-f296-40a3-9f05-3f8ff04ba8bc`
+   - See `.azure.env` locally, or the `AZURE_SUBSCRIPTION_ID` repository secret.
+     This repository is public, so the ID is not written down here.
 2. Azure region:
    - `centralus`
 3. Existing infra templates:
@@ -56,7 +57,7 @@ Add these as repository secrets (or environment secrets if you prefer split by e
 
 1. `AZURE_CLIENT_ID` = app registration (service principal) client id
 2. `AZURE_TENANT_ID` = Entra tenant id
-3. `AZURE_SUBSCRIPTION_ID` = `0270f50b-f296-40a3-9f05-3f8ff04ba8bc`
+3. `AZURE_SUBSCRIPTION_ID` = the subscription id from `.azure.env`
 
 ## 5) Add Environment Variables
 
