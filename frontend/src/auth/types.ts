@@ -323,8 +323,9 @@ export interface JournalLineIn {
 
 export interface JournalEntryCreateIn {
   client_id: string;
-  period_id: string;
   entry_date: string;
+  /** Optional — the server derives the bucket from `entry_date`. */
+  period_id?: string;
   memo?: string | null;
   lines: JournalLineIn[];
 }

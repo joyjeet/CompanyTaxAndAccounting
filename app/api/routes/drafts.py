@@ -107,8 +107,9 @@ class PromoteLineIn(BaseModel):
 
 class PromoteIn(BaseModel):
     client_id: UUID | None = None
-    period_id: UUID
     entry_date: date
+    # Optional: the period is derived from `entry_date` unless pinned.
+    period_id: UUID | None = None
     memo: str | None = None
     lines: list[PromoteLineIn]
 
@@ -169,7 +170,7 @@ def promote(
 # Statement promote-all — one balanced JE per transaction in payload.transactions.
 class StatementPromoteIn(BaseModel):
     client_id: UUID | None = None
-    period_id: UUID
+    period_id: UUID | None = None
     cash_account_code: str = "1000"
     # Optional remap: {"3": "4100", "7": "5200"} — transaction index -> code.
     # Keyed as strings so JSON-from-the-wire stays clean.

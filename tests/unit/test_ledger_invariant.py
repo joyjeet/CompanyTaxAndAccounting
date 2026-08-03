@@ -10,7 +10,6 @@ from sqlalchemy import select
 from app.db.session import tenant_session
 from app.domain.exceptions import (
     CrossTenantError,
-    PeriodLockedError,
     UnbalancedJournalEntryError,
 )
 from app.domain.ledger import LedgerService, LineInput
@@ -100,9 +99,9 @@ def test_both_sides_set_rejected(world: SeededWorld) -> None:
             )
 
 
-def test_locked_period_rejects_post(world: SeededWorld) -> None:
+def test_locked_period_still_accepts_post(world: SeededWorld) -> None:
+    """Books are continuous: `is_locked` never blocks a dated entry."""
     a1 = world.a1
-    # Lock the period (as firm admin).
     from app.models.accounting import AccountingPeriod
 
     with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
@@ -114,15 +113,42 @@ def test_locked_period_rejects_post(world: SeededWorld) -> None:
         ledger = LedgerService(
             sess, firm_id=a1.firm_id, client_id=a1.client_id, actor="staff@acme"
         )
-        with pytest.raises(PeriodLockedError):
-            ledger.post(
-                period_id=a1.period_id,
-                entry_date=date(2026, 3, 15),
-                lines=[
-                    LineInput(account_id=a1.cash_account_id, debit=Decimal("10")),
-                    LineInput(account_id=a1.revenue_account_id, credit=Decimal("10")),
-                ],
-            )
+        entry = ledger.post(
+            period_id=a1.period_id,
+            entry_date=date(2026, 3, 15),
+            lines=[
+                LineInput(account_id=a1.cash_account_id, debit=Decimal("10")),
+                LineInput(account_id=a1.revenue_account_id, credit=Decimal("10")),
+            ],
+        )
+        assert entry.entry_date == date(2026, 3, 15)
+        assert entry.period_id == a1.period_id
+
+
+def test_post_outside_any_period_derives_bucket_from_date(world: SeededWorld) -> None:
+    """A date with no matching period auto-creates the calendar-year bucket."""
+    a1 = world.a1
+    from app.models.accounting import AccountingPeriod
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        ledger = LedgerService(
+            sess, firm_id=a1.firm_id, client_id=a1.client_id, actor="staff@acme"
+        )
+        entry = ledger.post(
+            entry_date=date(2024, 8, 9),
+            lines=[
+                LineInput(account_id=a1.cash_account_id, debit=Decimal("25")),
+                LineInput(account_id=a1.revenue_account_id, credit=Decimal("25")),
+            ],
+        )
+        # The user's date is honoured exactly — no clamping.
+        assert entry.entry_date == date(2024, 8, 9)
+        assert entry.period_id != a1.period_id
+
+        period = sess.get(AccountingPeriod, entry.period_id)
+        assert period is not None
+        assert period.start_date == date(2024, 1, 1)
+        assert period.end_date == date(2024, 12, 31)
 
 
 def test_post_to_other_tenant_account_rejected(world: SeededWorld) -> None:

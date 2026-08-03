@@ -92,7 +92,8 @@ def test_post_unbalanced_entry_returns_400(client: TestClient, world) -> None:
     assert r.status_code == 400
 
 
-def test_post_to_locked_period_returns_409(client: TestClient, world) -> None:
+def test_post_to_locked_period_still_succeeds(client: TestClient, world) -> None:
+    """Books are continuous: `is_locked` does not gate posting."""
     # Lock the period via tenant_session so the firm-admin context satisfies RLS.
     ctx = TenantContext(firm_id=world.firm_a, scope=AccessScope.FIRM)
     with tenant_session(ctx) as sess:
@@ -110,7 +111,28 @@ def test_post_to_locked_period_returns_409(client: TestClient, world) -> None:
             "lines": _balanced_lines(world.a1),
         },
     )
-    assert r.status_code == 409
+    assert r.status_code == 201
+    assert r.json()["entry_date"] == "2026-06-15"
+
+
+def test_post_without_period_id_derives_from_entry_date(
+    client: TestClient, world
+) -> None:
+    """`period_id` is optional — the bucket follows the date the user picked."""
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        "/journal-entries",
+        headers=headers,
+        json={
+            "client_id": str(world.a1.client_id),
+            "entry_date": "2023-11-02",
+            "lines": _balanced_lines(world.a1),
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["entry_date"] == "2023-11-02"
+    assert body["period_id"] != str(world.a1.period_id)
 
 
 def test_post_with_cross_tenant_account_400(client: TestClient, world) -> None:

@@ -22,7 +22,6 @@ from app.db.tenant import AccessScope
 from app.domain.exceptions import (
     CrossTenantError,
     InvalidAccountError,
-    PeriodLockedError,
     UnbalancedJournalEntryError,
 )
 from app.domain.ledger import LedgerService, LineInput
@@ -63,8 +62,10 @@ class JournalLineIn(BaseModel):
 
 class JournalEntryCreateIn(BaseModel):
     client_id: UUID
-    period_id: UUID
     entry_date: date
+    # Optional: the books are continuous, so the period is derived from
+    # `entry_date` unless a caller explicitly pins one.
+    period_id: UUID | None = None
     memo: str | None = None
     lines: list[JournalLineIn] = Field(min_length=2)
 
@@ -193,8 +194,6 @@ def post_journal_entry(
         )
     except UnbalancedJournalEntryError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    except PeriodLockedError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except (CrossTenantError, InvalidAccountError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     sess.flush()

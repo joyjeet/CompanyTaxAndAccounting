@@ -279,7 +279,7 @@ export class ApiClient {
     draftId: string,
     body: {
       client_id?: string;
-      period_id: string;
+      period_id?: string;
       entry_date: string;
       memo?: string;
       lines: Array<{
@@ -301,7 +301,7 @@ export class ApiClient {
     draftId: string,
     body: {
       client_id?: string;
-      period_id: string;
+      period_id?: string;
       cash_account_code?: string;
       account_overrides?: Record<string, string>;
       accepted_indexes?: number[];

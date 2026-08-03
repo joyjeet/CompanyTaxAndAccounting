@@ -40,11 +40,7 @@ import type { CoaOut } from "../auth/types";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtMoney, shortId, todayIso } from "../lib/format";
-import {
-  periodCoversRange,
-  pickBestPeriod,
-  statementRangeFromTxns,
-} from "../lib/statementPeriod";
+import { statementRangeFromTxns } from "../lib/statementPeriod";
 import {
   promoteDisabledReason,
   rejectDisabledReason,
@@ -114,11 +110,6 @@ export default function DraftDetail() {
   // firm's clients.
   const clients = useQuery({ queryKey: ["clients"], queryFn: () => api.listClients() });
   const [clientId, setClientId] = useState<string>(identity?.clientId ?? "");
-  const periods = useQuery({
-    queryKey: ["periods", clientId],
-    queryFn: () => api.listPeriods(clientId),
-    enabled: !!clientId,
-  });
   const accounts = useQuery({
     queryKey: ["accounts", clientId],
     queryFn: () => api.listAccounts(clientId),
@@ -171,7 +162,6 @@ export default function DraftDetail() {
     return `${acct.code} - ${acct.name}`;
   };
 
-  const [periodId, setPeriodId] = useState("");
   const [entryDate, setEntryDate] = useState(todayIso());
   const [memo, setMemo] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([
@@ -258,7 +248,6 @@ export default function DraftDetail() {
     mutationFn: () =>
       api.promoteDraft(id, {
         client_id: clientId || undefined,
-        period_id: periodId,
         entry_date: entryDate,
         memo: memo || undefined,
         lines: lines
@@ -329,44 +318,11 @@ export default function DraftDetail() {
     setActiveTxnTab("pending");
   }, [id, persistedPostedIndexes, persistedExcludedIndexes]);
 
-  // ----- Statement period alignment --------------------------------------
-  // The backend clamps every transaction date into the selected period
-  // (`app/domain/promotion.py::_clamp`), so posting a July statement against
-  // a full-year period silently rewrites all 17 dates to Jan 1. We derive the
-  // statement's own span, pre-select a period that genuinely covers it, and
-  // make any mismatch loud instead of silent.
+  // ----- Statement date span ---------------------------------------------
+  // Purely informational: the books are continuous, so every transaction is
+  // posted on its own date. We surface the span so a reviewer can sanity-check
+  // it, and warn when the parser could not infer dates at all.
   const statementRange = useMemo(() => statementRangeFromTxns(rawTxns), [rawTxns]);
-
-  const selectedPeriod = useMemo(
-    () => (periods.data ?? []).find((p) => p.id === periodId) ?? null,
-    [periods.data, periodId],
-  );
-  const periodMismatch =
-    statementRange !== null &&
-    selectedPeriod !== null &&
-    !periodCoversRange(selectedPeriod, statementRange);
-
-  // Auto-select the narrowest covering period. Guarded per draft+client so a
-  // reviewer's manual choice is never overwritten by a re-render or refetch.
-  const periodAutoRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!isStatement) return;
-    const rows = periods.data;
-    if (!rows || rows.length === 0) return;
-    const key = `${id}:${clientId}`;
-    if (periodAutoRef.current === key) return;
-    periodAutoRef.current = key;
-    if (periodId) return; // reviewer already chose one
-    if (statementRange) {
-      const best = pickBestPeriod(rows, statementRange);
-      if (best) {
-        setPeriodId(best.id);
-        return;
-      }
-    }
-    const firstOpen = rows.find((p) => !p.is_locked);
-    if (firstOpen) setPeriodId(firstOpen.id);
-  }, [isStatement, statementRange, periods.data, periodId, id, clientId]);
 
   const applyTxnDecision = useMutation({
     mutationFn: (input: { mode: "accept" | "reject"; indexes: number[] }) => {
@@ -380,7 +336,6 @@ export default function DraftDetail() {
 
       return api.promoteStatementDraft(id, {
         client_id: clientId || undefined,
-        period_id: periodId,
         cash_account_code: "1000",
         account_overrides: Object.keys(overrides).length ? overrides : undefined,
         accepted_indexes: acceptedIndexes,
@@ -449,7 +404,6 @@ export default function DraftDetail() {
     canPromoteDrafts,
     role,
     clientId,
-    periodId,
     balanced: totals.balanced,
   });
 
@@ -775,7 +729,7 @@ export default function DraftDetail() {
                                 <Button
                                   size="small"
                                   appearance="primary"
-                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  disabled={!canPromoteDrafts || !clientId || applyTxnDecision.isPending || learnTxnRule.isPending}
                                   onClick={() => applyTxnDecision.mutate({ mode: "accept", indexes: [i] })}
                                 >
                                   Accept
@@ -783,7 +737,7 @@ export default function DraftDetail() {
                                 <Button
                                   size="small"
                                   appearance="secondary"
-                                  disabled={!canPromoteDrafts || !clientId || !periodId || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  disabled={!canPromoteDrafts || !clientId || applyTxnDecision.isPending || learnTxnRule.isPending}
                                   onClick={() => applyTxnDecision.mutate({ mode: "reject", indexes: [i] })}
                                 >
                                   Reject
@@ -824,7 +778,6 @@ export default function DraftDetail() {
                     disabled={
                       !canPromoteDrafts ||
                       !clientId ||
-                      !periodId ||
                       applyTxnDecision.isPending ||
                       pendingIndexes.length === 0
                     }
@@ -837,7 +790,6 @@ export default function DraftDetail() {
                     disabled={
                       !canPromoteDrafts ||
                       !clientId ||
-                      !periodId ||
                       applyTxnDecision.isPending ||
                       pendingIndexes.length === 0
                     }
@@ -849,32 +801,14 @@ export default function DraftDetail() {
                     {pendingIndexes.length} pending, {postedIndexes.length} posted, {excludedIndexes.length} excluded.
                   </Caption1>
                 </div>
-                {periodMismatch && statementRange && selectedPeriod && (
-                  <MessageBar intent="warning" style={{ marginTop: 12 }}>
-                    <MessageBarBody>
-                      <MessageBarTitle>
-                        This period does not cover the statement dates.
-                      </MessageBarTitle>
-                      <Body1 block>
-                        The statement runs <b>{statementRange.start}</b> to{" "}
-                        <b>{statementRange.end}</b>, but <b>{selectedPeriod.name}</b>{" "}
-                        runs {selectedPeriod.start_date} to {selectedPeriod.end_date}.
-                        Posting now would <b>silently move every out-of-range
-                        transaction</b> to the nearest period boundary — the
-                        amounts stay correct but the dates do not. Pick a
-                        matching period or create one below.
-                      </Body1>
-                    </MessageBarBody>
-                  </MessageBar>
-                )}
                 {!statementRange && (
                   <MessageBar intent="info" style={{ marginTop: 12 }}>
                     <MessageBarBody>
                       <MessageBarTitle>No transaction dates detected.</MessageBarTitle>
                       <Body1 block>
                         The parser could not infer full calendar dates for these
-                        rows, so the period cannot be checked automatically.
-                        Confirm the period manually before posting.
+                        rows, so they will be posted using today's date. Check
+                        the dates on the resulting entries before finalising.
                       </Body1>
                     </MessageBarBody>
                   </MessageBar>
@@ -906,16 +840,15 @@ export default function DraftDetail() {
           body: (
             <>
               Promoting writes a <b>real, posted, balanced journal
-              entry</b> against the selected period. The entry is
+              entry</b> dated on the entry date you choose. The entry is
               immutable after posting (correction = reversing entry, not
               edit) and immediately affects the trial balance, P&amp;L,
               balance sheet, and downstream tax worksheets.
               <br /><br />
               <b>Required:</b>
               <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
-                <li>The period must be open (locked periods are disabled).</li>
                 <li>Every line needs an account, a debit OR a credit (not both), and the total debits must equal total credits.</li>
-                <li>Entry date must fall inside the selected period.</li>
+                <li>An entry date — the books are continuous, so any date is accepted and the entry is filed under it.</li>
               </ul>
               The draft is marked <i>promoted</i> and the source document
               gets a permanent link to the resulting journal entry for
@@ -939,30 +872,13 @@ export default function DraftDetail() {
               </Dropdown>
             </Field>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Period" required>
-              <Dropdown
-                placeholder="Select period"
-                value={periods.data?.find((p) => p.id === periodId)?.name ?? ""}
-                selectedOptions={periodId ? [periodId] : []}
-                onOptionSelect={(_, dd) => setPeriodId(dd.optionValue ?? "")}
-              >
-                {(periods.data ?? []).map((p) => (
-                  <Option
-                    key={p.id}
-                    value={p.id}
-                    text={p.is_locked ? `${p.name} (locked)` : p.name}
-                    disabled={p.is_locked}
-                  >
-                    {p.is_locked ? `${p.name} (locked)` : p.name}
-                  </Option>
-                ))}
-              </Dropdown>
-            </Field>
-            <Field label="Entry date" required>
-              <Input type="date" value={entryDate} onChange={(_, dd) => setEntryDate(dd.value)} />
-            </Field>
-          </div>
+          <Field
+            label="Entry date"
+            required
+            hint="The books are continuous — the entry is recorded on this exact date."
+          >
+            <Input type="date" value={entryDate} onChange={(_, dd) => setEntryDate(dd.value)} />
+          </Field>
           <Field label="Memo">
             <Input value={memo} onChange={(_, dd) => setMemo(dd.value)} />
           </Field>
@@ -1063,7 +979,7 @@ export default function DraftDetail() {
           <div>
             <Button
               appearance="primary"
-              disabled={!canPromoteDrafts || !clientId || !periodId || !totals.balanced || promote.isPending}
+              disabled={!canPromoteDrafts || !clientId || !totals.balanced || promote.isPending}
               title={promoteReason}
               onClick={() => promote.mutate()}
             >

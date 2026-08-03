@@ -477,10 +477,10 @@ def test_promote_statement_uses_open_period_for_transaction_date(
         assert je_2025.period_id == period_2025_id
 
 
-def test_promote_statement_falls_back_to_selected_period_when_no_open_period_covers_dates(
+def test_promote_statement_honours_dates_outside_the_selected_period(
     world: SeededWorld,
 ) -> None:
-    """A wholly-mismatched date range still posts via selected-period fallback."""
+    """Books are continuous: rows post on their own dates, not the period's."""
     a1 = world.a1
     txns = [
         {
@@ -525,9 +525,13 @@ def test_promote_statement_falls_back_to_selected_period_when_no_open_period_cov
             .all()
         )
         assert len(entries) == 2
-        assert all(je.period_id == a1.period_id for je in entries)
-        # Both 2025 dates clamp to selected period start (2026-01-01).
-        assert all(je.entry_date == date(2026, 1, 1) for je in entries)
+        # The 2025 dates are honoured verbatim — no clamping to the selected
+        # period, which is bypassed entirely because each row has a real date.
+        assert {je.entry_date for je in entries} == {
+            date(2025, 7, 5),
+            date(2025, 7, 15),
+        }
+        assert all(je.period_id != a1.period_id for je in entries)
 
 
 def test_promote_statement_skips_unparseable_dates(world: SeededWorld) -> None:

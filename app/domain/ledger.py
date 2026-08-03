@@ -26,7 +26,6 @@ from app.domain.audit import write_audit
 from app.domain.exceptions import (
     CrossTenantError,
     InvalidAccountError,
-    PeriodLockedError,
     UnbalancedJournalEntryError,
 )
 from app.models.accounting import (
@@ -103,10 +102,46 @@ class LedgerService:
         self.actor = actor
 
     # -------------------------------------------------------------------- #
+    def _period_for_date(self, entry_date: date) -> AccountingPeriod:
+        """Find (or create) the accounting period bucket for `entry_date`.
+
+        Per the CPA who owns this system, the books are *continuous*: entries
+        are filed by their real date and are never blocked by period bounds or
+        locks. `journal_entry.period_id` is still a NOT NULL FK and periods
+        remain useful for reporting, so we derive the bucket from the date
+        instead of asking the user for one — auto-creating a calendar-year
+        period the first time a year is posted to.
+        """
+        period = self.sess.execute(
+            select(AccountingPeriod)
+            .where(
+                AccountingPeriod.firm_id == self.firm_id,
+                AccountingPeriod.client_id == self.client_id,
+                AccountingPeriod.start_date <= entry_date,
+                AccountingPeriod.end_date >= entry_date,
+            )
+            .order_by(AccountingPeriod.start_date.desc())
+        ).scalars().first()
+        if period is not None:
+            return period
+
+        year = entry_date.year
+        period = AccountingPeriod(
+            firm_id=self.firm_id,
+            client_id=self.client_id,
+            name=str(year),
+            start_date=date(year, 1, 1),
+            end_date=date(year, 12, 31),
+        )
+        self.sess.add(period)
+        self.sess.flush()  # need period.id
+        return period
+
+    # -------------------------------------------------------------------- #
     def post(
         self,
         *,
-        period_id: UUID,
+        period_id: UUID | None = None,
         entry_date: date,
         lines: list[LineInput],
         memo: str | None = None,
@@ -114,25 +149,26 @@ class LedgerService:
     ) -> JournalEntry:
         """Validate and post a balanced journal entry. Returns the persisted entry.
 
-        Refuses to write anything if the entry is unbalanced.
+        Refuses to write anything if the entry is unbalanced. `period_id` is
+        optional: when omitted the period is derived from `entry_date`.
         """
         v = _validate_lines(lines)
 
-        # Verify period exists, belongs to this tenant, and is not locked.
-        period = self.sess.get(AccountingPeriod, period_id)
-        if period is None:
-            # Could be missing OR hidden by RLS. Either way, treat as not found.
-            raise CrossTenantError("Accounting period not found in this tenant.")
-        if period.firm_id != self.firm_id or period.client_id != self.client_id:
-            # Defense in depth: RLS should already prevent this, but verify in code too.
-            raise CrossTenantError("Accounting period belongs to another tenant.")
-        if period.is_locked:
-            raise PeriodLockedError(f"Period {period.name} is locked.")
-        if not (period.start_date <= entry_date <= period.end_date):
-            raise PeriodLockedError(
-                f"entry_date {entry_date} is outside period "
-                f"{period.start_date}..{period.end_date}"
-            )
+        if period_id is None:
+            period = self._period_for_date(entry_date)
+        else:
+            # Explicit period: still verify tenancy (defense in depth — RLS
+            # should already prevent cross-tenant reads).
+            period = self.sess.get(AccountingPeriod, period_id)
+            if period is None:
+                # Could be missing OR hidden by RLS. Either way, treat as not found.
+                raise CrossTenantError("Accounting period not found in this tenant.")
+            if period.firm_id != self.firm_id or period.client_id != self.client_id:
+                raise CrossTenantError("Accounting period belongs to another tenant.")
+            # If the caller's period doesn't actually cover the entry date, the
+            # date wins — file the entry in the period that matches it.
+            if not (period.start_date <= entry_date <= period.end_date):
+                period = self._period_for_date(entry_date)
 
         # Verify every account exists in this tenant. (RLS would also block.)
         account_ids = {line.account_id for line in lines}
@@ -162,7 +198,7 @@ class LedgerService:
         entry = JournalEntry(
             firm_id=self.firm_id,
             client_id=self.client_id,
-            period_id=period_id,
+            period_id=period.id,
             entry_date=entry_date,
             memo=memo,
             status=JournalEntryStatus.POSTED,
@@ -272,9 +308,9 @@ def post_journal_entry(
     firm_id: UUID,
     client_id: UUID,
     actor: str,
-    period_id: UUID,
     entry_date: date,
     lines: list[LineInput],
+    period_id: UUID | None = None,
     memo: str | None = None,
     source_document_id: UUID | None = None,
 ) -> JournalEntry:

@@ -70,9 +70,9 @@ def promote_draft(
     actor: str,
     scope: AccessScope,
     draft_id: UUID,
-    period_id: UUID,
     entry_date: date,
     lines: list[PromoteLineInput],
+    period_id: UUID | None = None,
     memo: str | None = None,
 ) -> UUID:
     """Promote `draft_id` into a posted journal entry. Returns entry id.
@@ -449,7 +449,7 @@ def promote_statement_draft(
     actor: str,
     scope: AccessScope,
     draft_id: UUID,
-    period_id: UUID,
+    period_id: UUID | None = None,
     cash_account_code: str = "1000",
     account_overrides: dict[int, str] | None = None,
     accepted_indexes: set[int] | None = None,
@@ -509,33 +509,16 @@ def promote_statement_draft(
     if not txns:
         raise AlreadyPromotedError("Statement draft has no transactions to post.")
 
-    # Load selected period + chart of accounts (keyed by code, then by id).
-    period = sess.get(AccountingPeriod, period_id)
-    if period is None or period.client_id != client_id:
-        raise PromotionForbiddenError("Period not found in this tenant.")
-    if period.is_locked:
-        raise PromotionForbiddenError("Period is locked; cannot post entries.")
+    # Load chart of accounts (keyed by code, then by id). `period_id` is
+    # optional and only supplies a fallback date for rows whose date the
+    # parser could not infer; it never gates or shifts a dated transaction.
+    period = None
+    if period_id is not None:
+        period = sess.get(AccountingPeriod, period_id)
+        if period is None or period.client_id != client_id:
+            raise PromotionForbiddenError("Period not found in this tenant.")
 
     from sqlalchemy import select as _select  # local import to avoid cycle
-
-    open_periods = (
-        sess.execute(
-            _select(AccountingPeriod).where(
-                AccountingPeriod.client_id == client_id,
-                AccountingPeriod.is_locked.is_(False),
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    def _open_period_for_date(on: date) -> AccountingPeriod | None:
-        for p in open_periods:
-            if p.firm_id != firm_id or p.client_id != client_id:
-                continue
-            if p.start_date <= on <= p.end_date:
-                return p
-        return None
 
     accounts_by_code = {
         a.code: a
@@ -602,36 +585,24 @@ def promote_statement_draft(
     posted_indexes_this_call: set[int] = set()
     ledger = LedgerService(sess, firm_id=firm_id, client_id=client_id, actor=actor)
 
-    def _resolve_entry_and_period(
-        txn: dict,
-    ) -> tuple[date | None, UUID | None, str]:
-        """Resolve a transaction's posting date and period.
+    def _resolve_entry_date(txn: dict) -> tuple[date | None, str]:
+        """Resolve a transaction's posting date.
 
-        Returns (entry_date, posting_period_id, skip_reason).
+        Returns (entry_date, skip_reason). The books are continuous, so the
+        transaction's own date is always honoured — it is never clamped into,
+        or blocked by, an accounting period.
         """
         iso = (txn.get("date") or "").strip()
         if not iso:
             # The parser could not infer a year for this row — see
             # `bank_statement._format_date`, which yields "" when the statement
-            # header carries no year. There is no date to honour, so the
-            # selected period start stands in.
-            return period.start_date, period.id, ""
+            # header carries no year. There is no date to honour, so fall back
+            # to the selected period's start, or today if none was given.
+            return (period.start_date if period is not None else date.today()), ""
         try:
-            d = date.fromisoformat(iso)
+            return date.fromisoformat(iso), ""
         except ValueError:
-            return None, None, f"unparseable date '{iso}'"
-
-        posting_period = _open_period_for_date(d)
-        if posting_period is not None:
-            return d, posting_period.id, ""
-
-        # If period configuration does not cover this transaction date,
-        # keep posting unblocked by falling back to the selected period.
-        if d < period.start_date:
-            return period.start_date, period.id, ""
-        if d > period.end_date:
-            return period.end_date, period.id, ""
-        return d, period.id, ""
+            return None, f"unparseable date '{iso}'"
 
     for idx, txn in enumerate(txns):
         if idx in target_reject:
@@ -700,15 +671,14 @@ def promote_statement_draft(
             )
             continue
 
-        entry_date, posting_period_id, date_reason = _resolve_entry_and_period(txn)
-        if entry_date is None or posting_period_id is None:
+        entry_date, date_reason = _resolve_entry_date(txn)
+        if entry_date is None:
             skipped.append({"index": str(idx), "reason": date_reason})
             continue
 
         memo = (txn.get("description") or "")[:120] or "Bank statement transaction"
 
         entry = ledger.post(
-            period_id=posting_period_id,
             entry_date=entry_date,
             lines=lines,
             memo=memo,

@@ -37,7 +37,6 @@ from sqlalchemy.orm import Session
 from app.db.tenant import AccessScope
 from app.domain.promotion import PromoteLineInput, promote_draft
 from app.models.accounting import (
-    AccountingPeriod,
     ChartOfAccounts,
     DraftClassification,
 )
@@ -82,14 +81,6 @@ def auto_promote_eligible_drafts(
         return []
 
     accounts = _load_accounts_by_code(sess, client_id=client_id)
-    period = _open_period_for(sess, client_id=client_id, on=date.today())
-    if period is None:
-        logger.info(
-            "auto_promote: no open period for client; %d drafts left for review",
-            len(drafts),
-            extra={"client_id": str(client_id)},
-        )
-        return []
 
     posted_ids: list[UUID] = []
     for draft in drafts:
@@ -100,7 +91,6 @@ def auto_promote_eligible_drafts(
                 client_id=client_id,
                 draft=draft,
                 accounts=accounts,
-                period=period,
             )
         except Exception:  # noqa: BLE001 — never let auto-promote break upload
             logger.exception(
@@ -130,31 +120,6 @@ def _load_accounts_by_code(
     return {a.code: a for a in rows}
 
 
-def _open_period_for(
-    sess: Session, *, client_id: UUID, on: date
-) -> AccountingPeriod | None:
-    return (
-        sess.execute(
-            select(AccountingPeriod).where(
-                AccountingPeriod.client_id == client_id,
-                AccountingPeriod.is_locked.is_(False),
-                AccountingPeriod.start_date <= on,
-                AccountingPeriod.end_date >= on,
-            )
-        )
-        .scalars()
-        .first()
-    )
-
-
-def _clamp_to_period(d: date, period: AccountingPeriod) -> date:
-    if d < period.start_date:
-        return period.start_date
-    if d > period.end_date:
-        return period.end_date
-    return d
-
-
 def _try_promote(
     sess: Session,
     *,
@@ -162,12 +127,10 @@ def _try_promote(
     client_id: UUID,
     draft: DraftClassification,
     accounts: dict[str, ChartOfAccounts],
-    period: AccountingPeriod,
 ) -> UUID | None:
     """Apply the heuristic and call promote_draft. Returns je_id or None."""
     payload = draft.payload or {}
-    today = date.today()
-    entry_date = _clamp_to_period(today, period)
+    entry_date = date.today()
 
     pair = _propose_lines(draft.kind, payload, accounts)
     if pair is None:
@@ -195,7 +158,6 @@ def _try_promote(
         actor="system:auto-promote",
         scope=AccessScope.FIRM,
         draft_id=draft.id,
-        period_id=period.id,
         entry_date=entry_date,
         lines=[
             PromoteLineInput(account_id=debit_acct.id, debit=amount),
