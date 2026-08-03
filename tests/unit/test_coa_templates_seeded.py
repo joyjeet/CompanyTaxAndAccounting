@@ -122,5 +122,5 @@ def test_all_template_versions_are_draft_strings() -> None:
     for t in ALL_TEMPLATES:
         assert "-draft" in t["version"], (
             f"{t['key']} version '{t['version']}' is missing the -draft "
-            "suffix; templates ship as DRAFT until CPA activation."
+            "suffix; the bundled charts are not yet a frozen release."
         )

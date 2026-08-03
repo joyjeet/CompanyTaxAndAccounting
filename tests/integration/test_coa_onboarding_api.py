@@ -237,3 +237,27 @@ def test_instantiate_endpoint_second_call_409(
         headers=headers,
     )
     assert r2.status_code == 409, r2.text
+
+
+# --------------------------------------------------------------------------- #
+# Install state
+# --------------------------------------------------------------------------- #
+def test_a_freshly_migrated_database_can_onboard_a_client() -> None:
+    """The shipped general template must be ACTIVE straight after migration.
+
+    Regression guard. The bundled templates were seeded as DRAFT, and
+    instantiation refuses to run without an ACTIVE `general` template, so a
+    newly provisioned environment could not create its first client at all.
+    Every developer database had drifted into an activated state, which is
+    why it only ever showed up in production.
+    """
+    with tenant_session(ctx_firm(uuid4())) as sess:
+        general = sess.execute(
+            select(CoaTemplate).where(CoaTemplate.key == "general")
+        ).scalars().all()
+
+    assert general, "no general COA template was seeded"
+    assert any(t.status is CoaTemplateStatus.ACTIVE for t in general), (
+        "no ACTIVE general template after migration — a fresh deployment "
+        "cannot onboard any client"
+    )
