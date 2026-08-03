@@ -27,7 +27,7 @@ import { useMemo } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
-import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import type {
   AgingReportOut,
   BalanceSheetOut,
@@ -188,7 +188,7 @@ const useStyles = makeStyles({
 export default function PortalHome() {
   const styles = useStyles();
   const api = useApi();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
   const clientId = identity?.clientId ?? null;
 
   // -------------------------- data fetches -------------------------------- //

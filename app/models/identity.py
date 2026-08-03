@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -34,9 +43,14 @@ class FirmMembership(Base):
     __tablename__ = "firm_membership"
     __table_args__ = (
         UniqueConstraint("firm_id", "user_id", name="uq_firm_membership_firm_user"),
+        CheckConstraint(
+            "(role::text = 'client_portal') = (client_id IS NOT NULL)",
+            name="ck_firm_membership_client_scope",
+        ),
         Index("ix_firm_membership_firm_id", "firm_id"),
         Index("ix_firm_membership_user_id", "user_id"),
         Index("ix_firm_membership_status", "status"),
+        Index("ix_firm_membership_client_id", "client_id"),
     )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -45,6 +59,12 @@ class FirmMembership(Base):
     )
     user_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("user_account.id", ondelete="CASCADE"), nullable=False
+    )
+    # Set only for the client_portal role: which client this user may see.
+    # Staff roles leave this NULL and see the whole firm. Enforced by
+    # ck_firm_membership_client_scope.
+    client_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
     )
     role: Mapped[StaffRole] = mapped_column(
         Enum(

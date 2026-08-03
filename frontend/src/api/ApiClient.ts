@@ -4,6 +4,7 @@
  */
 import config from "../config";
 import type { AuthClient } from "../auth/AuthClient";
+import { readSelection } from "../auth/signInState";
 import type {
   AgingReportOut,
   ArtifactOut,
@@ -67,6 +68,14 @@ export class ApiClient {
     const headers = new Headers(init.headers);
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (!headers.has("Accept")) headers.set("Accept", "application/json");
+    // Context hint for membership-based authorization. The backend checks it
+    // against the caller's own memberships, so this can only ever narrow
+    // access — it is not a claim of entitlement.
+    const selection = readSelection();
+    if (selection) {
+      headers.set("X-CTAA-Firm", selection.firmId);
+      if (selection.clientId) headers.set("X-CTAA-Client", selection.clientId);
+    }
     const resp = await fetch(`${this.base}${path}`, { ...init, headers });
     if (resp.status === 204) return undefined as T;
     const text = await resp.text();

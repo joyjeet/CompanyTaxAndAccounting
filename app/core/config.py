@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     #          The application also accepts a small set of test-only tokens.
     app_auth_mode: Literal["jwt", "test"] = "test"
 
+    # Where firm_id / client_id / scope come from once the token is verified.
+    # 'claims'     : read them from the token (needs directory extension
+    #                attributes + a claims-mapping policy; revocation waits for
+    #                token expiry).
+    # 'membership' : resolve them from our own firm_membership rows. Revocation
+    #                is immediate and onboarding needs no directory admin.
+    # Production should use 'membership'; 'claims' remains the default so the
+    # existing test-token fixtures keep working unchanged.
+    app_authz_source: Literal["claims", "membership"] = "claims"
+
     # OIDC parameters (used when app_auth_mode == 'jwt'). For Entra ID these
     # come from the App Registration in the directory. NEVER commit secrets.
     oidc_issuer: str | None = None

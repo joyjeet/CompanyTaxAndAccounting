@@ -34,7 +34,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
-import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import { useFirmRole } from "../auth/useFirmRole";
 import type { CoaOut } from "../auth/types";
 import Section from "../components/Section";
@@ -88,7 +88,7 @@ export default function DraftDetail() {
   const navigate = useNavigate();
   const api = useApi();
   const qc = useQueryClient();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
   const { capabilities, role } = useFirmRole();
   const toasterId = useId("draft-toaster");
   const { dispatchToast } = useToastController(toasterId);

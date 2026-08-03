@@ -91,6 +91,13 @@ def create_app() -> FastAPI:
     app.include_router(admin.router, prefix="/api")
     app.include_router(audit_export.router, prefix="/api")
 
+    # Sign-in context: available before a tenant context exists, so it is
+    # mounted in every mode (it still requires a valid bearer token).
+    from app.api.routes import auth_context
+
+    app.include_router(auth_context.router)
+    app.include_router(auth_context.router, prefix="/api")
+
     # Dev-only routes: only mount when the server is in non-prod test-mode.
     # The router itself also performs a runtime check.
     if settings.app_env != "prod" and settings.app_auth_mode == "test":

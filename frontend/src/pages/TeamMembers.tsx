@@ -26,7 +26,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApi } from "../api/useApi";
-import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import { roleDisplayName } from "../auth/firmRole";
 import type { MembershipStatus, StaffRole } from "../auth/types";
 import Section from "../components/Section";
@@ -49,7 +49,7 @@ function roleLabel(role: StaffRole): string {
 
 export default function TeamMembers() {
   const api = useApi();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
   const qc = useQueryClient();
   const toasterId = useId("team-toaster");
   const { dispatchToast } = useToastController(toasterId);

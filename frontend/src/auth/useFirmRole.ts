@@ -3,7 +3,7 @@ import { useMemo } from "react";
 
 import { useApi } from "../api/useApi";
 import { capabilitiesForRole, type FirmRoleCapabilities } from "./firmRole";
-import { useAuth } from "./AuthContext";
+import { useEffectiveIdentity } from "./TenantContext";
 import type { StaffRole } from "./types";
 
 interface UseFirmRoleOut {
@@ -15,7 +15,7 @@ interface UseFirmRoleOut {
 
 export function useFirmRole(): UseFirmRoleOut {
   const api = useApi();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
   const isFirm = identity?.role === "firm_staff";
 
   const team = useQuery({

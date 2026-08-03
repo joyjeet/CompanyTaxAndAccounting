@@ -32,6 +32,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
 import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import { shortId } from "../lib/format";
 
 interface NavItem {
@@ -190,7 +191,8 @@ const useStyles = makeStyles({
 export default function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
   const api = useApi();
-  const { identity, client, isAuthenticated } = useAuth();
+  const { isAuthenticated, signOut } = useAuth();
+  const identity = useEffectiveIdentity();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -271,8 +273,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 appearance="subtle"
                 icon={<ArrowExitRegular />}
                 onClick={async () => {
-                  await client.logout();
-                  navigate("/login", { replace: true });
+                  // Via signOut (not client.logout) so the stored tenant
+                  // selection is dropped — otherwise the next person to sign
+                  // in on this tab inherits the previous workspace hint.
+                  await signOut();
+                  navigate("/welcome", { replace: true });
                 }}
               >
                 Sign out
