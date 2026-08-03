@@ -180,9 +180,11 @@ def _serialize_worksheet_for_render(
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True, slots=True)
 class GenerateStatementRequest:
-    period_id: UUID
     kind: ArtifactKind
     format: ArtifactFormat
+    period_id: UUID | None = None
+    period_start: date | None = None
+    period_end: date | None = None
     cash_account_codes: list[str] | None = None  # required for CASH_FLOW
     prior_period_id: UUID | None = None
 
@@ -300,7 +302,20 @@ def generate_statement_artifact(
         raise ArtifactStateError(
             f"generate_statement_artifact does not support kind={request.kind.value}"
         )
-    period = _ensure_period(sess, client_id=client_id, period_id=request.period_id)
+    period: AccountingPeriod | None = None
+    if request.period_id is not None:
+        period = _ensure_period(sess, client_id=client_id, period_id=request.period_id)
+        period_start = period.start_date
+        period_end = period.end_date
+    else:
+        if request.period_start is None or request.period_end is None:
+            raise ArtifactStateError(
+                "Either period_id or period_start/period_end must be provided."
+            )
+        if request.period_end < request.period_start:
+            raise ArtifactStateError("period_end must be on or after period_start.")
+        period_start = request.period_start
+        period_end = request.period_end
     prior_period = None
     if request.prior_period_id is not None:
         prior_period = _ensure_period(
@@ -315,9 +330,10 @@ def generate_statement_artifact(
 
     body: bytes
     title: str
+    period_label = period.name if period is not None else f"{period_start.isoformat()} to {period_end.isoformat()}"
     if request.kind is ArtifactKind.PROFIT_AND_LOSS:
         pl = svc.profit_and_loss(
-            period_start=period.start_date, period_end=period.end_date,
+            period_start=period_start, period_end=period_end,
         )
         prior = None
         if prior_period is not None:
@@ -329,9 +345,9 @@ def generate_statement_artifact(
         body = renderer.render_profit_and_loss(
             presented, client_name=client_label, branding=branding,
         )
-        title = f"Profit & Loss — {period.name}"
+        title = f"Profit & Loss — {period_label}"
     elif request.kind is ArtifactKind.BALANCE_SHEET:
-        bs = svc.balance_sheet(as_of=period.end_date)
+        bs = svc.balance_sheet(as_of=period_end)
         prior = None
         if prior_period is not None:
             prior = svc.balance_sheet(as_of=prior_period.end_date)
@@ -339,7 +355,7 @@ def generate_statement_artifact(
         body = renderer.render_balance_sheet(
             presented, client_name=client_label, branding=branding,
         )
-        title = f"Balance Sheet — {period.name}"
+        title = f"Balance Sheet — {period_label}"
     else:  # CASH_FLOW
         if not request.cash_account_codes:
             raise ArtifactStateError(
@@ -348,15 +364,15 @@ def generate_statement_artifact(
         presented = present_cash_flow(
             sess,
             firm_id=firm_id, client_id=client_id,
-            period_start=period.start_date,
-            period_end=period.end_date,
+            period_start=period_start,
+            period_end=period_end,
             cash_account_codes=request.cash_account_codes,
             rules=rules,
         )
         body = renderer.render_cash_flow(
             presented, client_name=client_label, branding=branding,
         )
-        title = f"Cash Flow — {period.name}"
+        title = f"Cash Flow — {period_label}"
 
     return _store_and_register(
         sess,
@@ -364,7 +380,9 @@ def generate_statement_artifact(
         kind=request.kind, fmt=request.format,
         title=title, body=body,
         parameters={
-            "period_id": str(request.period_id),
+            "period_id": str(request.period_id) if request.period_id else None,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
             "prior_period_id": (
                 str(request.prior_period_id) if request.prior_period_id else None
             ),
@@ -475,18 +493,17 @@ def finalize_artifact(
             f"Artifact is in status {art.status.value}; only DRAFT can be finalized."
         )
     # Pending-drafts gate.
-    if art.period_id is not None:
-        period = sess.get(AccountingPeriod, art.period_id)
-        if period is not None:
-            pending = _pending_drafts_count(
-                sess, client_id=client_id,
-                period_start=period.start_date, period_end=period.end_date,
-            )
-            if pending > 0:
-                raise ExportBlockedByPendingDraftsError(
-                    f"{pending} pending classification draft(s) must be resolved "
-                    "before finalizing this artifact."
-                )
+    pending = _pending_drafts_count(
+        sess,
+        client_id=client_id,
+        period_start=date.min,
+        period_end=date.max,
+    )
+    if pending > 0:
+        raise ExportBlockedByPendingDraftsError(
+            f"{pending} pending classification draft(s) must be resolved "
+            "before finalizing this artifact."
+        )
 
     # Phase 8b: FormTemplate gate. A TAX_WORKSHEET PDF may only be
     # FINALIZED when an ACTIVE+verified form_template row exists for the
@@ -619,7 +636,9 @@ def download_artifact(
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True, slots=True)
 class GenerateNarrativeRequest:
-    period_id: UUID
+    period_id: UUID | None = None
+    period_start: date | None = None
+    period_end: date | None = None
     cash_account_codes: list[str] | None = None
     prior_period_id: UUID | None = None
     writer: NarrativeWriter | None = None  # default = deterministic template
@@ -637,7 +656,9 @@ def _build_period_presentations(
     *,
     firm_id: UUID,
     client_id: UUID,
-    period: AccountingPeriod,
+    period_start: date,
+    period_end: date,
+    period_label: str,
     prior_period: AccountingPeriod | None,
     cash_account_codes: list[str] | None,
     rules: PresentationRules,
@@ -648,7 +669,7 @@ def _build_period_presentations(
 ]:
     svc = StatementsService(sess, firm_id=firm_id, client_id=client_id)
     pl_raw = svc.profit_and_loss(
-        period_start=period.start_date, period_end=period.end_date,
+        period_start=period_start, period_end=period_end,
     )
     pl_prior = None
     bs_prior = None
@@ -660,15 +681,15 @@ def _build_period_presentations(
         bs_prior = svc.balance_sheet(as_of=prior_period.end_date)
     pl = present_profit_and_loss(pl_raw, rules=rules, prior=pl_prior)
     bs = present_balance_sheet(
-        svc.balance_sheet(as_of=period.end_date), rules=rules, prior=bs_prior,
+        svc.balance_sheet(as_of=period_end), rules=rules, prior=bs_prior,
     )
     cf: PresentedCashFlow | None = None
     if cash_account_codes:
         cf = present_cash_flow(
             sess,
             firm_id=firm_id, client_id=client_id,
-            period_start=period.start_date,
-            period_end=period.end_date,
+            period_start=period_start,
+            period_end=period_end,
             cash_account_codes=cash_account_codes,
             rules=rules,
         )
@@ -694,7 +715,21 @@ def generate_narrative_artifact(
     """
     if scope is not AccessScope.FIRM:
         raise ArtifactAccessForbiddenError("Only firm staff may generate artifacts.")
-    period = _ensure_period(sess, client_id=client_id, period_id=request.period_id)
+    period: AccountingPeriod | None = None
+    if request.period_id is not None:
+        period = _ensure_period(sess, client_id=client_id, period_id=request.period_id)
+        period_start = period.start_date
+        period_end = period.end_date
+    else:
+        if request.period_start is None or request.period_end is None:
+            raise ArtifactStateError(
+                "Either period_id or period_start/period_end must be provided."
+            )
+        if request.period_end < request.period_start:
+            raise ArtifactStateError("period_end must be on or after period_start.")
+        period_start = request.period_start
+        period_end = request.period_end
+    period_label = period.name if period is not None else f"{period_start.isoformat()} to {period_end.isoformat()}"
     prior_period = None
     if request.prior_period_id is not None:
         prior_period = _ensure_period(
@@ -704,7 +739,10 @@ def generate_narrative_artifact(
     pl, bs, cf = _build_period_presentations(
         sess,
         firm_id=firm_id, client_id=client_id,
-        period=period, prior_period=prior_period,
+        period_start=period_start,
+        period_end=period_end,
+        period_label=period_label,
+        prior_period=prior_period,
         cash_account_codes=request.cash_account_codes,
         rules=rules,
     )
@@ -722,10 +760,12 @@ def generate_narrative_artifact(
         firm_id=firm_id, client_id=client_id, actor=actor,
         kind=ArtifactKind.NARRATIVE,
         fmt=ArtifactFormat.MARKDOWN,
-        title=f"Narrative — {period.name}",
+        title=f"Narrative — {period_label}",
         body=body,
         parameters={
-            "period_id": str(request.period_id),
+            "period_id": str(request.period_id) if request.period_id else None,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
             "prior_period_id": (
                 str(request.prior_period_id) if request.prior_period_id else None
             ),

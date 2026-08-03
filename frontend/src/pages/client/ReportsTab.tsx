@@ -52,7 +52,12 @@ import { useState } from "react";
 import { useApi } from "../../api/useApi";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
-import { fmtDate, fmtMoney, shortId } from "../../lib/format";
+import { fmtDate, fmtMoney, shortId, todayIso } from "../../lib/format";
+import {
+  REPORT_PERIOD_OPTIONS,
+  type ReportPeriodPreset,
+  resolveReportPeriod,
+} from "../../lib/reportPeriods";
 import type { RollupNodeOut, RollupTreeOut } from "../../auth/types";
 
 type ReportTab = "gl" | "ar" | "ap" | "rollup";
@@ -116,6 +121,9 @@ export default function ReportsTab({
 
   const [tab, setTab] = useState<ReportTab>("gl");
   const [periodId, setPeriodId] = useState<string>("");
+  const [periodPreset, setPeriodPreset] = useState<ReportPeriodPreset>("all");
+  const [customStart, setCustomStart] = useState(todayIso());
+  const [customEnd, setCustomEnd] = useState(todayIso());
   const [accountId, setAccountId] = useState<string>(""); // for general ledger
   const [arCodes, setArCodes] = useState<string>("1100");
   const [apCodes, setApCodes] = useState<string>("2000");
@@ -129,10 +137,11 @@ export default function ReportsTab({
     queryKey: ["periods", clientId, portalView],
     queryFn: async () => {
       const ps = await api.listPeriods(clientId);
-      const visible = portalView ? ps.filter((p) => p.is_locked) : ps;
-      if (visible.length > 0 && !periodId) setPeriodId(visible[0].id);
+      const visible = ps.filter((p) => (portalView ? p.is_locked : true));
+      if (portalView && visible.length > 0 && !periodId) setPeriodId(visible[0].id);
       return visible;
     },
+    enabled: portalView,
   });
 
   const accounts = useQuery({
@@ -144,50 +153,63 @@ export default function ReportsTab({
     },
   });
 
+  const reportPeriod = resolveReportPeriod({
+    preset: periodPreset,
+    customStart,
+    customEnd,
+  });
+  const rangeQuery = {
+    periodStart: reportPeriod.startDate,
+    periodEnd: reportPeriod.endDate,
+  };
+  const periodQuery = portalView
+    ? { periodId }
+    : rangeQuery;
+
   const gl = useQuery({
-    queryKey: ["gl", clientId, periodId, accountId],
-    queryFn: () => api.getGeneralLedger(clientId, periodId, accountId),
-    enabled: !!periodId && !!accountId && tab === "gl",
+    queryKey: ["gl", clientId, periodQuery, accountId],
+    queryFn: () => api.getGeneralLedger(clientId, periodQuery, accountId),
+    enabled: !!accountId && tab === "gl" && (portalView ? !!periodId : true),
   });
 
   const ar = useQuery({
-    queryKey: ["ar-aging", clientId, periodId, arCodes],
+    queryKey: ["ar-aging", clientId, periodQuery, arCodes],
     queryFn: () =>
       api.getArAging(
         clientId,
-        periodId,
+        periodQuery,
         arCodes.split(",").map((c) => c.trim()).filter(Boolean),
       ),
-    enabled: !!periodId && tab === "ar",
+    enabled: tab === "ar" && (portalView ? !!periodId : true),
   });
 
   const ap = useQuery({
-    queryKey: ["ap-aging", clientId, periodId, apCodes],
+    queryKey: ["ap-aging", clientId, periodQuery, apCodes],
     queryFn: () =>
       api.getApAging(
         clientId,
-        periodId,
+        periodQuery,
         apCodes.split(",").map((c) => c.trim()).filter(Boolean),
       ),
-    enabled: !!periodId && tab === "ap",
+    enabled: tab === "ap" && (portalView ? !!periodId : true),
   });
 
   const rollup = useQuery({
-    queryKey: ["rollup", clientId, periodId, rollupScope],
-    queryFn: () => api.getAccountRollup(clientId, periodId, rollupScope),
-    enabled: !!periodId && tab === "rollup",
+    queryKey: ["rollup", clientId, periodQuery, rollupScope],
+    queryFn: () => api.getAccountRollup(clientId, periodQuery, rollupScope),
+    enabled: tab === "rollup" && (portalView ? !!periodId : true),
   });
 
   const drill = useQuery({
-    queryKey: ["drill", clientId, periodId, drillAccountId],
+    queryKey: ["drill", clientId, periodQuery, drillAccountId],
     queryFn: () =>
-      api.getAccountActivity(clientId, periodId, drillAccountId as string),
-    enabled: !!periodId && !!drillAccountId,
+      api.getAccountActivity(clientId, periodQuery, drillAccountId as string),
+    enabled: !!drillAccountId && (portalView ? !!periodId : true),
   });
 
-  if (periods.isLoading) return <LoadingState />;
-  if (periods.error) return <ErrorState error={periods.error} />;
-  if (!periods.data || periods.data.length === 0) {
+  if (portalView && periods.isLoading) return <LoadingState />;
+  if (portalView && periods.error) return <ErrorState error={periods.error} />;
+  if (portalView && (!periods.data || periods.data.length === 0)) {
     return (
       <EmptyState
         title={portalView ? "No finalized reports yet" : "No periods"}
@@ -200,10 +222,10 @@ export default function ReportsTab({
     );
   }
 
-  const selectedPeriod = periods.data.find((p) => p.id === periodId);
+  const selectedPeriod = portalView ? periods.data?.find((p) => p.id === periodId) : null;
   const periodLabel = selectedPeriod
     ? `${selectedPeriod.name} (${fmtDate(selectedPeriod.start_date)} – ${fmtDate(selectedPeriod.end_date)})`
-    : "";
+    : reportPeriod.label;
   const selectedAccount = accounts.data?.find((a) => a.id === accountId);
   const accountLabel = selectedAccount
     ? `${selectedAccount.code} ${selectedAccount.name}`
@@ -214,35 +236,67 @@ export default function ReportsTab({
       <Toaster toasterId={toasterId} />
 
       <div className={styles.toolbar}>
-        <Dropdown
-          value={periodLabel}
-          selectedOptions={periodId ? [periodId] : []}
-          onOptionSelect={(_, d) => d.optionValue && setPeriodId(d.optionValue)}
-        >
-          {periods.data.map((p) => (
-            <Option
-              key={p.id}
-              value={p.id}
-              text={`${p.name} (${fmtDate(p.start_date)} – ${fmtDate(p.end_date)})`}
+        {portalView ? (
+          <>
+            <Dropdown
+              value={periodLabel}
+              selectedOptions={periodId ? [periodId] : []}
+              onOptionSelect={(_, d) => d.optionValue && setPeriodId(d.optionValue)}
             >
-              {p.name} ({fmtDate(p.start_date)} – {fmtDate(p.end_date)})
-              {p.is_locked ? " · locked" : " · open"}
-            </Option>
-          ))}
-        </Dropdown>
-        {selectedPeriod && (
-          <Badge
-            appearance="tint"
-            color={selectedPeriod.is_locked ? "success" : "warning"}
-          >
-            {selectedPeriod.is_locked ? "Finalized (locked)" : "Draft (open)"}
-          </Badge>
+              {periods.data?.map((p) => (
+                <Option
+                  key={p.id}
+                  value={p.id}
+                  text={`${p.name} (${fmtDate(p.start_date)} – ${fmtDate(p.end_date)})`}
+                >
+                  {p.name} ({fmtDate(p.start_date)} – {fmtDate(p.end_date)})
+                  {p.is_locked ? " · locked" : " · open"}
+                </Option>
+              ))}
+            </Dropdown>
+            {selectedPeriod && (
+              <Badge
+                appearance="tint"
+                color={selectedPeriod.is_locked ? "success" : "warning"}
+              >
+                {selectedPeriod.is_locked ? "Finalized (locked)" : "Draft (open)"}
+              </Badge>
+            )}
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Reports below cover periods your firm has finalized (locked).
+            </Caption1>
+          </>
+        ) : (
+          <>
+            <Dropdown
+              value={periodLabel}
+              selectedOptions={[periodPreset]}
+              onOptionSelect={(_, d) => {
+                const next = (d.optionValue as ReportPeriodPreset | undefined) ?? "all";
+                setPeriodPreset(next);
+                if (next === "custom") {
+                  setCustomStart(todayIso());
+                  setCustomEnd(todayIso());
+                }
+              }}
+            >
+              {REPORT_PERIOD_OPTIONS.map((option) => (
+                <Option key={option.value} value={option.value} text={option.label}>
+                  {option.label}
+                </Option>
+              ))}
+            </Dropdown>
+            {periodPreset === "custom" && (
+              <>
+                <Input type="date" value={customStart} onChange={(_, d) => setCustomStart(d.value)} />
+                <Input type="date" value={customEnd} onChange={(_, d) => setCustomEnd(d.value)} />
+              </>
+            )}
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Reports below use the selected date range.
+            </Caption1>
+          </>
         )}
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          {portalView
-            ? "Reports below cover periods your firm has finalized (locked)."
-            : "Live reports computed from posted journal entries. Lock the period (Periods tab) to release these to the client portal."}
-        </Caption1>
       </div>
 
       <TabList

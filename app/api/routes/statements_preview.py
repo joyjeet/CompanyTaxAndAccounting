@@ -6,12 +6,14 @@ financial tables interactively.
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthIdentity, get_identity
@@ -199,6 +201,49 @@ def _load_period(sess: Session, client_id: UUID, period_id: UUID) -> AccountingP
     return p
 
 
+def _resolve_period_window(
+    sess: Session,
+    *,
+    identity: AuthIdentity,
+    client_id: UUID,
+    period_id: UUID | None,
+    period_start: date | None,
+    period_end: date | None,
+) -> tuple[date, date]:
+    if period_id is not None:
+        period = _load_period(sess, client_id, period_id)
+        _enforce_portal_finalized(identity, period)
+        return period.start_date, period.end_date
+    if period_start is None or period_end is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="either period_id or period_start/period_end must be provided",
+        )
+    if period_end < period_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="period_end must be on or after period_start",
+        )
+    if identity.scope is AccessScope.CLIENT:
+        locked = sess.execute(
+            select(AccountingPeriod).where(
+                AccountingPeriod.client_id == client_id,
+                AccountingPeriod.is_locked.is_(True),
+                AccountingPeriod.start_date <= period_start,
+                AccountingPeriod.end_date >= period_end,
+            )
+        ).scalar_one_or_none()
+        if locked is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "report not yet finalized: the selected date range is not "
+                    "in a finalized period."
+                ),
+            )
+    return period_start, period_end
+
+
 def _enforce_portal_finalized(identity: AuthIdentity, period: AccountingPeriod) -> None:
     """Portal users see live reports only for FINALIZED (locked) periods.
 
@@ -227,17 +272,25 @@ def _enforce_portal_finalized(identity: AuthIdentity, period: AccountingPeriod) 
 )
 def get_pl(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> ProfitAndLossOut:
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    start_date, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     svc = StatementsService(sess, firm_id=identity.firm_id, client_id=client_id)
-    pl = svc.profit_and_loss(period_start=period.start_date, period_end=period.end_date)
+    pl = svc.profit_and_loss(period_start=start_date, period_end=end_date)
     return _pl_out(pl)
 
 
@@ -247,17 +300,25 @@ def get_pl(
 )
 def get_bs(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> BalanceSheetOut:
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    _, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     svc = StatementsService(sess, firm_id=identity.firm_id, client_id=client_id)
-    bs = svc.balance_sheet(as_of=period.end_date)
+    bs = svc.balance_sheet(as_of=end_date)
     return _bs_out(bs)
 
 
@@ -267,7 +328,9 @@ def get_bs(
 )
 def get_cf(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     cash_account_codes: str | None = Query(
         default=None,
         description="comma-separated COA codes treated as cash; defaults to '1000'",
@@ -278,8 +341,14 @@ def get_cf(
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    start_date, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     codes = (
         [c.strip() for c in cash_account_codes.split(",") if c.strip()]
         if cash_account_codes
@@ -287,8 +356,8 @@ def get_cf(
     )
     svc = StatementsService(sess, firm_id=identity.firm_id, client_id=client_id)
     cf = svc.cash_flow(
-        period_start=period.start_date,
-        period_end=period.end_date,
+        period_start=start_date,
+        period_end=end_date,
         cash_account_codes=codes,
     )
     return _cf_out(cf)
@@ -300,7 +369,9 @@ def get_cf(
 )
 def get_tb(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> TrialBalanceOut:
@@ -314,10 +385,16 @@ def get_tb(
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    _, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     svc = StatementsService(sess, firm_id=identity.firm_id, client_id=client_id)
-    tb = svc.trial_balance(as_of=period.end_date)
+    tb = svc.trial_balance(as_of=end_date)
     return _tb_out(tb)
 
 
@@ -351,7 +428,9 @@ class GeneralLedgerOut(BaseModel):
 @router.get("/general-ledger", response_model=GeneralLedgerOut)
 def get_general_ledger(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     account_id: UUID = Query(...),
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
@@ -364,14 +443,20 @@ def get_general_ledger(
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    start_date, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     svc = GeneralLedgerService(sess, firm_id=identity.firm_id, client_id=client_id)
     try:
         gl = svc.general_ledger(
             account_id=account_id,
-            period_start=period.start_date,
-            period_end=period.end_date,
+            period_start=start_date,
+            period_end=end_date,
         )
     except AccountNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -469,7 +554,9 @@ def _aging_endpoint(
     sess: Session,
     identity: AuthIdentity,
     client_id: UUID,
-    period_id: UUID,
+    period_id: UUID | None,
+    period_start: date | None,
+    period_end: date | None,
     account_codes: str | None,
     default_code: str,
     method_name: Literal["ar_aging", "ap_aging"],
@@ -477,8 +564,14 @@ def _aging_endpoint(
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    _, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     codes = (
         [c.strip() for c in account_codes.split(",") if c.strip()]
         if account_codes
@@ -487,7 +580,7 @@ def _aging_endpoint(
     svc = AgingService(sess, firm_id=identity.firm_id, client_id=client_id)
     try:
         rep = getattr(svc, method_name)(
-            as_of=period.end_date, account_codes=codes,
+            as_of=end_date, account_codes=codes,
         )
     except AgingAccountNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -501,7 +594,9 @@ def _aging_endpoint(
 @router.get("/ar-aging", response_model=AgingReportOut)
 def get_ar_aging(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     account_codes: str | None = Query(
         default=None,
         description=(
@@ -518,6 +613,8 @@ def get_ar_aging(
         identity=identity,
         client_id=client_id,
         period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
         account_codes=account_codes,
         default_code="1200",
         method_name="ar_aging",
@@ -527,7 +624,9 @@ def get_ar_aging(
 @router.get("/ap-aging", response_model=AgingReportOut)
 def get_ap_aging(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     account_codes: str | None = Query(
         default=None,
         description=(
@@ -544,6 +643,8 @@ def get_ap_aging(
         identity=identity,
         client_id=client_id,
         period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
         account_codes=account_codes,
         default_code="2000",
         method_name="ap_aging",
@@ -585,7 +686,9 @@ class DrillDownOut(BaseModel):
 @router.get("/account-activity", response_model=DrillDownOut)
 def get_account_activity(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     account_id: UUID = Query(...),
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
@@ -597,14 +700,20 @@ def get_account_activity(
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    start_date, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
     svc = DrillDownService(sess, firm_id=identity.firm_id, client_id=client_id)
     try:
         res = svc.account_activity(
             account_id=account_id,
-            period_start=period.start_date,
-            period_end=period.end_date,
+            period_start=start_date,
+            period_end=end_date,
         )
     except AccountNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -726,7 +835,9 @@ _ROLLUP_TYPES: dict[str, tuple[AccountType, ...]] = {
 @router.get("/account-rollup", response_model=RollupTreeOut)
 def get_account_rollup(
     client_id: UUID = Query(...),
-    period_id: UUID = Query(...),
+    period_id: UUID | None = Query(default=None),
+    period_start: date | None = Query(default=None),
+    period_end: date | None = Query(default=None),
     scope: Literal["balance_sheet", "profit_and_loss", "trial_balance"] = Query(
         default="trial_balance",
     ),
@@ -746,17 +857,23 @@ def get_account_rollup(
     _require_client_access(identity, client_id)
     if sess.get(Client, client_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client not found")
-    period = _load_period(sess, client_id, period_id)
-    _enforce_portal_finalized(identity, period)
+    start_date, end_date = _resolve_period_window(
+        sess,
+        identity=identity,
+        client_id=client_id,
+        period_id=period_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
 
     types = _ROLLUP_TYPES[scope]
-    start_date = period.start_date if scope == "profit_and_loss" else None
+    rollup_start = start_date if scope == "profit_and_loss" else None
     balances = _balances_for(
         sess,
         firm_id=identity.firm_id,
         client_id=client_id,
-        start=start_date,
-        end=period.end_date,
+        start=rollup_start,
+        end=end_date,
         types=types,
     )
     accounts = [
@@ -770,7 +887,7 @@ def get_account_rollup(
     pruned_tree = _prune_zero_rollup_nodes(tree)
     return RollupTreeOut(
         scope=scope,
-        period_start=start_date.isoformat() if start_date is not None else None,
-        period_end=period.end_date.isoformat(),
+        period_start=rollup_start.isoformat() if rollup_start is not None else None,
+        period_end=end_date.isoformat(),
         roots=[_rollup_out(n) for n in pruned_tree],
     )

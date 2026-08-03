@@ -84,6 +84,12 @@ export class ApiClient {
     return body as T;
   }
 
+  private normalizePeriod(
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): { periodId?: string; periodStart?: string; periodEnd?: string } {
+    return typeof period === "string" ? { periodId: period } : period;
+  }
+
   private json<T>(path: string, method: string, body: unknown): Promise<T> {
     return this.request<T>(path, {
       method,
@@ -332,53 +338,92 @@ export class ApiClient {
   }
 
   // ----- Statements (inline preview) ----------------------------- //
-  getProfitAndLoss(clientId: string, periodId: string): Promise<ProfitAndLossOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+  getProfitAndLoss(
+    clientId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): Promise<ProfitAndLossOut> {
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     return this.request<ProfitAndLossOut>(`/statements/profit-and-loss?${q}`);
   }
 
-  getBalanceSheet(clientId: string, periodId: string): Promise<BalanceSheetOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+  getBalanceSheet(
+    clientId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): Promise<BalanceSheetOut> {
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     return this.request<BalanceSheetOut>(`/statements/balance-sheet?${q}`);
   }
 
   getCashFlow(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     cashAccountCodes?: string[],
   ): Promise<CashFlowOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     if (cashAccountCodes && cashAccountCodes.length > 0) {
       q.set("cash_account_codes", cashAccountCodes.join(","));
     }
     return this.request<CashFlowOut>(`/statements/cash-flow?${q}`);
   }
 
-  getTrialBalance(clientId: string, periodId: string): Promise<TrialBalanceOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+  getTrialBalance(
+    clientId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): Promise<TrialBalanceOut> {
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     return this.request<TrialBalanceOut>(`/statements/trial-balance?${q}`);
   }
 
   // ----- PART C: client-facing reports ---------------------------- //
+  private applyPeriodQuery(
+    q: URLSearchParams,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): void {
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) {
+      q.set("period_id", normalized.periodId);
+      return;
+    }
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
+  }
+
   getGeneralLedger(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountId: string,
   ): Promise<GeneralLedgerOut> {
     const q = new URLSearchParams({
       client_id: clientId,
-      period_id: periodId,
       account_id: accountId,
     });
+    this.applyPeriodQuery(q, period);
     return this.request<GeneralLedgerOut>(`/statements/general-ledger?${q}`);
   }
 
   getArAging(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountCodes?: string[],
   ): Promise<AgingReportOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    const q = new URLSearchParams({ client_id: clientId });
+    this.applyPeriodQuery(q, period);
     if (accountCodes && accountCodes.length > 0) {
       q.set("account_codes", accountCodes.join(","));
     }
@@ -387,10 +432,11 @@ export class ApiClient {
 
   getApAging(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountCodes?: string[],
   ): Promise<AgingReportOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    const q = new URLSearchParams({ client_id: clientId });
+    this.applyPeriodQuery(q, period);
     if (accountCodes && accountCodes.length > 0) {
       q.set("account_codes", accountCodes.join(","));
     }
@@ -399,27 +445,24 @@ export class ApiClient {
 
   getAccountActivity(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountId: string,
   ): Promise<DrillDownOut> {
     const q = new URLSearchParams({
       client_id: clientId,
-      period_id: periodId,
       account_id: accountId,
     });
+    this.applyPeriodQuery(q, period);
     return this.request<DrillDownOut>(`/statements/account-activity?${q}`);
   }
 
   getAccountRollup(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     scope: "balance_sheet" | "profit_and_loss" | "trial_balance" = "trial_balance",
   ): Promise<RollupTreeOut> {
-    const q = new URLSearchParams({
-      client_id: clientId,
-      period_id: periodId,
-      scope,
-    });
+    const q = new URLSearchParams({ client_id: clientId, scope });
+    this.applyPeriodQuery(q, period);
     return this.request<RollupTreeOut>(`/statements/account-rollup?${q}`);
   }
 
@@ -464,7 +507,9 @@ export class ApiClient {
 
   // ----- Reports / artifacts ------------------------------------- //
   generateStatementArtifact(body: {
-    period_id: string;
+    period_id?: string;
+    period_start?: string;
+    period_end?: string;
     kind: string;
     format: string;
     cash_account_codes?: string[];

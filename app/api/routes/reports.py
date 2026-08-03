@@ -12,6 +12,7 @@ Endpoints (all require Authorization: Bearer <jwt>):
 """
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -50,7 +51,9 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 # Pydantic
 # --------------------------------------------------------------------------- #
 class StatementGenerateIn(BaseModel):
-    period_id: UUID
+    period_id: UUID | None = None
+    period_start: date | None = None
+    period_end: date | None = None
     kind: ArtifactKind
     format: ArtifactFormat
     cash_account_codes: list[str] | None = None
@@ -58,7 +61,9 @@ class StatementGenerateIn(BaseModel):
 
 
 class NarrativeGenerateIn(BaseModel):
-    period_id: UUID
+    period_id: UUID | None = None
+    period_start: date | None = None
+    period_end: date | None = None
     cash_account_codes: list[str] | None = None
     prior_period_id: UUID | None = None
 
@@ -186,6 +191,8 @@ def generate_statement(
             scope=identity.scope,
             request=GenerateStatementRequest(
                 period_id=body.period_id,
+                period_start=body.period_start,
+                period_end=body.period_end,
                 kind=body.kind,
                 format=body.format,
                 cash_account_codes=body.cash_account_codes,
@@ -213,6 +220,8 @@ def generate_narrative(
             scope=identity.scope,
             request=GenerateNarrativeRequest(
                 period_id=body.period_id,
+                period_start=body.period_start,
+                period_end=body.period_end,
                 cash_account_codes=body.cash_account_codes,
                 prior_period_id=body.prior_period_id,
             ),
