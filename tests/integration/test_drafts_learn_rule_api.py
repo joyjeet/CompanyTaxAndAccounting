@@ -7,12 +7,12 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import create_app
-from app.security.auth import mint_test_token, reset_identity_provider
 from app.db.session import tenant_session
+from app.integrations.account_categorizer import load_rules_from_file
+from app.main import create_app
 from app.models.accounting import DraftClassification, SourceDocument
 from app.models.enums import DraftKind, DraftStatus, OcrStatus
-from app.integrations.account_categorizer import load_rules_from_file
+from app.security.auth import mint_test_token, reset_identity_provider
 from tests.conftest import ctx_firm_for_client
 
 

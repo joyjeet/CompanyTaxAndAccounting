@@ -6,7 +6,6 @@ from app.integrations.bank_statement import (
     parse_statement,
 )
 
-
 # Synthetic TD-style statement covering the headers and line shapes the
 # parser cares about. Includes deposits, electronic deposits, electronic
 # payments (single-line + multi-line continuation), plus a daily-balance

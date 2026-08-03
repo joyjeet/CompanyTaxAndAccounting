@@ -18,6 +18,7 @@ set the system offers.
 """
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -110,8 +111,6 @@ def get_profile_for_client(
 # --------------------------------------------------------------------------- #
 # Validation helpers for contact fields (added Phase 8c)
 # --------------------------------------------------------------------------- #
-import re
-
 _EIN_RE = re.compile(r"^\d{2}-?\d{7}$")  # XX-XXXXXXX (hyphen optional)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 

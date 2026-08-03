@@ -190,7 +190,7 @@ class MockLLMClassifier(LLMClassifier):
             txns = self._categorizer.recategorize(txns, chart_of_accounts)
             recategorized_count = sum(
                 1
-                for old, t in zip(before, txns)
+                for old, t in zip(before, txns, strict=True)
                 if t.get("proposed_account_code") != old
             )
 

@@ -12,7 +12,6 @@ from app.integrations.account_categorizer import AccountCategorizer
 from app.integrations.llm import MockLLMClassifier
 from app.integrations.ocr import ExtractionResult
 
-
 _STATEMENT = """\
 M AND M FINANCIAL CONSULTANTS LLC
 STATEMENT OF ACCOUNT

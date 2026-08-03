@@ -37,8 +37,8 @@ Direction → suggested chart-of-accounts mapping uses the demo seed COA:
 """
 from __future__ import annotations
 
-from datetime import date
 import re
+from datetime import date
 from typing import Any
 
 # Markers that, taken together, indicate this is a bank statement and not a

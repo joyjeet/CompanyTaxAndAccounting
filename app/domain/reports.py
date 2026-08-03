@@ -627,7 +627,7 @@ class RollupNode:
     debit_total: Decimal
     credit_total: Decimal
     signed_balance: Decimal  # for leaves: own balance; for parents: sum of leaf descendants
-    children: list["RollupNode"]
+    children: list[RollupNode]
 
 
 def build_rollup_tree(

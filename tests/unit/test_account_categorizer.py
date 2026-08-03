@@ -13,11 +13,11 @@ import pytest
 from app.integrations.account_categorizer import (
     AzureOpenAICategorizer,
     CategorizationRule,
-    load_rules_from_file,
     DictionaryCategorizer,
     RuleCondition,
     XeroRuleEngineCategorizer,
     _is_weak,
+    load_rules_from_file,
 )
 
 

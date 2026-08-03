@@ -35,6 +35,8 @@ from app.domain.client_profile import (
 )
 from app.domain.coa import (
     UNSET as COA_UNSET,
+)
+from app.domain.coa import (
     CoaConflictError,
     CoaNotFoundError,
     CoaValidationError,
@@ -58,7 +60,6 @@ from app.models.enums import (
     CoaTemplateStatus,
     EntityType,
     Industry,
-    NormalBalance,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])

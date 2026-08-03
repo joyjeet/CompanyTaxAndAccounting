@@ -30,6 +30,11 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
+from app.domain.entity_form_ruleset import (
+    EntityFormRulesetForbiddenError,
+    NeedsRulesetError,
+    ensure_active_ruleset_for_client,
+)
 from app.domain.tax_service import (
     AutoFillResult,
     AutoProposeSummary,
@@ -46,11 +51,6 @@ from app.domain.tax_service import (
     generate_worksheet,
     propose_mapping,
     reject_mapping,
-)
-from app.domain.entity_form_ruleset import (
-    EntityFormRulesetForbiddenError,
-    NeedsRulesetError,
-    ensure_active_ruleset_for_client,
 )
 from app.models.accounting import (
     TaxAccountMapping,

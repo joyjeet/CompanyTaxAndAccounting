@@ -11,7 +11,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
 
 from app.db.session import tenant_session
 from app.domain.exceptions import InvalidAccountError

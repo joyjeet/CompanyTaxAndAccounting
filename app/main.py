@@ -18,8 +18,8 @@ from app.api.routes import (
     reports,
     rules_engine,
     statements_preview,
-    team,
     tax,
+    team,
 )
 from app.core.config import get_settings
 from app.core.logging import configure_logging

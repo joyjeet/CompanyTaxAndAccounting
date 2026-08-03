@@ -16,7 +16,6 @@ from app.db.session import tenant_session
 from app.db.tenant import AccessScope
 from app.domain.artifact_service import (
     ArtifactStateError,
-    download_artifact,
     finalize_artifact,
     generate_tax_worksheet_artifact,
 )
@@ -37,7 +36,6 @@ from app.domain.tax_service import (
     reject_worksheet,
 )
 from app.models.accounting import (
-    AccountingPeriod,
     AuditEvent,
     ChartOfAccounts,
     TaxFormLine,

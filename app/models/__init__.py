@@ -13,10 +13,9 @@ from app.models.accounting import (
     Reconciliation,
     SourceDocument,
 )
-from app.models.coa_template import CoaTemplate, CoaTemplateNode
 from app.models.client_profile import ClientProfile
+from app.models.coa_template import CoaTemplate, CoaTemplateNode
 from app.models.entity_form_ruleset import EntityFormRuleset
-from app.models.form_template import FormTemplate
 from app.models.enums import (
     AccountType,
     AssetStatus,
@@ -38,6 +37,7 @@ from app.models.enums import (
     ReconciliationStatus,
     StaffRole,
 )
+from app.models.form_template import FormTemplate
 from app.models.identity import FirmInvite, FirmMembership, UserAccount
 
 __all__ = [

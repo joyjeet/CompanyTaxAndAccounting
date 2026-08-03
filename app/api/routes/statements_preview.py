@@ -19,6 +19,17 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
+from app.domain.reports import (
+    AccountNotFoundError,
+    AgingAccountNotFoundError,
+    AgingAccountTypeMismatchError,
+    AgingReport,
+    AgingService,
+    DrillDownService,
+    GeneralLedgerService,
+    RollupNode,
+    build_rollup_tree,
+)
 from app.domain.statements import (
     AccountBalance,
     BalanceSheet,
@@ -26,24 +37,14 @@ from app.domain.statements import (
     ProfitAndLoss,
     StatementsService,
     TrialBalance,
-    _accounts as _all_accounts_for,
     _balances_for,
 )
-from app.domain.reports import (
-    AccountNotFoundError,
-    AgingAccountNotFoundError,
-    AgingAccountTypeMismatchError,
-    AgingReport,
-    AgingService,
-    DrillDownResult,
-    DrillDownService,
-    GeneralLedger,
-    GeneralLedgerService,
-    RollupNode,
-    build_rollup_tree,
+from app.domain.statements import (
+    _accounts as _all_accounts_for,
 )
 from app.models.accounting import AccountingPeriod, Client
 from app.models.enums import AccountType
+
 router = APIRouter(prefix="/statements", tags=["statements"])
 
 
@@ -809,7 +810,7 @@ class RollupNodeOut(BaseModel):
     debit_total: Decimal
     credit_total: Decimal
     signed_balance: Decimal
-    children: list["RollupNodeOut"]
+    children: list[RollupNodeOut]
 
 
 class RollupTreeOut(BaseModel):
