@@ -24,7 +24,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Nothing is built or deployed until the full suite passes. This is the
+  # same workflow that gates pull requests, so a direct push to `dev` gets
+  # exactly the same scrutiny as a reviewed change.
+  quality-gate:
+    uses: ./.github/workflows/tests.yml
+
   build-and-push:
+    needs: quality-gate
     runs-on: ubuntu-latest
     outputs:
       api_image: ${{ steps.image.outputs.api_image }}
