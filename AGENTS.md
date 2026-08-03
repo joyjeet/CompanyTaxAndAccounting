@@ -83,11 +83,29 @@ stacks and is separate from the demo stack above.
 
 ## Test baseline
 
+The suite **truncates every tenant table before each test**, so it must never
+run against the dev database (`ctaa`) — that silently wipes your seeded demo
+data and shows up later as a broken dev login. `tests/conftest.py` now refuses
+to start unless the target database name contains `test`.
+
+Run it against the disposable `ctaa_test` database instead:
+
+```bash
+make test-db      # one-time: creates ctaa_test + its roles
+make test-local   # expect: 509 passed
+```
+
 Before any deploy (CI enforces all of these, so running them first is faster
 than waiting for a red gate):
 
 ```bash
-.venv/bin/python -m pytest --tb=no -p no:warnings   # expect: 489 passed
+make test-local                                     # expect: 509 passed
 .venv/bin/ruff check app tests                      # expect: clean
 cd frontend && npx tsc --noEmit && npm run build    # expect: clean
+```
+
+If you ever need to reseed the dev database:
+
+```bash
+set -a && source .env && set +a && .venv/bin/python -m scripts.seed_demo
 ```

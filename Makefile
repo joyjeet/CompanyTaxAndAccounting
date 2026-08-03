@@ -34,11 +34,22 @@ migrate-create: ## Create a new alembic revision: make migrate-create m="message
 migrate-down: ## Rollback one migration
 	docker compose run --rm app alembic downgrade -1
 
-test: ## Run all tests inside the app container against the test DB
-	docker compose run --rm app pytest
+# The compose `db` service is ephemeral and separate from your host dev
+# database, so wiping it is harmless — hence the guard override below.
+test: ## Run all tests inside the app container against the throwaway compose DB
+	docker compose run --rm -e CTAA_TEST_ALLOW_DEV_DB=1 app pytest
+
+test-db: ## One-time: create the disposable 'ctaa_test' database used by `make test-local`
+	POSTGRES_DB=ctaa_test \
+	POSTGRES_OWNER_USER=ctaa_owner_test POSTGRES_OWNER_PASSWORD=owner_test \
+	POSTGRES_APP_USER=app_user_test POSTGRES_APP_PASSWORD=app_user_test \
+	./scripts/bootstrap_local_pg.sh
+
+test-local: ## Run the test suite on the host against ctaa_test (never touches your dev data)
+	set -a && . ./.env.test && set +a && .venv/bin/python -m pytest $(ARGS)
 
 test-isolation: ## Run only the cross-tenant isolation tests
-	docker compose run --rm app pytest tests/isolation -v
+	docker compose run --rm -e CTAA_TEST_ALLOW_DEV_DB=1 app pytest tests/isolation -v
 
 lint: ## Ruff lint
 	ruff check .

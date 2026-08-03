@@ -149,6 +149,7 @@ var names = {
   apiApp:       'ca-${prefix}-api'
   workerApp:    'ca-${prefix}-worker'
   uiApp:        'ca-${prefix}-ui'
+  migrationJob: 'ca-${prefix}-migrate'
   frontDoor:    'afd-${prefix}'
   wafPolicy:    take(replace('waf${namePrefix}${env}${locationShort}', '-', ''), 64)
   uami:         'id-${prefix}-app'
@@ -367,6 +368,26 @@ module uiApp 'modules/containerapp.bicep' = {
   dependsOn: [ acrPull ]
 }
 
+module migrationJob 'modules/migrationjob.bicep' = {
+  scope: rg
+  name: 'migrationJob'
+  params: {
+    location: location
+    name: names.migrationJob
+    tags: commonTags
+    environmentId: containerEnv.outputs.envId
+    uamiId: identity.outputs.uamiId
+    uamiClientId: identity.outputs.uamiClientId
+    image: apiImage
+    keyVaultUri: keyvault.outputs.keyVaultUri
+    postgresFqdn: postgres.outputs.serverFqdn
+    postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
+    acrLoginServer: acrLoginServer
+  }
+  dependsOn: [ acrPull ]
+}
+
 module frontdoor 'modules/frontdoor.bicep' = if (enableFrontDoor) {
   scope: rg
   name: 'frontdoor'
@@ -396,6 +417,7 @@ module alerts 'modules/alerts.bicep' = if (enableAlerts) {
 
 output rgName string = rg.name
 output apiFqdn string = apiApp.outputs.fqdn
+output migrationJobName string = migrationJob.outputs.jobName
 output frontDoorEndpoint string = enableFrontDoor ? frontdoor!.outputs.endpointHostName : ''
 output keyVaultUri string = keyvault.outputs.keyVaultUri
 output postgresFqdn string = postgres.outputs.serverFqdn

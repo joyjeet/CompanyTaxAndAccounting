@@ -91,7 +91,9 @@ statement balance and persists a `reconciliation` row.
 cp .env.example .env
 make up                 # start postgres + redis + app
 make migrate            # apply alembic migrations (runs as owner role)
-make test               # full suite
+make test               # full suite (in Docker)
+make test-db            # one-time: create the disposable ctaa_test database
+make test-local         # full suite on the host against ctaa_test
 make test-isolation     # ONLY the cross-tenant negative tests
 ```
 
