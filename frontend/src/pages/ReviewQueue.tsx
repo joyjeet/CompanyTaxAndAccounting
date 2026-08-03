@@ -18,6 +18,7 @@ import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
 import { roleDisplayName } from "../auth/firmRole";
+import { useClientScope } from "../auth/useClientScope";
 import { useFirmRole } from "../auth/useFirmRole";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
@@ -33,9 +34,10 @@ export default function ReviewQueue() {
   const styles = useStyles();
   const api = useApi();
   const { capabilities, role, isLoading: roleLoading } = useFirmRole();
+  const { clientId, clientName } = useClientScope();
   const drafts = useQuery({
-    queryKey: ["drafts", "pending"],
-    queryFn: () => api.listDrafts(true),
+    queryKey: ["drafts", "pending", clientId ?? "all"],
+    queryFn: () => api.listDrafts(true, clientId ?? undefined),
   });
 
   return (
@@ -86,7 +88,14 @@ export default function ReviewQueue() {
         )}
       </div>
 
-      <Section title={`${drafts.data?.length ?? 0} pending drafts`}>
+      <Section
+        title={`${drafts.data?.length ?? 0} pending drafts`}
+        subtitle={
+          clientId
+            ? `Showing ${clientName ?? "one client"} only.`
+            : undefined
+        }
+      >
         {drafts.isLoading && <LoadingState />}
         {drafts.error && <ErrorState error={drafts.error} />}
         {drafts.data && drafts.data.length === 0 && (
@@ -129,7 +138,7 @@ export default function ReviewQueue() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Link to={`/drafts/${d.id}`}>
+                      <Link to={`/drafts/${d.id}${clientId ? `?client=${clientId}` : ""}`}>
                         <Button appearance="subtle" icon={<OpenRegular />}>
                           Review
                         </Button>

@@ -39,6 +39,7 @@ router = APIRouter(prefix="/drafts", tags=["drafts"])
 # --------------------------------------------------------------------------- #
 class DraftOut(BaseModel):
     id: UUID
+    client_id: UUID
     source_document_id: UUID
     kind: str
     status: str
@@ -74,15 +75,27 @@ def _resolve_promote_client_id(
 @router.get("", response_model=list[DraftOut])
 def list_drafts(
     pending_only: bool = True,
+    client_id: UUID | None = None,
     sess: Session = Depends(db_session),
 ) -> list[DraftOut]:
+    """List drafts visible to this identity.
+
+    RLS already confines the result to the caller's firm (and, for portal
+    identities, to their own client). `client_id` narrows further: it is
+    what the UI passes when firm staff are working inside one client's
+    workspace, so a firm with 200 clients doesn't get all 200 clients'
+    transactions in one list.
+    """
     q = select(DraftClassification)
     if pending_only:
         q = q.where(DraftClassification.status == DraftStatus.PENDING_REVIEW)
+    if client_id is not None:
+        q = q.where(DraftClassification.client_id == client_id)
     rows = sess.execute(q).scalars().all()
     return [
         DraftOut(
             id=d.id,
+            client_id=d.client_id,
             source_document_id=d.source_document_id,
             kind=d.kind.value,
             status=d.status.value,

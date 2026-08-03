@@ -35,8 +35,8 @@ export default function ArtifactsTab({ clientId }: { clientId: string }) {
   const { dispatchToast } = useToastController(toasterId);
 
   const artifacts = useQuery({
-    queryKey: ["artifacts"],
-    queryFn: () => api.listArtifacts(),
+    queryKey: ["artifacts", clientId],
+    queryFn: () => api.listArtifacts({ client_id: clientId }),
   });
 
   const finalize = useMutation({
@@ -67,7 +67,7 @@ export default function ArtifactsTab({ clientId }: { clientId: string }) {
     },
   });
 
-  const rows = (artifacts.data ?? []).filter((a) => a.client_id === clientId);
+  const rows = artifacts.data ?? [];
 
   return (
     <div>

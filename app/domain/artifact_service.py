@@ -791,12 +791,18 @@ def list_artifacts(
     scope: AccessScope,
     period_id: UUID | None = None,
     kind: ArtifactKind | None = None,
+    client_id: UUID | None = None,
 ) -> list[GeneratedArtifact]:
     q = select(GeneratedArtifact)
     if period_id is not None:
         q = q.where(GeneratedArtifact.period_id == period_id)
     if kind is not None:
         q = q.where(GeneratedArtifact.kind == kind)
+    if client_id is not None:
+        # Narrowing only. RLS still decides what is visible at all; this
+        # just keeps a firm-scoped session from returning every client's
+        # artifacts when the user is working inside one client.
+        q = q.where(GeneratedArtifact.client_id == client_id)
     if scope is AccessScope.CLIENT:
         # Portal users see in-progress (DRAFT) AND finalized work so they
         # know their firm is preparing reports. SUPERSEDED is hidden (it's

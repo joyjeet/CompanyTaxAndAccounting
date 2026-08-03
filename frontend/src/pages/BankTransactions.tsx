@@ -22,6 +22,7 @@ import { Link } from "react-router-dom";
 import { useApi } from "../api/useApi";
 import type { DraftOut } from "../auth/types";
 import { roleDisplayName } from "../auth/firmRole";
+import { useClientScope } from "../auth/useClientScope";
 import { useFirmRole } from "../auth/useFirmRole";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
@@ -100,10 +101,11 @@ export default function BankTransactions() {
   const { capabilities, role, isLoading: roleLoading } = useFirmRole();
   const toasterId = useId("bank-tx-toaster");
   const { dispatchToast } = useToastController(toasterId);
+  const { clientId, clientName } = useClientScope();
 
   const drafts = useQuery({
-    queryKey: ["drafts", "all"],
-    queryFn: () => api.listDrafts(false),
+    queryKey: ["drafts", "all", clientId ?? "all"],
+    queryFn: () => api.listDrafts(false, clientId ?? undefined),
   });
 
   const rows = (drafts.data ?? [])
@@ -157,7 +159,9 @@ export default function BankTransactions() {
           Bank transactions
         </Text>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          All statement transactions across drafts, grouped by Pending, Posted, and Excluded.
+          {clientId
+            ? `Statement transactions for ${clientName ?? "this client"}, grouped by Pending, Posted, and Excluded.`
+            : "All statement transactions across drafts, grouped by Pending, Posted, and Excluded."}
         </Caption1>
         {roleLoading ? (
           <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
@@ -170,7 +174,10 @@ export default function BankTransactions() {
         ) : null}
       </div>
 
-      <Section title={`All transactions (${rows.length})`}>
+      <Section
+        title={`All transactions (${rows.length})`}
+        subtitle={clientId ? `Showing ${clientName ?? "one client"} only.` : undefined}
+      >
         {drafts.isLoading && <LoadingState />}
         {drafts.error && <ErrorState error={drafts.error} />}
         {drafts.data && rows.length === 0 && (
@@ -248,7 +255,7 @@ export default function BankTransactions() {
                       </Button>
                     </TableCell>
                     <TableCell>
-                      <Link to={`/drafts/${row.draftId}`}>
+                      <Link to={`/drafts/${row.draftId}${clientId ? `?client=${clientId}` : ""}`}>
                         <Button appearance="subtle">Open draft</Button>
                       </Link>
                     </TableCell>

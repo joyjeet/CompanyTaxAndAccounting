@@ -290,6 +290,60 @@ def test_get_drafts_visible_to_client_portal(
     assert promote.status_code == 403
 
 
+def test_firm_can_narrow_drafts_to_one_client(
+    client: TestClient, world, fake_integrations
+) -> None:
+    """`?client_id=` scopes the firm-wide draft list to a single client.
+
+    A CPA with many clients opens one client's workspace; the review queue
+    and bank-transaction views must not show every other client's work.
+    """
+    from app.workers.jobs import dispatch_payload
+
+    firm_token = mint_test_token(
+        sub="firm-staff", firm_id=world.firm_a, role="firm_staff",
+        client_id=world.a1.client_id,
+    )
+    r = client.post(
+        "/documents/upload",
+        headers={"Authorization": f"Bearer {firm_token}"},
+        files={"file": ("w2.pdf", b"fake w2 bytes", "application/pdf")},
+        data={"kind_hint": "w2"},
+    )
+    assert r.status_code == 201
+
+    queue = fake_integrations.queue
+    while True:
+        progressed = False
+        for qname in ("extract", "classify"):
+            items = queue.drain(qname)
+            if items:
+                progressed = True
+                for _job_id, payload in items:
+                    dispatch_payload(payload)
+        if not progressed:
+            break
+
+    staff = mint_test_token(
+        sub="firm-staff", firm_id=world.firm_a, role="firm_staff"
+    )
+    headers = {"Authorization": f"Bearer {staff}"}
+
+    unfiltered = client.get("/drafts", headers=headers).json()
+    assert len(unfiltered) >= 1
+    assert all(d["client_id"] == str(world.a1.client_id) for d in unfiltered)
+
+    mine = client.get(
+        f"/drafts?client_id={world.a1.client_id}", headers=headers
+    ).json()
+    assert len(mine) == len(unfiltered)
+
+    theirs = client.get(
+        f"/drafts?client_id={world.a2.client_id}", headers=headers
+    ).json()
+    assert theirs == []
+
+
 def test_cors_headers_present(client: TestClient) -> None:
     """Preflight from the configured frontend origin must be allowed."""
     resp = client.options(

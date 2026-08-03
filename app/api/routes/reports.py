@@ -317,11 +317,16 @@ def finalize(
 def list_artifacts_endpoint(
     period_id: UUID | None = None,
     kind: ArtifactKind | None = None,
+    client_id: UUID | None = None,
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
 ) -> list[ArtifactOut]:
     rows = list_artifacts(
-        sess, scope=identity.scope, period_id=period_id, kind=kind,
+        sess,
+        scope=identity.scope,
+        period_id=period_id,
+        kind=kind,
+        client_id=client_id,
     )
     return [_to_out(r) for r in rows]
 

@@ -10,7 +10,10 @@ import {
 } from "@fluentui/react-components";
 import {
   ArrowExitRegular,
+  ArrowLeft24Regular,
   BookContacts24Regular,
+  BuildingBank24Regular,
+  Calendar24Regular,
   ChartMultipleRegular,
   ClipboardTaskListLtr24Regular,
   DataUsage24Regular,
@@ -19,12 +22,13 @@ import {
   Home24Regular,
   PersonCircle24Regular,
   PeopleTeam24Regular,
+  ReceiptMoney24Regular,
   TaskListSquareLtr24Regular,
   Wrench24Regular,
 } from "@fluentui/react-icons";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
 import { useAuth } from "../auth/AuthContext";
@@ -54,6 +58,41 @@ const PORTAL_NAV: NavItem[] = [
   { to: "/portal/reports", label: "My reports", icon: <ChartMultipleRegular /> },
   { to: "/portal/profile", label: "My profile", icon: <PersonCircle24Regular /> },
 ];
+
+/** Matches `/clients/<uuid>` and anything nested under it. */
+const CLIENT_PATH = /^\/clients\/([0-9a-f-]{36})(?:\/|$)/i;
+
+/**
+ * The client id the user is currently working inside, or null at firm level.
+ *
+ * Firm staff can see every client in the firm, which is correct for a
+ * CPA — but once they open a client they are, in effect, standing in that
+ * client's books, and firm-wide lists are noise at best and confusing at
+ * worst. Two ways to be "inside" a client: the URL path (the client
+ * workspace) or an explicit `?client=` filter on a firm-wide page.
+ */
+function activeClientId(pathname: string, search: string): string | null {
+  const m = CLIENT_PATH.exec(pathname);
+  if (m) return m[1];
+  return new URLSearchParams(search).get("client");
+}
+
+function clientNav(id: string): NavItem[] {
+  return [
+    { to: `/clients/${id}/overview`, label: "Overview", icon: <Home24Regular /> },
+    { to: `/clients/${id}/profile`, label: "Profile", icon: <PersonCircle24Regular /> },
+    { to: `/clients/${id}/periods`, label: "Periods", icon: <Calendar24Regular /> },
+    { to: `/clients/${id}/accounts`, label: "Chart of accounts", icon: <BuildingBank24Regular /> },
+    { to: `/clients/${id}/documents`, label: "Documents", icon: <Document24Regular /> },
+    { to: `/review?client=${id}`, label: "Review queue", icon: <ClipboardTaskListLtr24Regular /> },
+    { to: `/bank-transactions?client=${id}`, label: "Bank transactions", icon: <DataUsage24Regular /> },
+    { to: `/clients/${id}/journal`, label: "Journal entries", icon: <ReceiptMoney24Regular /> },
+    { to: `/clients/${id}/statements`, label: "Statements", icon: <ChartMultipleRegular /> },
+    { to: `/clients/${id}/reports`, label: "Reports", icon: <DocumentBulletList24Regular /> },
+    { to: `/clients/${id}/tax`, label: "Tax", icon: <TaskListSquareLtr24Regular /> },
+    { to: `/clients/${id}/artifacts`, label: "Artifacts", icon: <DocumentBulletList24Regular /> },
+  ];
+}
 
 const useStyles = makeStyles({
   root: {
@@ -153,9 +192,23 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const api = useApi();
   const { identity, client, isAuthenticated } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const isFirm = identity?.role === "firm_staff";
-  const nav = isFirm ? FIRM_NAV : PORTAL_NAV;
+  const inClient = isFirm
+    ? activeClientId(location.pathname, location.search)
+    : null;
+  const nav = !isFirm ? PORTAL_NAV : inClient ? clientNav(inClient) : FIRM_NAV;
+
+  // Only to label the sidebar. The client list is already cached by the
+  // Clients page, so this is usually free.
+  const activeClient = useQuery({
+    queryKey: ["client", inClient],
+    queryFn: () => api.getClient(inClient as string),
+    enabled: Boolean(inClient),
+    staleTime: 60_000,
+  });
+
   const team = useQuery({
     queryKey: ["team", "summary", "shell"],
     queryFn: () => api.listTeamMembers(),
@@ -167,10 +220,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
     : null;
 
   // Drives the Review-queue badge. Shares its cache key with the Dashboard,
-  // which already fetches exactly this, so it costs no extra request.
+  // which already fetches exactly this, so it costs no extra request. Inside
+  // a client workspace it counts only that client's work.
   const pending = useQuery({
-    queryKey: ["drafts", "pending"],
-    queryFn: () => api.listDrafts(true),
+    queryKey: ["drafts", "pending", inClient ?? "all"],
+    queryFn: () => api.listDrafts(true, inClient ?? undefined),
     enabled: isFirm && isAuthenticated,
   });
   const pendingCount = pending.data?.length ?? 0;
@@ -229,34 +283,58 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       <aside className={styles.sidebar}>
-        <div className={styles.sidebarHeader}>
-          {isFirm ? "Workspace" : "Portal"}
-        </div>
-        {nav.map((n) => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            end={n.end}
-            className={({ isActive }) =>
-              isActive ? `${styles.navItem} ${styles.navItemActive}` : styles.navItem
-            }
-          >
-            {n.icon}
-            <span>{n.label}</span>
-            {/* How much work is waiting is the one thing worth knowing
-                without clicking through. */}
-            {n.to === "/review" && pendingCount > 0 && (
-              <Badge
-                appearance="filled"
-                color="danger"
-                size="small"
-                style={{ marginLeft: "auto" }}
-              >
-                {pendingCount}
-              </Badge>
-            )}
-          </NavLink>
-        ))}
+        {inClient ? (
+          <>
+            <NavLink to="/clients" className={styles.navItem}>
+              <ArrowLeft24Regular />
+              <span>All clients</span>
+            </NavLink>
+            <div className={styles.sidebarHeader}>
+              {activeClient.data?.name ?? "Client"}
+            </div>
+          </>
+        ) : (
+          <div className={styles.sidebarHeader}>
+            {isFirm ? "Workspace" : "Portal"}
+          </div>
+        )}
+        {nav.map((n) => {
+          const navPath = n.to.split("?")[0];
+          // NavLink matches on pathname only, so the `?client=` links
+          // highlight correctly on their own. The one gap is `/clients/:id`
+          // with no tab, which renders Overview.
+          const forceActive =
+            inClient !== null &&
+            navPath === `/clients/${inClient}/overview` &&
+            location.pathname === `/clients/${inClient}`;
+          return (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              end={n.end}
+              className={({ isActive }) =>
+                isActive || forceActive
+                  ? `${styles.navItem} ${styles.navItemActive}`
+                  : styles.navItem
+              }
+            >
+              {n.icon}
+              <span>{n.label}</span>
+              {/* How much work is waiting is the one thing worth knowing
+                  without clicking through. */}
+              {navPath === "/review" && pendingCount > 0 && (
+                <Badge
+                  appearance="filled"
+                  color="danger"
+                  size="small"
+                  style={{ marginLeft: "auto" }}
+                >
+                  {pendingCount}
+                </Badge>
+              )}
+            </NavLink>
+          );
+        })}
       </aside>
 
       <main className={styles.content}>{children}</main>
