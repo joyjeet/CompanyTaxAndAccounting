@@ -81,6 +81,100 @@ def test_create_client_portal_forbidden(client: TestClient, world) -> None:
     assert r.status_code == 403
 
 
+def test_create_client_seeds_a_default_chart_of_accounts(
+    client: TestClient, world
+) -> None:
+    """A brand-new client must be postable without a second setup step."""
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        "/clients",
+        headers=headers,
+        json={"name": "SeededCo", "industry": "generic"},
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["coa_seeded"] is True
+    assert body["coa_seed_error"] is None
+
+    coa = client.get(
+        f"/clients/{body['id']}/chart-of-accounts", headers=headers
+    )
+    assert coa.status_code == 200, coa.text
+    accounts = coa.json()
+    assert accounts, "new client should not start with an empty chart"
+    # One code series per statement group.
+    by_type: dict[str, set[str]] = {}
+    for a in accounts:
+        by_type.setdefault(a["account_type"], set()).add(a["code"][0])
+    assert by_type["asset"] == {"1"}
+    assert by_type["liability"] == {"2"}
+    assert by_type["equity"] == {"3"}
+    assert by_type["revenue"] == {"4"}
+
+
+def test_create_client_can_opt_out_of_coa_seeding(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        "/clients",
+        headers=headers,
+        json={"name": "BareCo", "seed_coa": False},
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["coa_seeded"] is False
+
+    coa = client.get(
+        f"/clients/{r.json()['id']}/chart-of-accounts", headers=headers
+    )
+    assert coa.json() == []
+
+
+def test_create_client_persists_the_supplied_profile(client: TestClient, world) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        "/clients",
+        headers=headers,
+        json={
+            "name": "ProfileCo",
+            "external_code": "PC-1",
+            "industry": "construction",
+            "entity_type": "s_corp",
+            "tax_year": 2026,
+            "home_state": "TX",
+            "fiscal_year_end_month": 6,
+            "business_legal_name": "ProfileCo LLC",
+            "ein": "12-3456789",
+            "email": "owner@profileco.example",
+            "city": "Austin",
+            "address_state": "TX",
+            "postal_code": "78701",
+        },
+    )
+    assert r.status_code == 201, r.text
+    new_id = r.json()["id"]
+
+    prof = client.get(f"/clients/{new_id}/profile", headers=headers)
+    assert prof.status_code == 200, prof.text
+    body = prof.json()
+    assert body["entity_type"] == "s_corp"
+    assert body["industry"] == "construction"
+    assert body["tax_year"] == 2026
+    assert body["home_state"] == "TX"
+    assert body["fiscal_year_end_month"] == 6
+    assert body["business_legal_name"] == "ProfileCo LLC"
+
+
+def test_create_client_rejects_an_invalid_profile_field(
+    client: TestClient, world
+) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    r = client.post(
+        "/clients",
+        headers=headers,
+        json={"name": "BadCo", "home_state": "T"},
+    )
+    assert r.status_code == 422
+
+
 # --------------------------------------------------------------------------- #
 # Periods
 # --------------------------------------------------------------------------- #

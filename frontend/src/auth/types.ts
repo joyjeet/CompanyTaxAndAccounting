@@ -149,6 +149,36 @@ export interface ClientOut {
   firm_id: string;
   name: string;
   external_code: string | null;
+  /** Only returned by the create call — null elsewhere. */
+  coa_seeded?: boolean | null;
+  coa_seed_error?: string | null;
+}
+
+/**
+ * Onboarding payload. Everything past `external_code` is optional profile
+ * detail; supplying it up front means the client is ready to use without a
+ * second setup step. `industry` also picks the chart-of-accounts overlay.
+ */
+export interface ClientCreateIn {
+  name: string;
+  external_code?: string | null;
+  industry?: Industry;
+  entity_type?: EntityType | null;
+  tax_year?: number | null;
+  home_state?: string | null;
+  fiscal_year_end_month?: number | null;
+  business_legal_name?: string | null;
+  dba_name?: string | null;
+  ein?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address_line1?: string | null;
+  address_line2?: string | null;
+  city?: string | null;
+  address_state?: string | null;
+  postal_code?: string | null;
+  /** Defaults to true — seed the default chart of accounts on create. */
+  seed_coa?: boolean;
 }
 
 export interface PeriodOut {
@@ -163,12 +193,33 @@ export interface PeriodOut {
 export type AccountType = "asset" | "liability" | "equity" | "revenue" | "expense";
 export type NormalBalance = "debit" | "credit";
 
+/**
+ * Reporting bucket within an `AccountType`. This — not the account code —
+ * decides where a line lands on the P&L and balance sheet.
+ */
+export type AccountSubType =
+  | "current_asset"
+  | "fixed_asset"
+  | "intangible_asset"
+  | "other_asset"
+  | "current_liability"
+  | "long_term_liability"
+  | "equity"
+  | "operating_revenue"
+  | "other_income"
+  | "cogs"
+  | "operating_expense"
+  | "other_expense"
+  | "income_tax";
+
 export interface CoaOut {
   id: string;
   client_id: string;
   code: string;
   name: string;
   account_type: AccountType;
+  /** Always populated; inferred from the code when not explicitly set. */
+  sub_type: AccountSubType;
   /** Derived from `account_type` by the backend — never sent on write. */
   normal_balance: NormalBalance;
   is_active: boolean;
@@ -185,6 +236,8 @@ export interface CoaCreateIn {
   code: string;
   name: string;
   account_type: AccountType;
+  /** Omit to derive from the account code. */
+  sub_type?: AccountSubType | null;
   /** Omit or null for a top-level account. Must match the parent's type. */
   parent_account_id?: string | null;
 }
@@ -198,6 +251,7 @@ export interface CoaUpdateIn {
   code?: string;
   name?: string;
   account_type?: AccountType;
+  sub_type?: AccountSubType | null;
   parent_account_id?: string | null;
   is_active?: boolean;
 }

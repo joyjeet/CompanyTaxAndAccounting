@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.tenant import AccessScope
+from app.domain.account_classification import coerce_sub_type
 from app.domain.audit import write_audit
 from app.models.accounting import ChartOfAccounts
 from app.models.coa_template import CoaTemplate, CoaTemplateNode
@@ -290,6 +291,9 @@ def instantiate_for_client(
             name=n.name,
             account_type=n.account_type,
             normal_balance=NORMAL_BALANCE_FOR[n.account_type],
+            sub_type=coerce_sub_type(
+                n.sub_type, code=n.code, account_type=n.account_type
+            ).value,
             parent_account_id=parent_id,
             path=path,
             depth=depth,
@@ -347,6 +351,9 @@ def instantiate_for_client(
                 name=n.name,
                 account_type=n.account_type,
                 normal_balance=NORMAL_BALANCE_FOR[n.account_type],
+                sub_type=coerce_sub_type(
+                    n.sub_type, code=n.code, account_type=n.account_type
+                ).value,
                 parent_account_id=parent_id,
                 path=path,
                 depth=depth,

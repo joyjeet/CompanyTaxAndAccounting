@@ -9,6 +9,7 @@ import type {
   ArtifactOut,
   BalanceSheetOut,
   CashFlowOut,
+  ClientCreateIn,
   ClientOut,
   CoaCreateIn,
   CoaOut,
@@ -107,7 +108,7 @@ export class ApiClient {
     return this.request<ClientOut>(`/clients/${id}`);
   }
 
-  createClient(body: { name: string; external_code?: string | null }): Promise<ClientOut> {
+  createClient(body: ClientCreateIn): Promise<ClientOut> {
     return this.json<ClientOut>("/clients", "POST", body);
   }
 

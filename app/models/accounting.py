@@ -123,6 +123,13 @@ class ChartOfAccounts(Base):
         ),
         nullable=False,
     )
+    # Reporting classification within `account_type` (COGS vs operating
+    # expense vs other expense, current vs fixed asset, ...). Drives how the
+    # account is laid out on the P&L and balance sheet. Stored as a plain
+    # String rather than a PG enum so a new sub-type ships as a data change.
+    # Nullable only for rows created before migration 0012; readers fall
+    # back to code-range inference when it is NULL.
+    sub_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # --- Hierarchy (Phase 8) -------------------------------------------- #
     # Self-FK; root accounts have parent NULL. CHECK constraint in the
     # migration forbids cycles via path prefix and forbids cross-client FKs.

@@ -13,6 +13,7 @@ CPA: VERIFY:
 """
 from __future__ import annotations
 
+from app.domain.account_classification import infer_sub_type
 from app.models.enums import AccountType, CoaTemplateKind, Industry
 
 _RAW: list[tuple[str, str, AccountType, str | None, int]] = [
@@ -66,6 +67,7 @@ TEMPLATE = {
     "nodes": [
         {
             "code": code, "name": name, "account_type": acct_type,
+            "sub_type": infer_sub_type(code, acct_type),
             "parent_code": parent, "sort_order": sort,
         }
         for (code, name, acct_type, parent, sort) in _RAW

@@ -19,7 +19,12 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
+from app.domain.account_classification import coerce_sub_type
 from app.domain.audit import write_audit
+from app.domain.client_profile import (
+    ClientProfileValidationError,
+    upsert_profile,
+)
 from app.domain.coa import (
     UNSET as COA_UNSET,
     CoaConflictError,
@@ -38,9 +43,11 @@ from app.domain.coa_templates import (
 from app.models.accounting import AccountingPeriod, ChartOfAccounts, Client
 from app.models.coa_template import CoaTemplate
 from app.models.enums import (
+    AccountSubType,
     AccountType,
     AuditAction,
     CoaTemplateStatus,
+    EntityType,
     Industry,
     NormalBalance,
 )
@@ -56,11 +63,48 @@ class ClientOut(BaseModel):
     firm_id: UUID
     name: str
     external_code: str | None
+    # Populated only by the create endpoint, so the UI can tell the user
+    # whether onboarding finished or still needs a manual COA step.
+    coa_seeded: bool | None = None
+    coa_seed_error: str | None = None
 
 
 class ClientCreateIn(BaseModel):
+    """Onboarding payload.
+
+    Everything past `external_code` is optional profile detail. Supplying it
+    up front means the client is usable immediately instead of requiring a
+    separate profile edit; `industry` in particular selects which overlay is
+    applied when the chart of accounts is seeded.
+    """
+
     name: str = Field(min_length=1, max_length=255)
     external_code: str | None = Field(default=None, max_length=64)
+
+    # ----- Tax profile
+    industry: Industry = Industry.GENERIC
+    entity_type: EntityType | None = None
+    tax_year: int | None = Field(default=None, ge=1900, le=2200)
+    home_state: str | None = Field(default=None, max_length=2)
+    fiscal_year_end_month: int | None = Field(default=None, ge=1, le=12)
+
+    # ----- Identity / contact
+    business_legal_name: str | None = Field(default=None, max_length=255)
+    dba_name: str | None = Field(default=None, max_length=255)
+    ein: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=320)
+    phone: str | None = Field(default=None, max_length=32)
+
+    # ----- Address
+    address_line1: str | None = Field(default=None, max_length=255)
+    address_line2: str | None = Field(default=None, max_length=255)
+    city: str | None = Field(default=None, max_length=128)
+    address_state: str | None = Field(default=None, max_length=2)
+    postal_code: str | None = Field(default=None, max_length=16)
+
+    # A new client should come with a usable chart of accounts. Set false to
+    # opt out (e.g. when importing an existing chart straight after).
+    seed_coa: bool = True
 
 
 class PeriodOut(BaseModel):
@@ -84,6 +128,9 @@ class CoaOut(BaseModel):
     code: str
     name: str
     account_type: str
+    # Reporting bucket within account_type (cogs / operating_expense /
+    # other_income / current_asset / ...). Drives statement placement.
+    sub_type: str
     normal_balance: str
     is_active: bool
     parent_account_id: UUID | None = None
@@ -100,6 +147,10 @@ class CoaCreateIn(BaseModel):
     code: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=255)
     account_type: AccountType
+    # Omit to derive from the account code (5xxx -> COGS, 9500+ -> income
+    # tax, and so on). Supply it when the code does not follow the
+    # convention, or to override the inferred bucket.
+    sub_type: AccountSubType | None = None
     # Omit to create a top-level account. A sub-account must share its
     # parent's account_type.
     parent_account_id: UUID | None = None
@@ -119,6 +170,7 @@ class CoaUpdateIn(BaseModel):
     code: str | None = Field(default=None, min_length=1, max_length=32)
     name: str | None = Field(default=None, min_length=1, max_length=255)
     account_type: AccountType | None = None
+    sub_type: AccountSubType | None = None
     parent_account_id: UUID | None = None
     is_active: bool | None = None
 
@@ -187,6 +239,9 @@ def _coa_out(
         code=a.code,
         name=a.name,
         account_type=a.account_type.value,
+        sub_type=coerce_sub_type(
+            a.sub_type, code=a.code, account_type=a.account_type
+        ).value,
         normal_balance=a.normal_balance.value,
         is_active=a.is_active,
         parent_account_id=a.parent_account_id,
@@ -224,7 +279,63 @@ def create_client(
     )
     sess.add(c)
     sess.flush()
-    return ClientOut(id=c.id, firm_id=c.firm_id, name=c.name, external_code=c.external_code)
+
+    try:
+        upsert_profile(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=c.id,
+            actor=identity.subject,
+            scope=identity.scope,
+            industry=body.industry,
+            entity_type=body.entity_type,
+            tax_year=body.tax_year,
+            home_state=body.home_state,
+            fiscal_year_end_month=body.fiscal_year_end_month,
+            business_legal_name=body.business_legal_name,
+            dba_name=body.dba_name,
+            ein=body.ein,
+            email=body.email,
+            phone=body.phone,
+            address_line1=body.address_line1,
+            address_line2=body.address_line2,
+            city=body.city,
+            address_state=body.address_state,
+            postal_code=body.postal_code,
+        )
+    except ClientProfileValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        ) from e
+
+    # Seed the default chart of accounts so the client is immediately
+    # postable. A missing/inactive template is a firm-configuration problem,
+    # not a reason to lose the client record — report it instead of failing.
+    coa_seeded = False
+    coa_seed_error: str | None = None
+    if body.seed_coa:
+        try:
+            instantiate_for_client(
+                sess,
+                firm_id=identity.firm_id,
+                client_id=c.id,
+                industry=body.industry,
+                actor=identity.subject,
+                scope=identity.scope,
+            )
+            coa_seeded = True
+        except CoaTemplateError as e:
+            coa_seed_error = str(e)
+
+    sess.flush()
+    return ClientOut(
+        id=c.id,
+        firm_id=c.firm_id,
+        name=c.name,
+        external_code=c.external_code,
+        coa_seeded=coa_seeded,
+        coa_seed_error=coa_seed_error,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -504,6 +615,7 @@ def create_account(
             code=body.code,
             name=body.name,
             account_type=body.account_type,
+            sub_type=body.sub_type,
             parent_account_id=body.parent_account_id,
         )
     return _coa_out(a)
@@ -543,6 +655,7 @@ def update_account(
             code=body.code,
             name=body.name,
             account_type=body.account_type,
+            sub_type=body.sub_type,
             parent_account_id=parent_arg,
             is_active=body.is_active,
         )

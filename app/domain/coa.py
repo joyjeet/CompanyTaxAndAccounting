@@ -31,10 +31,17 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.domain.account_classification import infer_sub_type
 from app.domain.audit import write_audit
 from app.domain.exceptions import DomainError
 from app.models.accounting import ChartOfAccounts, JournalLine
-from app.models.enums import NORMAL_BALANCE_FOR, AccountType, AuditAction
+from app.models.enums import (
+    ACCOUNT_TYPE_FOR_SUBTYPE,
+    NORMAL_BALANCE_FOR,
+    AccountSubType,
+    AccountType,
+    AuditAction,
+)
 
 
 class CoaError(DomainError):
@@ -100,6 +107,36 @@ def _assert_code_free(
 
 def _path_for(parent: ChartOfAccounts | None, code: str) -> str:
     return f"{parent.path}>{code}" if parent is not None and parent.path else code
+
+
+def _resolve_sub_type(
+    value: AccountSubType | str | None,
+    *,
+    code: str,
+    account_type: AccountType,
+) -> AccountSubType:
+    """Validate a caller-supplied sub-type, or infer one from the code.
+
+    Rejects a sub-type that belongs to a different account type — e.g.
+    tagging an asset as "cogs" — because that would put the account on the
+    wrong statement while the ledger still signs it as an asset.
+    """
+    if value is None:
+        return infer_sub_type(code, account_type)
+    try:
+        sub_type = AccountSubType(value)
+    except ValueError as exc:
+        raise CoaValidationError(
+            f"Unknown sub_type {value!r}. Supported: "
+            f"{[s.value for s in AccountSubType]}"
+        ) from exc
+    expected = ACCOUNT_TYPE_FOR_SUBTYPE[sub_type]
+    if expected is not account_type:
+        raise CoaValidationError(
+            f"sub_type '{sub_type.value}' is only valid for "
+            f"account_type '{expected.value}', not '{account_type.value}'."
+        )
+    return sub_type
 
 
 def _resolve_parent(
@@ -245,6 +282,7 @@ def create_account(
     code: str,
     name: str,
     account_type: AccountType,
+    sub_type: AccountSubType | str | None = None,
     parent_account_id: UUID | None = None,
 ) -> ChartOfAccounts:
     code = code.strip()
@@ -256,6 +294,9 @@ def create_account(
         parent_account_id=parent_account_id,
         account_type=account_type,
     )
+    resolved_sub_type = _resolve_sub_type(
+        sub_type, code=code, account_type=account_type
+    )
 
     account = ChartOfAccounts(
         id=uuid4(),
@@ -265,6 +306,7 @@ def create_account(
         name=name,
         account_type=account_type,
         normal_balance=NORMAL_BALANCE_FOR[account_type],
+        sub_type=resolved_sub_type.value,
         parent_account_id=parent.id if parent else None,
         path=_path_for(parent, code),
         depth=(parent.depth + 1) if parent else 0,
@@ -288,6 +330,7 @@ def create_account(
             "code": account.code,
             "name": account.name,
             "account_type": account.account_type.value,
+            "sub_type": account.sub_type,
             "parent_account_id": str(parent.id) if parent else None,
         },
     )
@@ -304,6 +347,7 @@ def update_account(
     code: str | None = None,
     name: str | None = None,
     account_type: AccountType | None = None,
+    sub_type: AccountSubType | str | None = None,
     parent_account_id: UUID | None | _Unset = UNSET,
     is_active: bool | None = None,
 ) -> ChartOfAccounts:
@@ -350,6 +394,20 @@ def update_account(
         }
         account.account_type = account_type
         account.normal_balance = NORMAL_BALANCE_FOR[account_type]
+        # The old sub-type almost certainly belongs to the old type, so
+        # re-derive unless the caller supplied one in the same request.
+        if sub_type is None:
+            account.sub_type = _resolve_sub_type(
+                None, code=account.code, account_type=account_type
+            ).value
+
+    if sub_type is not None:
+        resolved = _resolve_sub_type(
+            sub_type, code=account.code, account_type=account.account_type
+        )
+        if resolved.value != account.sub_type:
+            changes["sub_type"] = {"from": account.sub_type, "to": resolved.value}
+            account.sub_type = resolved.value
 
     if not isinstance(parent_account_id, _Unset):
         new_parent_id = parent_account_id

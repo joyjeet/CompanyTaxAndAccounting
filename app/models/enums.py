@@ -26,6 +26,74 @@ NORMAL_BALANCE_FOR: dict[AccountType, NormalBalance] = {
 }
 
 
+class AccountSubType(enum.StrEnum):
+    """Reporting classification within an ``AccountType``.
+
+    ``AccountType`` carries the five accounting-equation classes, which is
+    what the ledger needs to sign a balance. It is NOT enough to lay out a
+    financial statement: "expense" alone cannot tell you whether an account
+    belongs above the gross-profit line (COGS), between gross profit and
+    operating income (operating expense), or below it (interest, taxes).
+
+    Before this enum existed the statement builder inferred those buckets
+    from numeric code ranges, which silently disagreed with the shipped
+    chart of accounts and pushed every operating expense below the
+    operating-income line. The classification is now explicit data on the
+    account, so renumbering the chart can never move a line on the P&L.
+
+    Values mirror the QuickBooks/Xero account-type vocabulary so imports
+    and exports map one-to-one.
+    """
+
+    # --- Assets (balance sheet ordering) --- #
+    CURRENT_ASSET = "current_asset"
+    FIXED_ASSET = "fixed_asset"
+    INTANGIBLE_ASSET = "intangible_asset"
+    OTHER_ASSET = "other_asset"
+    # --- Liabilities --- #
+    CURRENT_LIABILITY = "current_liability"
+    LONG_TERM_LIABILITY = "long_term_liability"
+    # --- Equity --- #
+    EQUITY = "equity"
+    # --- Revenue (P&L ordering) --- #
+    OPERATING_REVENUE = "operating_revenue"
+    OTHER_INCOME = "other_income"
+    # --- Expense (P&L ordering) --- #
+    COGS = "cogs"
+    OPERATING_EXPENSE = "operating_expense"
+    OTHER_EXPENSE = "other_expense"
+    INCOME_TAX = "income_tax"
+
+
+# Which AccountType each sub-type is legal under. Enforced when a COA row
+# is created or re-typed so a "cogs" account can never be an asset.
+ACCOUNT_TYPE_FOR_SUBTYPE: dict[AccountSubType, AccountType] = {
+    AccountSubType.CURRENT_ASSET: AccountType.ASSET,
+    AccountSubType.FIXED_ASSET: AccountType.ASSET,
+    AccountSubType.INTANGIBLE_ASSET: AccountType.ASSET,
+    AccountSubType.OTHER_ASSET: AccountType.ASSET,
+    AccountSubType.CURRENT_LIABILITY: AccountType.LIABILITY,
+    AccountSubType.LONG_TERM_LIABILITY: AccountType.LIABILITY,
+    AccountSubType.EQUITY: AccountType.EQUITY,
+    AccountSubType.OPERATING_REVENUE: AccountType.REVENUE,
+    AccountSubType.OTHER_INCOME: AccountType.REVENUE,
+    AccountSubType.COGS: AccountType.EXPENSE,
+    AccountSubType.OPERATING_EXPENSE: AccountType.EXPENSE,
+    AccountSubType.OTHER_EXPENSE: AccountType.EXPENSE,
+    AccountSubType.INCOME_TAX: AccountType.EXPENSE,
+}
+
+# Fallback when a caller supplies only an AccountType. Chosen to be the
+# least surprising bucket for a hand-created account: operating, current.
+DEFAULT_SUBTYPE_FOR: dict[AccountType, AccountSubType] = {
+    AccountType.ASSET: AccountSubType.CURRENT_ASSET,
+    AccountType.LIABILITY: AccountSubType.CURRENT_LIABILITY,
+    AccountType.EQUITY: AccountSubType.EQUITY,
+    AccountType.REVENUE: AccountSubType.OPERATING_REVENUE,
+    AccountType.EXPENSE: AccountSubType.OPERATING_EXPENSE,
+}
+
+
 class JournalEntryStatus(enum.StrEnum):
     DRAFT = "draft"
     POSTED = "posted"
