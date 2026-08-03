@@ -155,6 +155,10 @@ class AuditAction(enum.StrEnum):
     USER_INVITE_ACCEPT = "user_invite_accept"
     USER_ROLE_UPDATE = "user_role_update"
     USER_STATUS_UPDATE = "user_status_update"
+    # Client lifecycle.
+    CLIENT_ARCHIVE = "client_archive"
+    CLIENT_RESTORE = "client_restore"
+    CLIENT_DELETE = "client_delete"
 
 
 class StaffRole(enum.StrEnum):
@@ -341,17 +345,44 @@ class CoaNodeOrigin(enum.StrEnum):
 
 
 class Industry(enum.StrEnum):
-    """Industry overlays the firm currently supports.
+    """Industries a client can be classified under.
 
     Treat values as strings on the wire; the enum exists for type-safety in
-    seed code. New industries are added by (a) appending a value here and
-    (b) adding a seed file under `app/data/coa_templates/<industry>.py`.
+    seed code. An industry does NOT have to ship a COA overlay -- most do
+    not, and those clients simply get the general chart. Adding a seed file
+    under `app/data/coa_templates/<industry>.py` is what turns an industry
+    into an overlay; the value here is what drives reporting and the
+    entity/industry-specific tax questionnaires.
     """
 
     GENERIC = "generic"
+    # Overlays currently bundled.
     CONSTRUCTION = "construction"
     RETAIL_ECOMMERCE = "retail_ecommerce"
     PROFESSIONAL_SERVICES = "professional_services"
+    # No overlay yet -- these fall back to the general chart.
+    AGRICULTURE = "agriculture"
+    AUTOMOTIVE = "automotive"
+    CHILDCARE = "childcare"
+    EDUCATION = "education"
+    ENERGY_UTILITIES = "energy_utilities"
+    FINANCIAL_SERVICES = "financial_services"
+    FITNESS_WELLNESS = "fitness_wellness"
+    HEALTHCARE = "healthcare"
+    HOSPITALITY = "hospitality"
+    INSURANCE = "insurance"
+    LEGAL_SERVICES = "legal_services"
+    MANUFACTURING = "manufacturing"
+    MEDIA_ENTERTAINMENT = "media_entertainment"
+    NONPROFIT = "nonprofit"
+    PERSONAL_SERVICES = "personal_services"
+    PROPERTY_MANAGEMENT = "property_management"
+    REAL_ESTATE = "real_estate"
+    RESTAURANT_FOOD_SERVICE = "restaurant_food_service"
+    SOFTWARE_SAAS = "software_saas"
+    TRANSPORTATION_LOGISTICS = "transportation_logistics"
+    VETERINARY = "veterinary"
+    WHOLESALE_DISTRIBUTION = "wholesale_distribution"
 
 
 class EntityType(enum.StrEnum):

@@ -38,6 +38,7 @@ from app.domain.coa import update_account as coa_update_account
 from app.domain.coa_templates import (
     CoaTemplateError,
     CoaTemplateForbiddenError,
+    activate_template,
     instantiate_for_client,
 )
 from app.models.accounting import AccountingPeriod, ChartOfAccounts, Client
@@ -394,6 +395,55 @@ def list_coa_templates(
             )
         )
     return out
+
+
+@router.post(
+    "/coa-templates/{template_id}/activate", response_model=CoaTemplateOut
+)
+def activate_coa_template(
+    template_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> CoaTemplateOut:
+    """Flip a DRAFT COA template to ACTIVE, superseding any prior version.
+
+    Templates ship as DRAFT on purpose so a human signs off on the chart
+    before any client is onboarded onto it. This endpoint is that sign-off:
+    firm-scope only, and it writes an audit row naming the actor.
+    Idempotent -- activating an already-ACTIVE template is a no-op.
+    """
+    _require_firm_scope(identity)
+    try:
+        tpl = activate_template(
+            sess,
+            firm_id=identity.firm_id,
+            actor=identity.subject,
+            scope=identity.scope,
+            template_id=template_id,
+        )
+    except CoaTemplateForbiddenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except CoaTemplateError as exc:
+        msg = str(exc)
+        code_ = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in msg.lower()
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code_, detail=msg) from exc
+
+    return CoaTemplateOut(
+        id=tpl.id,
+        key=tpl.key,
+        display_name=tpl.display_name,
+        kind=tpl.kind.value,
+        industry=tpl.industry,
+        version=tpl.version,
+        status=tpl.status.value,
+        node_count=len(tpl.nodes),
+    )
 
 
 @router.get("/{client_id}", response_model=ClientOut)

@@ -112,6 +112,67 @@ def test_list_templates_invalid_status_filter(
 
 
 # --------------------------------------------------------------------------- #
+# POST /clients/coa-templates/{id}/activate
+# --------------------------------------------------------------------------- #
+def test_activate_template_endpoint_flips_draft_to_active(
+    api_client: TestClient, world
+) -> None:
+    """The CPA sign-off that unblocks onboarding is reachable over HTTP.
+
+    Without this endpoint a fresh deployment can never onboard anyone: every
+    template ships as DRAFT and there'd be no way to approve one.
+    """
+    headers = _auth(api_client, "firm_staff", world.firm_a)
+    with tenant_session(ctx_firm(world.firm_a)) as sess:
+        general = sess.execute(
+            select(CoaTemplate).where(CoaTemplate.key == "general").limit(1)
+        ).scalar_one()
+        general.status = CoaTemplateStatus.DRAFT
+        general.activated_at = None
+        general.activated_by = None
+        sess.flush()
+        template_id = str(general.id)
+
+    r = api_client.post(
+        f"/clients/coa-templates/{template_id}/activate", headers=headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "active"
+
+    # Idempotent — activating again is a no-op, not a 409.
+    r2 = api_client.post(
+        f"/clients/coa-templates/{template_id}/activate", headers=headers
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["status"] == "active"
+
+
+def test_activate_template_portal_forbidden(
+    api_client: TestClient, world
+) -> None:
+    headers = _auth(
+        api_client, "client_portal", world.firm_a, world.a1.client_id
+    )
+    with tenant_session(ctx_firm(world.firm_a)) as sess:
+        general = sess.execute(
+            select(CoaTemplate).where(CoaTemplate.key == "general").limit(1)
+        ).scalar_one()
+        template_id = str(general.id)
+    r = api_client.post(
+        f"/clients/coa-templates/{template_id}/activate", headers=headers
+    )
+    assert r.status_code == 403, r.text
+
+
+def test_activate_unknown_template_404(api_client: TestClient, world) -> None:
+    headers = _auth(api_client, "firm_staff", world.firm_a)
+    r = api_client.post(
+        f"/clients/coa-templates/{uuid4()}/activate", headers=headers
+    )
+    assert r.status_code == 404, r.text
+
+
+# --------------------------------------------------------------------------- #
 # POST /clients/{id}/coa/instantiate
 # --------------------------------------------------------------------------- #
 def test_instantiate_endpoint_creates_rows(

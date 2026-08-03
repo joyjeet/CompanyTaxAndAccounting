@@ -20,6 +20,7 @@ export interface Identity {
 // --------------------------------------------------------------------- //
 export interface DraftOut {
   id: string;
+  client_id: string;
   source_document_id: string;
   kind: string;
   status: string;
@@ -294,7 +295,41 @@ export type Industry =
   | "generic"
   | "construction"
   | "retail_ecommerce"
-  | "professional_services";
+  | "professional_services"
+  | "agriculture"
+  | "automotive"
+  | "childcare"
+  | "education"
+  | "energy_utilities"
+  | "financial_services"
+  | "fitness_wellness"
+  | "healthcare"
+  | "hospitality"
+  | "insurance"
+  | "legal_services"
+  | "manufacturing"
+  | "media_entertainment"
+  | "nonprofit"
+  | "personal_services"
+  | "property_management"
+  | "real_estate"
+  | "restaurant_food_service"
+  | "software_saas"
+  | "transportation_logistics"
+  | "veterinary"
+  | "wholesale_distribution";
+
+/** Mirrors backend ``CoaTemplateOut``. */
+export interface CoaTemplateOut {
+  id: string;
+  key: string;
+  display_name: string;
+  kind: "general" | "industry_overlay" | "custom";
+  industry: string | null;
+  version: string;
+  status: "draft" | "active" | "superseded";
+  node_count: number;
+}
 
 export interface ClientProfileOut {
   client_id: string;

@@ -102,18 +102,19 @@ def test_general_template_has_required_root_classes() -> None:
     assert not missing, f"general template missing account types: {missing}"
 
 
-def test_industry_overlays_present_for_supported_industries() -> None:
-    """Each non-GENERIC Industry value must have a matching overlay row."""
+def test_industry_overlays_map_to_real_industry_values() -> None:
+    """Every bundled overlay must name an Industry the app knows about.
+
+    The reverse is deliberately NOT required: most industries ship no
+    overlay and their clients simply get the general chart.
+    """
     overlay_industries = {
         t["industry"]
         for t in ALL_TEMPLATES
         if t["kind"] is CoaTemplateKind.INDUSTRY_OVERLAY
     }
-    expected = {ind for ind in Industry}
-    assert overlay_industries == expected, (
-        f"overlay/industry mismatch: have {overlay_industries}, "
-        f"expected {expected}"
-    )
+    unknown = overlay_industries - set(Industry)
+    assert not unknown, f"overlays name unknown industries: {unknown}"
 
 
 def test_all_template_versions_are_draft_strings() -> None:

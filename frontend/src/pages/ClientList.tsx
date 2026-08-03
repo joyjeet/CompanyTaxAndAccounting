@@ -12,6 +12,10 @@ import {
   Field,
   Input,
   makeStyles,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
+  MessageBarTitle,
   Option,
   Spinner,
   Table,
@@ -63,19 +67,44 @@ const useStyles = makeStyles({
   },
 });
 
-const INDUSTRY_OPTIONS: Industry[] = [
-  "generic",
-  "construction",
-  "retail_ecommerce",
-  "professional_services",
-];
-
+// Ordered for the picker: "General business" first, then alphabetical by
+// label. Industries with a bundled COA overlay get extra accounts; the rest
+// simply start from the standard chart.
 const INDUSTRY_LABELS: Record<Industry, string> = {
   generic: "General business",
-  construction: "Construction",
-  retail_ecommerce: "Retail / e-commerce",
+  agriculture: "Agriculture / farming",
+  automotive: "Automotive / repair",
+  childcare: "Childcare",
+  construction: "Construction / trades",
+  education: "Education / training",
+  energy_utilities: "Energy / utilities",
+  financial_services: "Financial services",
+  fitness_wellness: "Fitness / wellness",
+  healthcare: "Healthcare / medical",
+  hospitality: "Hospitality / lodging",
+  insurance: "Insurance",
+  legal_services: "Legal services",
+  manufacturing: "Manufacturing",
+  media_entertainment: "Media / entertainment",
+  nonprofit: "Nonprofit",
+  personal_services: "Personal services / salon",
   professional_services: "Professional services",
+  property_management: "Property management",
+  real_estate: "Real estate",
+  restaurant_food_service: "Restaurant / food service",
+  retail_ecommerce: "Retail / e-commerce",
+  software_saas: "Software / SaaS",
+  transportation_logistics: "Transportation / logistics",
+  veterinary: "Veterinary",
+  wholesale_distribution: "Wholesale / distribution",
 };
+
+const INDUSTRY_OPTIONS: Industry[] = [
+  "generic",
+  ...(Object.keys(INDUSTRY_LABELS) as Industry[])
+    .filter((i) => i !== "generic")
+    .sort((a, b) => INDUSTRY_LABELS[a].localeCompare(INDUSTRY_LABELS[b])),
+];
 
 const ENTITY_OPTIONS: EntityType[] = [
   "sole_prop",
@@ -128,6 +157,11 @@ export default function ClientList() {
   const [ein, setEin] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  // Set when a client was created but its chart couldn't be seeded because
+  // no COA template has been activated yet. Drives the recovery banner.
+  const [seedGap, setSeedGap] = useState<
+    { clientId: string; clientName: string; industry: Industry; reason: string } | null
+  >(null);
 
   function resetForm() {
     setName("");
@@ -174,6 +208,12 @@ export default function ClientList() {
       if (c.coa_seed_error) {
         // The client exists; only the chart seeding failed. Surface it so
         // the CPA knows a manual step is still outstanding.
+        setSeedGap({
+          clientId: c.id,
+          clientName: c.name,
+          industry,
+          reason: c.coa_seed_error,
+        });
         dispatchToast(
           <Toast>
             <ToastTitle>Chart of accounts not created</ToastTitle>
@@ -197,9 +237,85 @@ export default function ClientList() {
     },
   });
 
+  // Templates ship as DRAFT so a human signs off before anyone is onboarded
+  // onto them. On a fresh environment nobody has done that yet, which is why
+  // the very first client create fails to seed a chart. This does the sign-off
+  // (audited, attributed to the current user) and then seeds the chart that
+  // client should have had.
+  const activateAndSeed = useMutation({
+    mutationFn: async () => {
+      if (!seedGap) throw new Error("Nothing to activate.");
+      const drafts = await api.listCoaTemplates("draft");
+      const general = drafts.filter((t) => t.kind === "general");
+      if (general.length === 0) {
+        throw new Error(
+          "No draft general chart-of-accounts template is available to activate.",
+        );
+      }
+      // Highest version wins if several drafts are sitting around.
+      general.sort((a, b) => b.version.localeCompare(a.version));
+      await api.activateCoaTemplate(general[0].id);
+
+      const overlay = drafts.find(
+        (t) => t.kind === "industry_overlay" && t.industry === seedGap.industry,
+      );
+      if (overlay) await api.activateCoaTemplate(overlay.id);
+
+      await api.instantiateCoa(seedGap.clientId, seedGap.industry);
+    },
+    onSuccess: () => {
+      const name = seedGap?.clientName ?? "the client";
+      setSeedGap(null);
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Chart of accounts created</ToastTitle>
+          <ToastBody>{`${name} is ready to use.`}</ToastBody>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["clients"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Couldn't activate the chart</ToastTitle>
+          <ToastBody>{err.message}</ToastBody>
+        </Toast>,
+        { intent: "error" },
+      );
+    },
+  });
+
   return (
     <div>
       <Toaster toasterId={toasterId} />
+      {seedGap && (
+        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+          <MessageBarBody>
+            <MessageBarTitle>
+              {seedGap.clientName} has no chart of accounts
+            </MessageBarTitle>
+            {" "}
+            {seedGap.reason} Activating publishes the standard chart for the
+            whole firm — you only need to do this once.
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button
+              appearance="primary"
+              size="small"
+              disabled={activateAndSeed.isPending || !capabilities.canCreateClient}
+              onClick={() => activateAndSeed.mutate()}
+            >
+              {activateAndSeed.isPending
+                ? "Activating…"
+                : "Activate standard chart"}
+            </Button>
+            <Button size="small" onClick={() => setSeedGap(null)}>
+              Dismiss
+            </Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
       <div className={styles.header}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>

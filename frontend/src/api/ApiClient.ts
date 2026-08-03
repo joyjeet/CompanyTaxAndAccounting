@@ -13,7 +13,9 @@ import type {
   ClientOut,
   CoaCreateIn,
   CoaOut,
+  CoaTemplateOut,
   CoaUpdateIn,
+  Industry,
   RulesEngineOut,
   ClientProfileOut,
   ClientProfileUpsertIn,
@@ -110,6 +112,28 @@ export class ApiClient {
 
   createClient(body: ClientCreateIn): Promise<ClientOut> {
     return this.json<ClientOut>("/clients", "POST", body);
+  }
+
+  // ----- COA templates ------------------------------------------- //
+  listCoaTemplates(statusFilter?: string): Promise<CoaTemplateOut[]> {
+    const q = statusFilter
+      ? `?status_filter=${encodeURIComponent(statusFilter)}`
+      : "";
+    return this.request<CoaTemplateOut[]>(`/clients/coa-templates${q}`);
+  }
+
+  activateCoaTemplate(templateId: string): Promise<CoaTemplateOut> {
+    return this.json<CoaTemplateOut>(
+      `/clients/coa-templates/${templateId}/activate`,
+      "POST",
+      {},
+    );
+  }
+
+  instantiateCoa(clientId: string, industry: Industry): Promise<unknown> {
+    return this.json<unknown>(`/clients/${clientId}/coa/instantiate`, "POST", {
+      industry,
+    });
   }
 
   // ----- Client profile (entity type + contact info) ------------ //
@@ -271,9 +295,10 @@ export class ApiClient {
   }
 
   // ----- Drafts -------------------------------------------------- //
-  listDrafts(pendingOnly = true): Promise<DraftOut[]> {
-    const q = pendingOnly ? "?pending_only=true" : "?pending_only=false";
-    return this.request<DraftOut[]>(`/drafts${q}`);
+  listDrafts(pendingOnly = true, clientId?: string): Promise<DraftOut[]> {
+    const q = new URLSearchParams({ pending_only: String(pendingOnly) });
+    if (clientId) q.set("client_id", clientId);
+    return this.request<DraftOut[]>(`/drafts?${q}`);
   }
 
   promoteDraft(
@@ -525,10 +550,15 @@ export class ApiClient {
     return this.json<ArtifactOut>("/reports/statements/generate", "POST", body);
   }
 
-  listArtifacts(opts?: { period_id?: string; kind?: string }): Promise<ArtifactOut[]> {
+  listArtifacts(opts?: {
+    period_id?: string;
+    kind?: string;
+    client_id?: string;
+  }): Promise<ArtifactOut[]> {
     const q = new URLSearchParams();
     if (opts?.period_id) q.set("period_id", opts.period_id);
     if (opts?.kind) q.set("kind", opts.kind);
+    if (opts?.client_id) q.set("client_id", opts.client_id);
     const tail = q.toString() ? `?${q}` : "";
     return this.request<ArtifactOut[]>(`/reports/artifacts${tail}`);
   }

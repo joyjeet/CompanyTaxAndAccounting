@@ -269,15 +269,16 @@ def test_instantiate_isolation_between_firms(world: SeededWorld) -> None:
         assert cnt is None, "firm B can see firm A's client COA — RLS broken"
 
 
-def test_instantiate_rejects_unactivated_template(world: SeededWorld) -> None:
-    """If no general template is ACTIVE for this firm, instantiation fails fast."""
-    # NOTE: in real life, activation is global (not per-firm) — templates
-    # are reference data. So we can't easily simulate "no active" without
-    # mutating shared state. Instead, we test the error path by ensuring
-    # we get a clean response when an unknown industry has no overlay.
-    # GENERIC has 0 nodes so it's allowed even without overlay activation.
+def test_instantiate_without_an_overlay_falls_back_to_the_general_chart(
+    world: SeededWorld,
+) -> None:
+    """An industry with no ACTIVE overlay still gets the general chart.
+
+    Most industries never ship an overlay. Refusing to onboard those clients
+    would be wrong — they just get the standard chart and nothing extra.
+    """
     _activate_general_and_overlay(world.firm_a, Industry.GENERIC)
-    # Make sure CONSTRUCTION overlay is reset to DRAFT for this test only.
+    # Make sure the CONSTRUCTION overlay is DRAFT for this test only.
     with tenant_session(ctx_firm(world.firm_a)) as sess:
         ov = sess.execute(
             select(CoaTemplate).where(
@@ -292,12 +293,13 @@ def test_instantiate_rejects_unactivated_template(world: SeededWorld) -> None:
 
     client_id = _new_client(world.firm_a, "needs_construction")
     with tenant_session(ctx_firm(world.firm_a)) as sess:
-        with pytest.raises(CoaTemplateError, match="No ACTIVE overlay"):
-            instantiate_for_client(
-                sess,
-                firm_id=world.firm_a,
-                client_id=client_id,
-                industry=Industry.CONSTRUCTION,
-                actor="cpa@acme.test",
-                scope=AccessScope.FIRM,
-            )
+        result = instantiate_for_client(
+            sess,
+            firm_id=world.firm_a,
+            client_id=client_id,
+            industry=Industry.CONSTRUCTION,
+            actor="cpa@acme.test",
+            scope=AccessScope.FIRM,
+        )
+        assert result.overlay_template_id is None
+        assert result.created_count > 0

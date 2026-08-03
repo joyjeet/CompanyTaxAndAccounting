@@ -211,13 +211,12 @@ def instantiate_for_client(
             "activate a 'general' template before any client can be onboarded."
         )
 
+    # An absent overlay is not an error. Most industries never ship one, and
+    # the general chart is a complete, usable chart on its own -- refusing to
+    # onboard a veterinary practice because nobody has written a veterinary
+    # overlay would be absurd. The caller learns what happened from
+    # InstantiationResult.overlay_template_id being None.
     overlay = get_active_overlay(sess, industry)
-    # GENERIC overlay is allowed to be absent — no extra rows is fine.
-    if overlay is None and industry is not Industry.GENERIC:
-        raise CoaTemplateError(
-            f"No ACTIVE overlay exists for industry={industry.value}. "
-            "Either activate the overlay or pick 'generic'."
-        )
 
     # Reject if the client already has template-derived rows.
     existing_templated = sess.execute(
