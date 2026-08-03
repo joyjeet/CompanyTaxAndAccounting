@@ -120,7 +120,6 @@ export default function ReportsTab({
   useToastController(toasterId);
 
   const [tab, setTab] = useState<ReportTab>("gl");
-  const [periodId, setPeriodId] = useState<string>("");
   const [periodPreset, setPeriodPreset] = useState<ReportPeriodPreset>("all");
   const [customStart, setCustomStart] = useState(todayIso());
   const [customEnd, setCustomEnd] = useState(todayIso());
@@ -133,13 +132,13 @@ export default function ReportsTab({
   // Drill-down dialog state.
   const [drillAccountId, setDrillAccountId] = useState<string | null>(null);
 
+  // Portal-only: used purely to detect "nothing has been finalized yet" so we
+  // can show a friendly empty state instead of a wall of 403s.
   const periods = useQuery({
     queryKey: ["periods", clientId, portalView],
     queryFn: async () => {
       const ps = await api.listPeriods(clientId);
-      const visible = ps.filter((p) => (portalView ? p.is_locked : true));
-      if (portalView && visible.length > 0 && !periodId) setPeriodId(visible[0].id);
-      return visible;
+      return ps.filter((p) => p.is_locked);
     },
     enabled: portalView,
   });
@@ -158,18 +157,15 @@ export default function ReportsTab({
     customStart,
     customEnd,
   });
-  const rangeQuery = {
+  const periodQuery = {
     periodStart: reportPeriod.startDate,
     periodEnd: reportPeriod.endDate,
   };
-  const periodQuery = portalView
-    ? { periodId }
-    : rangeQuery;
 
   const gl = useQuery({
     queryKey: ["gl", clientId, periodQuery, accountId],
     queryFn: () => api.getGeneralLedger(clientId, periodQuery, accountId),
-    enabled: !!accountId && tab === "gl" && (portalView ? !!periodId : true),
+    enabled: !!accountId && tab === "gl",
   });
 
   const ar = useQuery({
@@ -180,7 +176,7 @@ export default function ReportsTab({
         periodQuery,
         arCodes.split(",").map((c) => c.trim()).filter(Boolean),
       ),
-    enabled: tab === "ar" && (portalView ? !!periodId : true),
+    enabled: tab === "ar",
   });
 
   const ap = useQuery({
@@ -191,20 +187,20 @@ export default function ReportsTab({
         periodQuery,
         apCodes.split(",").map((c) => c.trim()).filter(Boolean),
       ),
-    enabled: tab === "ap" && (portalView ? !!periodId : true),
+    enabled: tab === "ap",
   });
 
   const rollup = useQuery({
     queryKey: ["rollup", clientId, periodQuery, rollupScope],
     queryFn: () => api.getAccountRollup(clientId, periodQuery, rollupScope),
-    enabled: tab === "rollup" && (portalView ? !!periodId : true),
+    enabled: tab === "rollup",
   });
 
   const drill = useQuery({
     queryKey: ["drill", clientId, periodQuery, drillAccountId],
     queryFn: () =>
       api.getAccountActivity(clientId, periodQuery, drillAccountId as string),
-    enabled: !!drillAccountId && (portalView ? !!periodId : true),
+    enabled: !!drillAccountId,
   });
 
   if (portalView && periods.isLoading) return <LoadingState />;
@@ -222,10 +218,7 @@ export default function ReportsTab({
     );
   }
 
-  const selectedPeriod = portalView ? periods.data?.find((p) => p.id === periodId) : null;
-  const periodLabel = selectedPeriod
-    ? `${selectedPeriod.name} (${fmtDate(selectedPeriod.start_date)} – ${fmtDate(selectedPeriod.end_date)})`
-    : reportPeriod.label;
+  const periodLabel = reportPeriod.label;
   const selectedAccount = accounts.data?.find((a) => a.id === accountId);
   const accountLabel = selectedAccount
     ? `${selectedAccount.code} ${selectedAccount.name}`
@@ -240,30 +233,33 @@ export default function ReportsTab({
           <>
             <Dropdown
               value={periodLabel}
-              selectedOptions={periodId ? [periodId] : []}
-              onOptionSelect={(_, d) => d.optionValue && setPeriodId(d.optionValue)}
+              selectedOptions={[periodPreset]}
+              onOptionSelect={(_, d) => {
+                const next = (d.optionValue as ReportPeriodPreset | undefined) ?? "all";
+                setPeriodPreset(next);
+                if (next === "custom") {
+                  setCustomStart(todayIso());
+                  setCustomEnd(todayIso());
+                }
+              }}
             >
-              {periods.data?.map((p) => (
-                <Option
-                  key={p.id}
-                  value={p.id}
-                  text={`${p.name} (${fmtDate(p.start_date)} – ${fmtDate(p.end_date)})`}
-                >
-                  {p.name} ({fmtDate(p.start_date)} – {fmtDate(p.end_date)})
-                  {p.is_locked ? " · locked" : " · open"}
+              {REPORT_PERIOD_OPTIONS.map((option) => (
+                <Option key={option.value} value={option.value} text={option.label}>
+                  {option.label}
                 </Option>
               ))}
             </Dropdown>
-            {selectedPeriod && (
-              <Badge
-                appearance="tint"
-                color={selectedPeriod.is_locked ? "success" : "warning"}
-              >
-                {selectedPeriod.is_locked ? "Finalized (locked)" : "Draft (open)"}
-              </Badge>
+            {periodPreset === "custom" && (
+              <>
+                <Input type="date" value={customStart} onChange={(_, d) => setCustomStart(d.value)} />
+                <Input type="date" value={customEnd} onChange={(_, d) => setCustomEnd(d.value)} />
+              </>
             )}
+            <Badge appearance="tint" color="success">
+              Finalized only
+            </Badge>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              Reports below cover periods your firm has finalized (locked).
+              Your date range is trimmed to the periods your firm has finalized (locked).
             </Caption1>
           </>
         ) : (
@@ -510,7 +506,6 @@ export default function ReportsTab({
 
       <DrillDownDialog
         accountId={drillAccountId}
-        periodId={periodId}
         query={drill}
         styles={styles}
         onClose={() => setDrillAccountId(null)}
@@ -739,18 +734,16 @@ type DrillQueryType = ReturnType<
 
 function DrillDownDialog({
   accountId,
-  periodId,
   query,
   styles,
   onClose,
 }: {
   accountId: string | null;
-  periodId: string;
   query: DrillQueryType;
   styles: ReturnType<typeof useStyles>;
   onClose: () => void;
 }) {
-  const open = !!accountId && !!periodId;
+  const open = !!accountId;
   return (
     <Dialog
       open={open}

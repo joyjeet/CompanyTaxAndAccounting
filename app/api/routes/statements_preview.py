@@ -6,7 +6,7 @@ financial tables interactively.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -225,23 +225,72 @@ def _resolve_period_window(
             detail="period_end must be on or after period_start",
         )
     if identity.scope is AccessScope.CLIENT:
-        locked = sess.execute(
+        return _clamp_to_finalized(
+            sess,
+            client_id=client_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+    return period_start, period_end
+
+
+def _merge_locked_spans(periods: list[AccountingPeriod]) -> list[tuple[date, date]]:
+    """Collapse locked periods into contiguous finalized spans.
+
+    Periods that touch (end 2026-03-31 / start 2026-04-01) or overlap are
+    merged, so a range covering two consecutive closed quarters is treated as
+    one finalized window. A gap means the days in between were never closed.
+    """
+    merged: list[tuple[date, date]] = []
+    for start, end in sorted((p.start_date, p.end_date) for p in periods):
+        if merged and start <= merged[-1][1] + timedelta(days=1):
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _clamp_to_finalized(
+    sess: Session,
+    *,
+    client_id: UUID,
+    period_start: date,
+    period_end: date,
+) -> tuple[date, date]:
+    """Narrow a portal user's requested range to finalized (locked) days.
+
+    Portal users may pick any range — including presets like "All dates" —
+    but they only ever see periods the firm has closed. We clamp rather than
+    reject so the common case (a preset that overshoots the finalized window)
+    still renders. The response echoes the clamped `period_start`/`period_end`
+    so the UI can show what was actually covered.
+
+    Only the *latest contiguous* finalized span is used: clamping across a gap
+    would silently include days from an open period.
+    """
+    locked = (
+        sess.execute(
             select(AccountingPeriod).where(
                 AccountingPeriod.client_id == client_id,
                 AccountingPeriod.is_locked.is_(True),
-                AccountingPeriod.start_date <= period_start,
-                AccountingPeriod.end_date >= period_end,
             )
-        ).scalar_one_or_none()
-        if locked is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "report not yet finalized: the selected date range is not "
-                    "in a finalized period."
-                ),
-            )
-    return period_start, period_end
+        )
+        .scalars()
+        .all()
+    )
+    spans = _merge_locked_spans(list(locked))
+    overlapping = [s for s in spans if s[0] <= period_end and s[1] >= period_start]
+    if not overlapping:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "report not yet finalized: no finalized period overlaps the "
+                "selected date range. Your firm will share this report once "
+                "the period is closed."
+            ),
+        )
+    span_start, span_end = overlapping[-1]
+    return max(period_start, span_start), min(period_end, span_end)
 
 
 def _enforce_portal_finalized(identity: AuthIdentity, period: AccountingPeriod) -> None:
