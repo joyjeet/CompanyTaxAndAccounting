@@ -104,8 +104,19 @@ export default function BankTransactions() {
   const { clientId, clientName } = useClientScope();
 
   const drafts = useQuery({
-    queryKey: ["drafts", "all", clientId ?? "all"],
-    queryFn: () => api.listDrafts(false, clientId ?? undefined),
+    queryKey: ["drafts", "all", clientId ?? "none"],
+    queryFn: () => api.listDrafts(false, clientId as string),
+    enabled: Boolean(clientId),
+  });
+
+  // Bank transactions are a client's ledger records. Listing every client's
+  // statement rows in one flat table has no client column, mixes separate
+  // sets of books together, and lets "Learn rule" / "Open draft" act on a
+  // client's books that is not actually in context. Require a client first.
+  const clients = useQuery({
+    queryKey: ["clients", "picker"],
+    queryFn: () => api.listClients(),
+    enabled: !clientId,
   });
 
   const rows = (drafts.data ?? [])
@@ -161,7 +172,7 @@ export default function BankTransactions() {
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           {clientId
             ? `Statement transactions for ${clientName ?? "this client"}, grouped by Pending, Posted, and Excluded.`
-            : "All statement transactions across drafts, grouped by Pending, Posted, and Excluded."}
+            : "Choose a client to review their statement transactions."}
         </Caption1>
         {roleLoading ? (
           <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
@@ -174,9 +185,33 @@ export default function BankTransactions() {
         ) : null}
       </div>
 
+      {!clientId ? (
+        <Section
+          title="Select a client"
+          subtitle="Statement transactions belong to one client's books, so this view is always scoped to a single client."
+        >
+          {clients.isLoading && <LoadingState />}
+          {clients.error && <ErrorState error={clients.error} />}
+          {clients.data && clients.data.length === 0 && (
+            <EmptyState
+              title="No clients yet"
+              description="Create a client before reviewing bank statement transactions."
+            />
+          )}
+          {clients.data && clients.data.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", rowGap: 4 }}>
+              {clients.data.map((c) => (
+                <Link key={c.id} to={`/bank-transactions?client=${c.id}`}>
+                  <Button appearance="subtle">{c.name}</Button>
+                </Link>
+              ))}
+            </div>
+          )}
+        </Section>
+      ) : (
       <Section
         title={`All transactions (${rows.length})`}
-        subtitle={clientId ? `Showing ${clientName ?? "one client"} only.` : undefined}
+        subtitle={`Showing ${clientName ?? "one client"} only.`}
       >
         {drafts.isLoading && <LoadingState />}
         {drafts.error && <ErrorState error={drafts.error} />}
@@ -255,7 +290,7 @@ export default function BankTransactions() {
                       </Button>
                     </TableCell>
                     <TableCell>
-                      <Link to={`/drafts/${row.draftId}${clientId ? `?client=${clientId}` : ""}`}>
+                      <Link to={`/drafts/${row.draftId}?client=${clientId}`}>
                         <Button appearance="subtle">Open draft</Button>
                       </Link>
                     </TableCell>
@@ -266,6 +301,7 @@ export default function BankTransactions() {
           </>
         )}
       </Section>
+      )}
     </div>
   );
 }
