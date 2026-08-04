@@ -3,6 +3,12 @@ import {
   Body1,
   Button,
   Caption1,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   Dropdown,
   Field,
   Input,
@@ -36,7 +42,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "../api/useApi";
 import { useEffectiveIdentity } from "../auth/TenantContext";
 import { useFirmRole } from "../auth/useFirmRole";
-import type { CoaOut } from "../auth/types";
+import type { AccountType, CoaOut } from "../auth/types";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtMoney, shortId, todayIso } from "../lib/format";
@@ -62,6 +68,22 @@ const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   revenue: "Income",
   expense: "Expenses",
 };
+
+/**
+ * Sentinel option value for the "create a new account" row that sits at the
+ * bottom of every account picker. Reviewers routinely hit a transaction that
+ * has no home in the client's chart yet; making them leave the draft, add the
+ * account, and come back loses their in-progress categorizations.
+ */
+const NEW_ACCOUNT_OPTION = "__ctaa_new_account__";
+
+interface NewAccountDraft {
+  /** Applies the created account back to the picker that opened the dialog. */
+  apply: (account: CoaOut) => void;
+  code: string;
+  name: string;
+  accountType: AccountType;
+}
 
 const useStyles = makeStyles({
   payload: {
@@ -161,6 +183,33 @@ export default function DraftDetail() {
     }
     return `${acct.code} - ${acct.name}`;
   };
+
+  const [newAccount, setNewAccount] = useState<NewAccountDraft | null>(null);
+
+  const createAccount = useMutation({
+    mutationFn: (input: NewAccountDraft) =>
+      api.createAccount(clientId, {
+        code: input.code.trim(),
+        name: input.name.trim(),
+        account_type: input.accountType,
+        parent_account_id: null,
+      }),
+    onSuccess: async (created, input) => {
+      // Refetch before applying so the picker can resolve the new id.
+      await qc.invalidateQueries({ queryKey: ["accounts", clientId] });
+      input.apply(created);
+      setNewAccount(null);
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Created {created.code} — {created.name}</ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
 
   const [entryDate, setEntryDate] = useState(todayIso());
   const [memo, setMemo] = useState("");
@@ -418,8 +467,22 @@ export default function DraftDetail() {
           ))}
         </OptionGroup>
       ))}
+      {canPromoteDrafts && clientId && (
+        <OptionGroup label="Chart of accounts">
+          <Option value={NEW_ACCOUNT_OPTION} text="+ New account...">
+            + New account...
+          </Option>
+        </OptionGroup>
+      )}
     </>
   );
+
+  /**
+   * Wraps a picker's selection handler so choosing the sentinel row opens the
+   * create-account dialog instead of selecting a non-existent account.
+   */
+  const openNewAccount = (apply: (account: CoaOut) => void) =>
+    setNewAccount({ apply, code: "", name: "", accountType: "expense" });
 
   const postedSet = new Set(postedIndexes);
   const excludedSet = new Set(excludedIndexes);
@@ -436,6 +499,87 @@ export default function DraftDetail() {
   return (
     <div style={{ display: "grid", rowGap: 16 }}>
       <Toaster toasterId={toasterId} />
+
+      <Dialog
+        open={newAccount !== null}
+        onOpenChange={(_, data) => {
+          if (!data.open) setNewAccount(null);
+        }}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>New account</DialogTitle>
+            <DialogContent>
+              <div style={{ display: "grid", rowGap: 12, paddingTop: 4 }}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Adds the account to this client's chart of accounts and selects
+                  it here, so you keep your place in the review.
+                </Caption1>
+                <Field label="Code" required>
+                  <Input
+                    value={newAccount?.code ?? ""}
+                    placeholder="6150"
+                    onChange={(_, d) =>
+                      setNewAccount((prev) => (prev ? { ...prev, code: d.value } : prev))
+                    }
+                  />
+                </Field>
+                <Field label="Name" required>
+                  <Input
+                    value={newAccount?.name ?? ""}
+                    placeholder="Software subscriptions"
+                    onChange={(_, d) =>
+                      setNewAccount((prev) => (prev ? { ...prev, name: d.value } : prev))
+                    }
+                  />
+                </Field>
+                <Field
+                  label="Type"
+                  required
+                  hint="Decides where the account lands on the P&L and balance sheet."
+                >
+                  <Dropdown
+                    value={
+                      newAccount ? ACCOUNT_TYPE_LABELS[newAccount.accountType] : ""
+                    }
+                    selectedOptions={newAccount ? [newAccount.accountType] : []}
+                    onOptionSelect={(_, d) =>
+                      setNewAccount((prev) =>
+                        prev
+                          ? { ...prev, accountType: (d.optionValue as AccountType) ?? prev.accountType }
+                          : prev,
+                      )
+                    }
+                  >
+                    {ACCOUNT_TYPE_ORDER.map((type) => (
+                      <Option key={type} value={type} text={ACCOUNT_TYPE_LABELS[type]}>
+                        {ACCOUNT_TYPE_LABELS[type]}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setNewAccount(null)}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={
+                  !newAccount ||
+                  !newAccount.code.trim() ||
+                  !newAccount.name.trim() ||
+                  createAccount.isPending
+                }
+                onClick={() => newAccount && createAccount.mutate(newAccount)}
+              >
+                {createAccount.isPending ? "Creating..." : "Create and select"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
       <div>
         <Text
           size={200}
@@ -705,10 +849,17 @@ export default function DraftDetail() {
                           <TableCell>
                             {status === "pending" ? (
                               <Dropdown
+                                aria-label="Account"
                                 placeholder="Account"
                                 selectedOptions={acct ? [acct.id] : []}
                                 value={accountLabelByCode(current)}
                                 onOptionSelect={(_, dd) => {
+                                  if (dd.optionValue === NEW_ACCOUNT_OPTION) {
+                                    openNewAccount((created) =>
+                                      setTxnOverrides((prev) => ({ ...prev, [i]: created.code })),
+                                    );
+                                    return;
+                                  }
                                   const next = { ...txnOverrides };
                                   const newAcct = (accounts.data ?? []).find(
                                     (a) => a.id === dd.optionValue,
@@ -899,6 +1050,7 @@ export default function DraftDetail() {
                 <TableRow key={i}>
                   <TableCell>
                     <Dropdown
+                      aria-label="Account"
                       placeholder="Account"
                       selectedOptions={ln.account_id ? [ln.account_id] : []}
                       value={
@@ -907,6 +1059,16 @@ export default function DraftDetail() {
                           : ""
                       }
                       onOptionSelect={(_, dd) => {
+                        if (dd.optionValue === NEW_ACCOUNT_OPTION) {
+                          openNewAccount((created) =>
+                            setLines((prev) => {
+                              const next = [...prev];
+                              next[i] = { ...next[i], account_id: created.id };
+                              return next;
+                            }),
+                          );
+                          return;
+                        }
                         const next = [...lines];
                         next[i] = { ...next[i], account_id: dd.optionValue ?? "" };
                         setLines(next);
