@@ -312,6 +312,13 @@ def load_rules_from_file(path: str | Path) -> tuple[CategorizationRule, ...]:
     p = Path(path)
     if not p.exists() and p == DEFAULT_RULES_FILE and LEGACY_RULES_FILE.exists():
         p = LEGACY_RULES_FILE
+    if not p.exists() and DEFAULT_RULES_FILE.exists():
+        # The configured path is the writable runtime copy, which does not
+        # exist until something edits the rules — and never exists in a
+        # container, because the image copies `app/` but not gitignored
+        # `data/`. Fall back to the defaults bundled with the app rather than
+        # dropping to the smaller built-in constant.
+        p = DEFAULT_RULES_FILE
     if not p.exists():
         return _XERO_STYLE_RULES
 

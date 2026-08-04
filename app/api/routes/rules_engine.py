@@ -21,7 +21,11 @@ from app.core.config import get_settings
 from app.data.coa_templates.general import TEMPLATE as GENERAL_COA_TEMPLATE
 from app.db.tenant import AccessScope
 from app.integrations import registry
-from app.integrations.account_categorizer import load_rules_from_file, parse_rules_content
+from app.integrations.account_categorizer import (
+    DEFAULT_RULES_FILE,
+    load_rules_from_file,
+    parse_rules_content,
+)
 from app.models.accounting import ChartOfAccounts, Client
 from app.models.enums import AccountType, NormalBalance
 
@@ -99,7 +103,10 @@ def _serialize_rules(content: str, fmt: str) -> list[RuleOut]:
 
 
 def _default_rules_content(fmt: str) -> str:
-    rules = load_rules_from_file(Path("/__missing__/categorization_rules.yaml"))
+    # Seed a missing writable rules file from the defaults bundled with the
+    # app. `load_rules_from_file` degrades to its built-in constant if that
+    # file is somehow absent, so this cannot fail.
+    rules = load_rules_from_file(DEFAULT_RULES_FILE)
     payload = {
         "rules": [
             {

@@ -140,7 +140,21 @@ class Settings(BaseSettings):
     app_categorizer_backend: Literal[
         "xero_rule_engine", "dictionary", "azure_openai"
     ] = "xero_rule_engine"
-    app_categorizer_rules_file: str = "app/data/categorization_rules.yaml"
+    # Where categorization rules are READ FROM and WRITTEN TO at runtime.
+    #
+    # This must not point at a tracked file. Reviewers accepting a suggested
+    # account teach the rule engine (see app/domain/promotion.py), and the
+    # rules-engine API lets operators edit rules directly — both rewrite this
+    # file in place. Pointing it at `app/data/` dirtied the working tree on
+    # every such action, and `scripts/open_pr.sh` runs `git add -A`, so the
+    # churn landed in unrelated PRs.
+    #
+    # `data/` is gitignored, so runtime edits stay out of version control. When
+    # this file is absent — a fresh clone, or a container, since the Dockerfile
+    # copies `app/` but not the gitignored `data/` — the loader falls back to
+    # the bundled defaults that ship at DEFAULT_RULES_FILE, which remain
+    # tracked. See app/integrations/account_categorizer.py.
+    app_categorizer_rules_file: str = "data/categorization_rules.yaml"
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None
     azure_openai_api_version: str = "2024-08-01-preview"
