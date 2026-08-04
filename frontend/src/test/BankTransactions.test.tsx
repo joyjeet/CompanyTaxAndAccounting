@@ -14,6 +14,8 @@ describe("BankTransactions", () => {
   let apiMock: {
     listDrafts: ReturnType<typeof vi.fn>;
     learnStatementRule: ReturnType<typeof vi.fn>;
+    listClients: ReturnType<typeof vi.fn>;
+    getClient: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -47,6 +49,8 @@ describe("BankTransactions", () => {
         },
       ]),
       learnStatementRule: vi.fn(async () => ({ learned_rule_count: 1 })),
+      listClients: vi.fn(async () => [{ id: "client-1", name: "Demo Client Inc." }]),
+      getClient: vi.fn(async () => ({ id: "client-1", name: "Demo Client Inc." })),
     };
 
     vi.mocked(useApi).mockReturnValue(apiMock as never);
@@ -67,7 +71,7 @@ describe("BankTransactions", () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={["/bank-transactions?client=client-1"]}>
           <BankTransactions />
         </MemoryRouter>
       </QueryClientProvider>,
@@ -83,5 +87,21 @@ describe("BankTransactions", () => {
         target_account_code: "8010",
       });
     });
+  });
+
+  it("requires a client and never lists transactions firm-wide", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/bank-transactions"]}>
+          <BankTransactions />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText(/select a client/i);
+    expect(await screen.findByRole("button", { name: /demo client inc\./i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /learn rule/i })).toBeNull();
+    expect(apiMock.listDrafts).not.toHaveBeenCalled();
   });
 });
