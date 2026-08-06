@@ -215,4 +215,52 @@ describe("DraftDetail role gating", () => {
     });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
+
+  it("creates a sub-account inline when a parent account is chosen", async () => {
+    vi.mocked(useFirmRole).mockReturnValue({
+      role: "staff",
+      isAdmin: false,
+      capabilities: {
+        canManageTeam: false,
+        canCreateClient: true,
+        canEditRulesEngine: false,
+        canPromoteDrafts: true,
+      },
+      isLoading: false,
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <DraftDetail />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText(/Draft · bank_transaction/i);
+
+    fireEvent.click(screen.getAllByRole("combobox", { name: /account/i })[0]);
+    fireEvent.click(await screen.findByRole("option", { name: /new account/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByPlaceholderText("6150"), {
+      target: { value: "6151" },
+    });
+    fireEvent.change(within(dialog).getByPlaceholderText("Software subscriptions"), {
+      target: { value: "Cloud backup" },
+    });
+
+    fireEvent.click(within(dialog).getByRole("combobox", { name: /parent account/i }));
+    fireEvent.click(await screen.findByRole("option", { name: /5000 — Office Expense/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /create and select/i }));
+
+    await waitFor(() => {
+      expect(apiMock.createAccount).toHaveBeenCalledWith("client-1", {
+        code: "6151",
+        name: "Cloud backup",
+        account_type: "expense",
+        parent_account_id: "acct-5000",
+      });
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
 });

@@ -83,6 +83,7 @@ interface NewAccountDraft {
   code: string;
   name: string;
   accountType: AccountType;
+  parentAccountId: string | null;
 }
 
 const useStyles = makeStyles({
@@ -192,7 +193,7 @@ export default function DraftDetail() {
         code: input.code.trim(),
         name: input.name.trim(),
         account_type: input.accountType,
-        parent_account_id: null,
+        parent_account_id: input.parentAccountId,
       }),
     onSuccess: async (created, input) => {
       // Refetch before applying so the picker can resolve the new id.
@@ -210,6 +211,13 @@ export default function DraftDetail() {
       dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
     },
   });
+
+  const candidateParentAccounts = useMemo(() => {
+    if (!newAccount) return [] as CoaOut[];
+    return (accounts.data ?? [])
+      .filter((a) => a.account_type === newAccount.accountType)
+      .sort((left, right) => left.code.localeCompare(right.code));
+  }, [accounts.data, newAccount]);
 
   const [entryDate, setEntryDate] = useState(todayIso());
   const [memo, setMemo] = useState("");
@@ -482,7 +490,13 @@ export default function DraftDetail() {
    * create-account dialog instead of selecting a non-existent account.
    */
   const openNewAccount = (apply: (account: CoaOut) => void) =>
-    setNewAccount({ apply, code: "", name: "", accountType: "expense" });
+    setNewAccount({
+      apply,
+      code: "",
+      name: "",
+      accountType: "expense",
+      parentAccountId: null,
+    });
 
   const postedSet = new Set(postedIndexes);
   const excludedSet = new Set(excludedIndexes);
@@ -539,6 +553,7 @@ export default function DraftDetail() {
                   hint="Decides where the account lands on the P&L and balance sheet."
                 >
                   <Dropdown
+                    aria-label="Account type"
                     value={
                       newAccount ? ACCOUNT_TYPE_LABELS[newAccount.accountType] : ""
                     }
@@ -546,7 +561,11 @@ export default function DraftDetail() {
                     onOptionSelect={(_, d) =>
                       setNewAccount((prev) =>
                         prev
-                          ? { ...prev, accountType: (d.optionValue as AccountType) ?? prev.accountType }
+                          ? {
+                              ...prev,
+                              accountType: (d.optionValue as AccountType) ?? prev.accountType,
+                              parentAccountId: null,
+                            }
                           : prev,
                       )
                     }
@@ -554,6 +573,45 @@ export default function DraftDetail() {
                     {ACCOUNT_TYPE_ORDER.map((type) => (
                       <Option key={type} value={type} text={ACCOUNT_TYPE_LABELS[type]}>
                         {ACCOUNT_TYPE_LABELS[type]}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <Field
+                  label="Parent account (optional)"
+                  hint="Pick a parent to create this as a sub-account. Leave top-level for a standalone account."
+                >
+                  <Dropdown
+                    aria-label="Parent account"
+                    placeholder="Top-level account"
+                    value={
+                      newAccount?.parentAccountId
+                        ? `${accountMap.get(newAccount.parentAccountId)?.code ?? ""} — ${accountMap.get(newAccount.parentAccountId)?.name ?? ""}`
+                        : "Top-level account"
+                    }
+                    selectedOptions={newAccount?.parentAccountId ? [newAccount.parentAccountId] : [""]}
+                    disabled={!newAccount || candidateParentAccounts.length === 0}
+                    onOptionSelect={(_, d) =>
+                      setNewAccount((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              parentAccountId: d.optionValue ? d.optionValue : null,
+                            }
+                          : prev,
+                      )
+                    }
+                  >
+                    <Option value="" text="Top-level account">
+                      Top-level account
+                    </Option>
+                    {candidateParentAccounts.map((parent) => (
+                      <Option
+                        key={parent.id}
+                        value={parent.id}
+                        text={`${parent.code} — ${parent.name}`}
+                      >
+                        {parent.code} — {parent.name}
                       </Option>
                     ))}
                   </Dropdown>
