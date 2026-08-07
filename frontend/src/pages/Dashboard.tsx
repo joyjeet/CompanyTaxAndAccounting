@@ -4,6 +4,7 @@ import {
   Body1,
   Caption1,
   makeStyles,
+  mergeClasses,
   shorthands,
   Text,
   tokens,
@@ -41,6 +42,25 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     columnGap: "16px",
+  },
+  // A KPI that navigates. Kept visually identical at rest so the row does not
+  // become a wall of buttons — the affordance appears on hover/focus.
+  kpiLink: {
+    textDecoration: "none",
+    color: "inherit",
+    cursor: "pointer",
+    ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
+      boxShadow: tokens.shadow8,
+    },
+    ":active": {
+      backgroundColor: tokens.colorNeutralBackground1Pressed,
+    },
+    ":focus-visible": {
+      ...shorthands.outline("2px", "solid", tokens.colorStrokeFocus2),
+      outlineOffset: "2px",
+    },
   },
   kpiIcon: {
     width: "44px",
@@ -85,20 +105,42 @@ function Kpi({
   icon,
   label,
   value,
+  to,
+  describedAs,
 }: {
   icon: ReactNode;
   label: string;
   value: ReactNode;
+  /** Where clicking the tile goes. Omit to render a static tile. */
+  to?: string;
+  /** Overrides the link's accessible name when the destination is not
+   *  self-evident from the label (e.g. "Documents" opening the client list). */
+  describedAs?: string;
 }) {
   const styles = useStyles();
-  return (
-    <div className={styles.kpi}>
+
+  const body = (
+    <>
       <div className={styles.kpiIcon}>{icon}</div>
       <div>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
         <div className={styles.kpiValue}>{value}</div>
       </div>
-    </div>
+    </>
+  );
+
+  if (!to) {
+    return <div className={styles.kpi}>{body}</div>;
+  }
+
+  return (
+    <Link
+      to={to}
+      className={mergeClasses(styles.kpi, styles.kpiLink)}
+      aria-label={describedAs ?? label}
+    >
+      {body}
+    </Link>
   );
 }
 
@@ -155,26 +197,36 @@ export default function Dashboard() {
           icon={<BookContacts24Regular />}
           label="Clients"
           value={anyLoading ? "…" : clientsList.length}
+          to="/clients"
         />
         <Kpi
           icon={<ClipboardTaskListLtr24Regular />}
           label="Pending drafts"
           value={anyLoading ? "…" : draftsList.length}
+          to="/review"
+          describedAs="Pending drafts — open the review queue"
         />
+        {/* Documents are per-client (/clients/:id/documents); there is no
+            firm-wide documents page, so this opens the client list. */}
         <Kpi
           icon={<Document24Regular />}
           label="Documents"
           value={anyLoading ? "…" : docsList.length}
+          to="/clients"
+          describedAs="Documents — choose a client to view their documents"
         />
         <Kpi
           icon={<DocumentBulletList24Regular />}
           label="Artifacts"
           value={anyLoading ? "…" : artifactsList.length}
+          to="/artifacts"
         />
         <Kpi
           icon={<PeopleTeam24Regular />}
           label="Team members"
           value={anyLoading ? "…" : teamMembersCount}
+          to="/team"
+          describedAs="Team members — open team access"
         />
       </div>
 
