@@ -305,7 +305,12 @@ export default function Dashboard() {
           {docsList.length > 0 && (
             <div className={styles.list}>
               {docsList.slice(0, 6).map((d) => (
-                <div className={styles.listItem} key={d.id}>
+                <Link
+                  to={`/clients/${d.client_id}/documents`}
+                  key={d.id}
+                  className={styles.listItem}
+                  style={{ textDecoration: "none", color: "inherit" }}
+                >
                   <div>
                     <Text weight="semibold">{d.filename ?? "(no filename)"}</Text>
                     <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
@@ -324,7 +329,7 @@ export default function Dashboard() {
                   >
                     {d.ocr_status}
                   </Badge>
-                </div>
+                </Link>
               ))}
             </div>
           )}
