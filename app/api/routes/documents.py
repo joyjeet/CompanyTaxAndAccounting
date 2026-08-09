@@ -20,7 +20,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthIdentity, get_identity
@@ -79,6 +79,7 @@ class DocumentOut(BaseModel):
     ocr_completed_at: datetime | None
     ocr_error: str | None
     received_at: datetime
+    uploaded_by: str | None
 
 
 class DocumentKindUpdateIn(BaseModel):
@@ -114,6 +115,7 @@ def list_documents(
             ocr_completed_at=d.ocr_completed_at,
             ocr_error=d.ocr_error,
             received_at=d.created_at,
+            uploaded_by=d.uploaded_by,
         )
         for d in rows
     ]
@@ -175,7 +177,58 @@ def update_document_kind(
         ocr_completed_at=doc.ocr_completed_at,
         ocr_error=doc.ocr_error,
         received_at=doc.created_at,
+        uploaded_by=doc.uploaded_by,
     )
+
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_document(
+    document_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> Response:
+    """Remove a document uploaded by mistake.
+
+    Pending / rejected drafts derived from it are discarded automatically (the
+    `draft_classification` FK cascades on delete). Posted journal entries are
+    financial records, so if any journal entry was posted from this document we
+    refuse — otherwise the trial balance would change with no reversing entry.
+    The reviewer must reject or reverse those entries first, then delete.
+    """
+    doc = sess.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document not found",
+        )
+
+    posted = sess.execute(
+        select(func.count())
+        .select_from(JournalEntry)
+        .where(JournalEntry.source_document_id == document_id)
+    ).scalar_one()
+    if posted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{posted} journal entr{'y' if posted == 1 else 'ies'} posted "
+                "from this document. Reject or reverse them first, then delete."
+            ),
+        )
+
+    write_audit(
+        sess,
+        firm_id=identity.firm_id,
+        client_id=doc.client_id,
+        actor=identity.subject,
+        action=AuditAction.DELETE,
+        entity_type="source_document",
+        entity_id=doc.id,
+        details={"filename": doc.original_filename, "sha256": doc.sha256},
+    )
+    sess.delete(doc)
+    sess.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

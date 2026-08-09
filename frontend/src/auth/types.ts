@@ -71,6 +71,7 @@ export interface DocumentOut {
   ocr_completed_at: string | null;
   ocr_error: string | null;
   received_at: string;
+  uploaded_by: string | null;
 }
 
 export interface UploadOut {

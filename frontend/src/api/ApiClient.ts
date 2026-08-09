@@ -321,6 +321,12 @@ export class ApiClient {
     return this.json<DocumentOut>(`/documents/${id}/kind`, "POST", { kind });
   }
 
+  /** Remove a document uploaded by mistake. Rejected by the API (409) when
+   * journal entries were already posted from it. */
+  deleteDocument(id: string): Promise<void> {
+    return this.request<void>(`/documents/${id}`, { method: "DELETE" });
+  }
+
   // ----- Drafts -------------------------------------------------- //
   listDrafts(pendingOnly = true, clientId?: string): Promise<DraftOut[]> {
     const q = new URLSearchParams({ pending_only: String(pendingOnly) });
