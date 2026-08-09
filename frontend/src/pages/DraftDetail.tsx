@@ -141,7 +141,9 @@ function AccountPicker({
         setQuery(undefined);
       }}
       onOpenChange={(_, data) => {
-        if (!data.open) setQuery(undefined);
+        // Open with an empty box so the reviewer can just start typing to
+        // search; closing without a pick restores the selected account label.
+        setQuery(data.open ? "" : undefined);
       }}
     >
       {filtered.map((group) => (
