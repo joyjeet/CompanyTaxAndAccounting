@@ -58,8 +58,10 @@ import { useMemo, useState } from "react";
 import { ApiError } from "../../api/ApiClient";
 import { useApi } from "../../api/useApi";
 import type { AccountType, CoaOut } from "../../auth/types";
+import { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
+import { fmtMoney } from "../../lib/format";
 
 // --------------------------------------------------------------------- //
 // Reference data
@@ -127,7 +129,7 @@ const useStyles = makeStyles({
   groupTitle: { fontWeight: tokens.fontWeightSemibold },
   row: {
     display: "grid",
-    gridTemplateColumns: "minmax(0,1fr) 110px 90px 40px",
+    gridTemplateColumns: "minmax(0,1fr) 110px 120px 90px 40px",
     alignItems: "center",
     columnGap: "12px",
     ...shorthands.padding("7px", "8px"),
@@ -244,6 +246,23 @@ export default function AccountsTab({ clientId }: { clientId: string }) {
   });
 
   const rows = useMemo(() => accounts.data ?? [], [accounts.data]);
+
+  // All-time balance posted to each account, so every COA row can show its total.
+  const allTime = useReportPeriod("all");
+  const trialBalance = useQuery({
+    queryKey: ["tb", clientId, allTime.range.startDate, allTime.range.endDate],
+    queryFn: () =>
+      api.getTrialBalance(clientId, {
+        periodStart: allTime.range.startDate,
+        periodEnd: allTime.range.endDate,
+      }),
+  });
+
+  const balanceByAccount = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of trialBalance.data?.rows ?? []) m.set(r.account_id, r.signed_balance);
+    return m;
+  }, [trialBalance.data]);
 
   const toast = (msg: string, intent: "success" | "error") =>
     dispatchToast(
@@ -528,6 +547,19 @@ export default function AccountsTab({ clientId }: { clientId: string }) {
                                 a.journal_line_count === 1 ? "" : "s"
                               }`
                             : "unused"}
+                        </Caption1>
+
+                        <Caption1
+                          style={{
+                            color: tokens.colorNeutralForeground3,
+                            textAlign: "right",
+                            fontFamily: tokens.fontFamilyMonospace,
+                          }}
+                          title="Balance posted to this account (all time)"
+                        >
+                          {balanceByAccount.has(a.id)
+                            ? fmtMoney(balanceByAccount.get(a.id))
+                            : "—"}
                         </Caption1>
 
                         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>

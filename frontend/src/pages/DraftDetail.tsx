@@ -3,6 +3,7 @@ import {
   Body1,
   Button,
   Caption1,
+  Combobox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -76,6 +77,97 @@ const ACCOUNT_TYPE_LABELS: Record<string, string> = {
  * account, and come back loses their in-progress categorizations.
  */
 const NEW_ACCOUNT_OPTION = "__ctaa_new_account__";
+
+interface AccountGroup {
+  type: string;
+  label: string;
+  accounts: CoaOut[];
+}
+
+/**
+ * Searchable account picker. A client's chart of accounts routinely runs to a
+ * hundred-plus rows, so a plain dropdown is unusable while triaging the queue.
+ * This filters the grouped options against what the reviewer types (matching
+ * both code and name) while keeping the grouping and the "+ New account" row.
+ */
+function AccountPicker({
+  groups,
+  selectedId,
+  label,
+  allowCreate,
+  onPick,
+  onCreateNew,
+}: {
+  groups: AccountGroup[];
+  selectedId?: string;
+  label: string;
+  allowCreate: boolean;
+  onPick: (accountId: string) => void;
+  onCreateNew: () => void;
+}) {
+  // undefined => idle (show the selected account's label); string => filtering.
+  const [query, setQuery] = useState<string | undefined>(undefined);
+  const filter = (query ?? "").trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      groups
+        .map((g) => ({
+          ...g,
+          accounts:
+            filter === ""
+              ? g.accounts
+              : g.accounts.filter((a) =>
+                  `${a.code} ${a.name}`.toLowerCase().includes(filter),
+                ),
+        }))
+        .filter((g) => g.accounts.length > 0),
+    [groups, filter],
+  );
+
+  return (
+    <Combobox
+      aria-label="Account"
+      placeholder="Search accounts…"
+      style={{ width: "100%", minWidth: 200 }}
+      value={query ?? label}
+      selectedOptions={selectedId ? [selectedId] : []}
+      onChange={(e) => setQuery(e.target.value)}
+      onOptionSelect={(_, data) => {
+        if (data.optionValue === NEW_ACCOUNT_OPTION) {
+          onCreateNew();
+        } else if (data.optionValue) {
+          onPick(data.optionValue);
+        }
+        setQuery(undefined);
+      }}
+      onOpenChange={(_, data) => {
+        if (!data.open) setQuery(undefined);
+      }}
+    >
+      {filtered.map((group) => (
+        <OptionGroup key={group.type} label={group.label}>
+          {group.accounts.map((a) => (
+            <Option key={a.id} value={a.id} text={`${a.code} — ${a.name}`}>
+              {a.code} — {a.name}
+            </Option>
+          ))}
+        </OptionGroup>
+      ))}
+      {filtered.length === 0 && (
+        <Option value="__no_match__" disabled text="No matching accounts">
+          No matching accounts
+        </Option>
+      )}
+      {allowCreate && (
+        <OptionGroup label="Chart of accounts">
+          <Option value={NEW_ACCOUNT_OPTION} text="+ New account...">
+            + New account...
+          </Option>
+        </OptionGroup>
+      )}
+    </Combobox>
+  );
+}
 
 interface NewAccountDraft {
   /** Applies the created account back to the picker that opened the dialog. */
@@ -456,27 +548,6 @@ export default function DraftDetail() {
     balanced: totals.balanced,
   });
 
-  const renderAccountOptions = () => (
-    <>
-      {groupedAccounts.map((group) => (
-        <OptionGroup key={group.type} label={group.label}>
-          {group.accounts.map((a) => (
-            <Option key={a.id} value={a.id} text={`${a.code} — ${a.name}`}>
-              {a.code} — {a.name}
-            </Option>
-          ))}
-        </OptionGroup>
-      ))}
-      {canPromoteDrafts && clientId && (
-        <OptionGroup label="Chart of accounts">
-          <Option value={NEW_ACCOUNT_OPTION} text="+ New account...">
-            + New account...
-          </Option>
-        </OptionGroup>
-      )}
-    </>
-  );
-
   /**
    * Wraps a picker's selection handler so choosing the sentinel row opens the
    * create-account dialog instead of selecting a non-existent account.
@@ -848,28 +919,25 @@ export default function DraftDetail() {
                           </TableCell>
                           <TableCell>
                             {status === "pending" ? (
-                              <Dropdown
-                                aria-label="Account"
-                                placeholder="Account"
-                                selectedOptions={acct ? [acct.id] : []}
-                                value={accountLabelByCode(current)}
-                                onOptionSelect={(_, dd) => {
-                                  if (dd.optionValue === NEW_ACCOUNT_OPTION) {
-                                    openNewAccount((created) =>
-                                      setTxnOverrides((prev) => ({ ...prev, [i]: created.code })),
-                                    );
-                                    return;
-                                  }
-                                  const next = { ...txnOverrides };
+                              <AccountPicker
+                                groups={groupedAccounts}
+                                selectedId={acct?.id}
+                                label={accountLabelByCode(current)}
+                                allowCreate={!!canPromoteDrafts && !!clientId}
+                                onCreateNew={() =>
+                                  openNewAccount((created) =>
+                                    setTxnOverrides((prev) => ({ ...prev, [i]: created.code })),
+                                  )
+                                }
+                                onPick={(accountId) => {
                                   const newAcct = (accounts.data ?? []).find(
-                                    (a) => a.id === dd.optionValue,
+                                    (a) => a.id === accountId,
                                   );
-                                  if (newAcct) next[i] = newAcct.code;
-                                  setTxnOverrides(next);
+                                  if (newAcct) {
+                                    setTxnOverrides((prev) => ({ ...prev, [i]: newAcct.code }));
+                                  }
                                 }}
-                              >
-                                {renderAccountOptions()}
-                              </Dropdown>
+                              />
                             ) : (
                               <Body1>{accountLabelByCode(current) || "—"}</Body1>
                             )}
@@ -1049,33 +1117,30 @@ export default function DraftDetail() {
               {lines.map((ln, i) => (
                 <TableRow key={i}>
                   <TableCell>
-                    <Dropdown
-                      aria-label="Account"
-                      placeholder="Account"
-                      selectedOptions={ln.account_id ? [ln.account_id] : []}
-                      value={
+                    <AccountPicker
+                      groups={groupedAccounts}
+                      selectedId={ln.account_id || undefined}
+                      label={
                         accountMap.get(ln.account_id)
                           ? `${accountMap.get(ln.account_id)!.code} - ${accountMap.get(ln.account_id)!.name}`
                           : ""
                       }
-                      onOptionSelect={(_, dd) => {
-                        if (dd.optionValue === NEW_ACCOUNT_OPTION) {
-                          openNewAccount((created) =>
-                            setLines((prev) => {
-                              const next = [...prev];
-                              next[i] = { ...next[i], account_id: created.id };
-                              return next;
-                            }),
-                          );
-                          return;
-                        }
+                      allowCreate={!!canPromoteDrafts && !!clientId}
+                      onCreateNew={() =>
+                        openNewAccount((created) =>
+                          setLines((prev) => {
+                            const next = [...prev];
+                            next[i] = { ...next[i], account_id: created.id };
+                            return next;
+                          }),
+                        )
+                      }
+                      onPick={(accountId) => {
                         const next = [...lines];
-                        next[i] = { ...next[i], account_id: dd.optionValue ?? "" };
+                        next[i] = { ...next[i], account_id: accountId };
                         setLines(next);
                       }}
-                    >
-                      {renderAccountOptions()}
-                    </Dropdown>
+                    />
                   </TableCell>
                   <TableCell>
                     <Input
