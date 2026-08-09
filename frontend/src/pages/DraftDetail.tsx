@@ -133,9 +133,15 @@ export function AccountPicker({
       selectedOptions={selectedId ? [selectedId] : []}
       onChange={(e) => setQuery(e.target.value)}
       onOptionSelect={(_, data) => {
+        // Fluent fires onOptionSelect with an undefined optionValue when it
+        // auto-clears the selection — which happens on every keystroke that
+        // doesn't prefix-match the current option (e.g. typing a name, since
+        // the option text starts with the code). Ignore it, or the search box
+        // would be wiped and only code (prefix) searches would ever filter.
+        if (!data.optionValue) return;
         if (data.optionValue === NEW_ACCOUNT_OPTION) {
           onCreateNew();
-        } else if (data.optionValue) {
+        } else {
           onPick(data.optionValue);
         }
         setQuery(undefined);

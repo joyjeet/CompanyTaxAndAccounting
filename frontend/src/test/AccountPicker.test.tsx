@@ -75,4 +75,26 @@ describe("AccountPicker search", () => {
     expect(screen.getByText(/4010 — Consulting Income/)).toBeInTheDocument();
     expect(screen.queryByText(/4000 — Revenue/)).toBeNull();
   });
+
+  it("keeps filtering by name even when an account is already selected", () => {
+    // With a selection present, Fluent auto-clears it on any keystroke that
+    // doesn't prefix-match the option text (i.e. typing a name). The picker
+    // must ignore that clear and keep the typed search alive.
+    render(
+      <AccountPicker
+        groups={groups}
+        selectedId="r1"
+        label="4000 — Revenue"
+        allowCreate={false}
+        onPick={vi.fn()}
+        onCreateNew={vi.fn()}
+      />,
+    );
+    const input = open();
+    fireEvent.change(input, { target: { value: "consult" } });
+
+    expect(screen.getByText(/4010 — Consulting Income/)).toBeInTheDocument();
+    expect(screen.queryByText(/1000 — Cash/)).toBeNull();
+    expect(screen.queryByText(/4000 — Revenue/)).toBeNull();
+  });
 });
