@@ -14,6 +14,7 @@ import {
 } from "@fluentui/react-components";
 import { OpenRegular } from "@fluentui/react-icons";
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
@@ -39,6 +40,19 @@ export default function ReviewQueue() {
     queryKey: ["drafts", "pending", clientId ?? "all"],
     queryFn: () => api.listDrafts(true, clientId ?? undefined),
   });
+
+  // Firm-wide, the queue lists every client's drafts, so each row must say
+  // which client it belongs to; a scoped view already knows its one client.
+  const clients = useQuery({
+    queryKey: ["clients"],
+    queryFn: () => api.listClients(),
+    enabled: !clientId,
+  });
+  const clientNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of clients.data ?? []) m.set(c.id, c.name);
+    return m;
+  }, [clients.data]);
 
   return (
     <div>
@@ -93,7 +107,7 @@ export default function ReviewQueue() {
         subtitle={
           clientId
             ? `Showing ${clientName ?? "one client"} only.`
-            : undefined
+            : "Across every client in your firm — see the Client column."
         }
       >
         {drafts.isLoading && <LoadingState />}
@@ -105,6 +119,7 @@ export default function ReviewQueue() {
           <Table size="small">
             <TableHeader>
               <TableRow>
+                {!clientId && <TableHeaderCell>Client</TableHeaderCell>}
                 <TableHeaderCell>Kind</TableHeaderCell>
                 <TableHeaderCell>Confidence</TableHeaderCell>
                 <TableHeaderCell>Model</TableHeaderCell>
@@ -120,6 +135,16 @@ export default function ReviewQueue() {
                   d.high_confidence ? "success" : conf < 0.6 ? "danger" : "warning";
                 return (
                   <TableRow key={d.id}>
+                    {!clientId && (
+                      <TableCell>
+                        <Link
+                          to={`/clients/${d.client_id}/overview`}
+                          style={{ color: tokens.colorBrandForeground1 }}
+                        >
+                          {clientNameById.get(d.client_id) ?? shortId(d.client_id)}
+                        </Link>
+                      </TableCell>
+                    )}
                     <TableCell>{d.kind}</TableCell>
                     <TableCell>
                       <Badge appearance="filled" color={color}>
@@ -138,7 +163,7 @@ export default function ReviewQueue() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Link to={`/drafts/${d.id}${clientId ? `?client=${clientId}` : ""}`}>
+                      <Link to={`/drafts/${d.id}?client=${clientId ?? d.client_id}`}>
                         <Button appearance="subtle" icon={<OpenRegular />}>
                           Review
                         </Button>
