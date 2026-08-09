@@ -39,7 +39,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useApi } from "../../api/useApi";
-import type { DocumentKind } from "../../auth/types";
+import type { DocumentKind, DocumentOut } from "../../auth/types";
 import InfoHint from "../../components/InfoHint";
 import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
@@ -193,6 +193,32 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
     },
     onError: (err: Error) => {
       dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  // Remove a single document uploaded by mistake. The API refuses (409) when
+  // journal entries were already posted from it.
+  const [docToDelete, setDocToDelete] = useState<DocumentOut | null>(null);
+  const removeDoc = useMutation({
+    mutationFn: (id: string) => api.deleteDocument(id),
+    onSuccess: () => {
+      dispatchToast(
+        <Toast><ToastTitle>Document removed</ToastTitle></Toast>,
+        { intent: "success" },
+      );
+      setDocToDelete(null);
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["drafts"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Could not remove document</ToastTitle>
+          <ToastBody>{err.message}</ToastBody>
+        </Toast>,
+        { intent: "error" },
+      );
+      setDocToDelete(null);
     },
   });
 
@@ -532,7 +558,7 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
                 <TableHeaderCell>Filename</TableHeaderCell>
                 <TableHeaderCell>Kind</TableHeaderCell>
                 <TableHeaderCell>OCR</TableHeaderCell>
-                <TableHeaderCell>SHA-256</TableHeaderCell>
+                <TableHeaderCell>Uploaded by</TableHeaderCell>
                 <TableHeaderCell>Received</TableHeaderCell>
                 <TableHeaderCell>Next step</TableHeaderCell>
               </TableRow>
@@ -584,22 +610,32 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
                       {d.ocr_status}
                     </Badge>
                   </TableCell>
-                  <TableCell><code>{shortId(d.sha256)}</code></TableCell>
+                  <TableCell>{d.uploaded_by ?? "—"}</TableCell>
                   <TableCell>{fmtDateTime(d.received_at)}</TableCell>
                   <TableCell onClick={(e) => e.stopPropagation()}>
-                    {draftId ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {draftId ? (
+                        <Button
+                          size="small"
+                          appearance="secondary"
+                          onClick={() => navigate(`/drafts/${draftId}`)}
+                        >
+                          Review
+                        </Button>
+                      ) : d.ocr_status === "complete" ? (
+                        <Caption1>No review needed</Caption1>
+                      ) : (
+                        <Caption1>Processing…</Caption1>
+                      )}
                       <Button
                         size="small"
-                        appearance="secondary"
-                        onClick={() => navigate(`/drafts/${draftId}`)}
-                      >
-                        Review
-                      </Button>
-                    ) : d.ocr_status === "complete" ? (
-                      <Caption1>No review needed</Caption1>
-                    ) : (
-                      <Caption1>Processing…</Caption1>
-                    )}
+                        appearance="subtle"
+                        icon={<DeleteRegular />}
+                        aria-label={`Remove ${d.filename ?? "document"}`}
+                        title="Remove document"
+                        onClick={() => setDocToDelete(d)}
+                      />
+                    </div>
                   </TableCell>
                 </TableRow>
               );})}
@@ -611,6 +647,36 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         documentId={openDocId}
         onClose={() => setOpenDocId(null)}
       />
+      <Dialog
+        open={!!docToDelete}
+        onOpenChange={(_, data) => !data.open && setDocToDelete(null)}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Remove document?</DialogTitle>
+            <DialogContent>
+              <Body1 block>
+                Remove <b>{docToDelete?.filename ?? "this document"}</b>? Any
+                pending drafts derived from it are discarded. If journal
+                entries were already posted from it, removal is blocked until
+                you reject or reverse those entries.
+              </Body1>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDocToDelete(null)}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={removeDoc.isPending}
+                onClick={() => docToDelete && removeDoc.mutate(docToDelete.id)}
+              >
+                {removeDoc.isPending ? <Spinner size="tiny" /> : "Remove"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }
