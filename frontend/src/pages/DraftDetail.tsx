@@ -90,7 +90,7 @@ interface AccountGroup {
  * This filters the grouped options against what the reviewer types (matching
  * both code and name) while keeping the grouping and the "+ New account" row.
  */
-function AccountPicker({
+export function AccountPicker({
   groups,
   selectedId,
   label,
