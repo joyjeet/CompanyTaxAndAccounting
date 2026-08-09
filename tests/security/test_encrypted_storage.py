@@ -40,7 +40,10 @@ def test_at_rest_does_not_contain_plaintext(storage, tmp_path) -> None:  # type:
         firm_id=firm, client_id=client, storage_uri=stored.storage_uri
     )
     assert b"secret-marker-xyz" not in raw_on_disk
-    assert b"SSN" not in raw_on_disk
+    # Assert the SSN *value* is absent, not the label "SSN": the base64
+    # ciphertext can coincidentally contain a 3-letter run like "SSN", but the
+    # base64 alphabet has no hyphens, so the hyphenated number never collides.
+    assert b"123-45-6789" not in raw_on_disk
 
 
 def test_cross_firm_read_refused(storage) -> None:  # type: ignore[no-untyped-def]
