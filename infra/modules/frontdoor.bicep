@@ -19,12 +19,18 @@ param originPrivateLinkResourceId string = ''
 param originPrivateLinkRequestMessage string = 'Azure Front Door access for CTAA'
 @allowed([ 'Detection', 'Prevention' ])
 param wafMode string = 'Prevention'
+@allowed([ 'Premium_AzureFrontDoor', 'Standard_AzureFrontDoor' ])
+@description('Front Door SKU. Standard is ~10x cheaper but supports neither Private Link origins nor Microsoft-managed WAF rule sets; custom (rate-limit) rules still work.')
+param sku string = 'Premium_AzureFrontDoor'
+
+// Private Link origins and Microsoft-managed WAF rule sets are Premium-only.
+var managedWafEnabled = sku == 'Premium_AzureFrontDoor'
 
 resource afd 'Microsoft.Cdn/profiles@2024-09-01' = {
   name: afdName
   location: 'global'
   tags: tags
-  sku: { name: 'Premium_AzureFrontDoor' }
+  sku: { name: sku }
 }
 
 resource endpoint 'Microsoft.Cdn/profiles/afdEndpoints@2024-09-01' = {
@@ -113,7 +119,7 @@ resource waf 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-
   name: wafPolicyName
   location: 'global'
   tags: tags
-  sku: { name: 'Premium_AzureFrontDoor' }
+  sku: { name: sku }
   properties: {
     policySettings: {
       enabledState: 'Enabled'
@@ -121,10 +127,10 @@ resource waf 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-
       requestBodyCheck: 'Enabled'
     }
     managedRules: {
-      managedRuleSets: [
+      managedRuleSets: managedWafEnabled ? [
         { ruleSetType: 'Microsoft_DefaultRuleSet', ruleSetVersion: '2.1', ruleSetAction: 'Block' }
         { ruleSetType: 'Microsoft_BotManagerRuleSet', ruleSetVersion: '1.0', ruleSetAction: 'Block' }
-      ]
+      ] : []
     }
     customRules: {
       rules: [

@@ -25,6 +25,14 @@ param actionGroupEmail = 'ops-dev@example.com'
 param serviceBusSku = 'Standard'
 param wafMode = 'Detection'
 
+// Cost: run Front Door on the Standard SKU (~$35/mo) instead of Premium
+// (~$330/mo). Standard keeps the same stable hostname and path-based routing,
+// so the UI is unaffected; it drops Microsoft-managed WAF rule sets (custom
+// rate-limit rules still apply) and Private Link origins. The ACA env is
+// therefore made public so Standard Front Door can reach it.
+param frontDoorSku = 'Standard_AzureFrontDoor'
+param containerEnvInternalOnly = false
+
 param postgresHa = 'Disabled'
 param postgresSkuName = 'Standard_B2s'
 param postgresSkuTier = 'Burstable'

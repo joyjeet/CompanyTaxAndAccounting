@@ -95,6 +95,10 @@ param uiMaxReplicas int = 3
 @description('Provision Front Door + WAF in front of the ACA app. Set false to save cost on dev/smoke deploys.')
 param enableFrontDoor bool = true
 
+@allowed([ 'Premium_AzureFrontDoor', 'Standard_AzureFrontDoor' ])
+@description('Front Door SKU. Premium (default) supports Private Link origins + Microsoft-managed WAF. Standard is ~10x cheaper (~$35 vs ~$330/mo) but requires public origins and custom-only WAF rules — use it on dev to cut cost.')
+param frontDoorSku string = 'Premium_AzureFrontDoor'
+
 @description('Provision alert rules + action group. Set false on dev/smoke deploys to suppress noise.')
 param enableAlerts bool = true
 
@@ -397,7 +401,11 @@ module frontdoor 'modules/frontdoor.bicep' = if (enableFrontDoor) {
     tags: commonTags
     webOriginHostName: uiApp.outputs.fqdn
     apiOriginHostName: apiApp.outputs.fqdn
-    originPrivateLinkResourceId: containerEnv.outputs.envId
+    // Private Link origins are Premium-only and require an internal-only env.
+    // When the env is public (cost-thin) or the SKU is Standard, reach the
+    // origins over their public FQDN instead.
+    originPrivateLinkResourceId: (containerEnvInternalOnly && frontDoorSku == 'Premium_AzureFrontDoor') ? containerEnv.outputs.envId : ''
+    sku: frontDoorSku
     wafMode: wafMode
   }
 }
