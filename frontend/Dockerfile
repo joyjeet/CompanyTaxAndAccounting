@@ -33,9 +33,12 @@ RUN npm run build
 # -------- runtime stage --------
 FROM nginx:1.27-alpine
 
-# Replace the default site with a SPA-friendly one listening on :8080.
+# Replace the default site with a SPA-friendly one listening on :8080. The
+# config is a template: the nginx entrypoint runs envsubst over it at startup,
+# and 15-api-proxy.envsh fills in the optional /api reverse-proxy block.
 RUN rm /etc/nginx/conf.d/default.conf
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+COPY docker-entrypoint.d/15-api-proxy.envsh /docker-entrypoint.d/15-api-proxy.envsh
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
