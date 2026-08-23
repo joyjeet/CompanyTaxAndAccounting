@@ -38,6 +38,12 @@ param corsOrigins string = ''
 @description('Service Bus queue name (worker scale target).')
 param queueName string = 'extraction-jobs'
 
+@description('Whether this app gets a public (external) ingress. Set false for the API in the no-Front-Door topology so it is reachable only inside the environment.')
+param ingressExternal bool = true
+
+@description('Internal FQDN of the API app, injected into the UI container as API_ORIGIN so its nginx can proxy /api to the API. Empty when Front Door fronts the API instead.')
+param apiOrigin string = ''
+
 @description('ACR login server (e.g. ctaaprodeus.azurecr.io). When supplied, the container app is configured to pull from this ACR using the UAMI. The caller is responsible for granting AcrPull on the UAMI before deployment.')
 param acrLoginServer string = ''
 
@@ -71,12 +77,15 @@ var databaseUrl = 'postgresql+psycopg://app_user:${postgresAdminPassword}@${post
 var databaseOwnerUrl = 'postgresql+psycopg://ctaa_owner:${postgresAdminPassword}@${postgresFqdn}:5432/${postgresDatabase}?sslmode=require'
 
 var appIngress = role == 'worker' ? null : {
-  external: true
+  external: ingressExternal
   targetPort: role == 'ui' ? 8080 : 8000
   transport: 'auto'
   allowInsecure: false
   traffic: [ { latestRevision: true, weight: 100 } ]
 }
+
+// The UI proxies /api to the internal API; give it the target via env.
+var uiExtraEnv = (role == 'ui' && !empty(apiOrigin)) ? [ { name: 'API_ORIGIN', value: apiOrigin } ] : []
 
 var workerScale = [
   {
@@ -145,7 +154,7 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
           name: name
           image: image
           resources: { cpu: json('0.5'), memory: '1Gi' }
-          env: commonEnv
+          env: concat(commonEnv, uiExtraEnv)
           probes: role == 'worker' ? [] : [
             {
               type: 'Liveness'

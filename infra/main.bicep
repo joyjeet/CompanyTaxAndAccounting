@@ -296,6 +296,9 @@ module apiApp 'modules/containerapp.bicep' = {
     role: 'api'
     appEnv: runtimeAppEnv
     appAuthMode: runtimeAppAuthMode
+    // Without Front Door the API is internal-only; the UI proxies to it inside
+    // the environment, so it never needs a public ingress.
+    ingressExternal: enableFrontDoor
     minReplicas: apiMinReplicas
     maxReplicas: apiMaxReplicas
     keyVaultUri: keyvault.outputs.keyVaultUri
@@ -354,6 +357,9 @@ module uiApp 'modules/containerapp.bicep' = {
     role: 'ui'
     appEnv: runtimeAppEnv
     appAuthMode: runtimeAppAuthMode
+    // No Front Door: the UI is the only public app and proxies /api to the
+    // internal API's FQDN. With Front Door, that routing is done at the edge.
+    apiOrigin: enableFrontDoor ? '' : apiApp.outputs.fqdn
     minReplicas: uiMinReplicas
     maxReplicas: uiMaxReplicas
     keyVaultUri: keyvault.outputs.keyVaultUri

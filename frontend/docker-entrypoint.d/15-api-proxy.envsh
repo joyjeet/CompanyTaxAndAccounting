@@ -1,0 +1,11 @@
+# Sourced by the nginx image entrypoint before templates are rendered.
+# When API_ORIGIN is set (the no-Front-Door topology: the UI is the only public
+# app and proxies to the internal API in the same Container Apps environment),
+# emit an /api reverse-proxy location. With Front Door in front (prod) API_ORIGIN
+# is unset, the block is empty, and Front Door routes /api itself.
+if [ -n "${API_ORIGIN:-}" ]; then
+  API_PROXY_BLOCK="location /api/ { proxy_pass https://${API_ORIGIN}; proxy_set_header Host ${API_ORIGIN}; proxy_set_header X-Forwarded-Proto https; proxy_ssl_server_name on; proxy_http_version 1.1; }"
+else
+  API_PROXY_BLOCK=""
+fi
+export API_PROXY_BLOCK

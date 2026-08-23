@@ -25,6 +25,13 @@ param actionGroupEmail = 'ops-dev@example.com'
 param serviceBusSku = 'Standard'
 param wafMode = 'Detection'
 
+// Cost: no Front Door on dev (Premium was ~$330/mo, the biggest line item).
+// The UI app is the only public ingress and reverse-proxies /api to the API,
+// which stays internal to the Container Apps environment. Public URL becomes
+// the UI Container App FQDN.
+param enableFrontDoor = false
+param containerEnvInternalOnly = false
+
 param postgresHa = 'Disabled'
 param postgresSkuName = 'Standard_B2s'
 param postgresSkuTier = 'Burstable'
