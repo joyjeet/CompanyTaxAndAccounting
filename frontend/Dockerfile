@@ -39,6 +39,8 @@ FROM nginx:1.27-alpine
 RUN rm /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY docker-entrypoint.d/15-api-proxy.envsh /docker-entrypoint.d/15-api-proxy.envsh
+# The nginx entrypoint only sources .envsh files that are executable.
+RUN chmod +x /docker-entrypoint.d/15-api-proxy.envsh
 
 COPY --from=build /app/dist /usr/share/nginx/html
 
