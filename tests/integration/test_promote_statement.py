@@ -22,14 +22,17 @@ from app.domain.promotion import (
 from app.integrations.account_categorizer import load_rules_from_file
 from app.models.accounting import (
     AccountingPeriod,
+    ChartOfAccounts,
     DraftClassification,
     JournalEntry,
     JournalLine,
     SourceDocument,
 )
 from app.models.enums import (
+    AccountType,
     DraftKind,
     DraftStatus,
+    NormalBalance,
     OcrStatus,
 )
 from tests.conftest import SeededWorld, ctx_firm_for_client
@@ -261,6 +264,68 @@ def test_promote_statement_account_overrides(world: SeededWorld) -> None:
 
     assert len(result.journal_entry_ids) == 1
     assert result.skipped == []
+
+
+def test_promote_statement_resolves_cash_rollup_to_leaf(
+    world: SeededWorld,
+) -> None:
+    a1 = world.a1
+    cash_leaf_id = uuid4()
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        cash_rollup = sess.get(ChartOfAccounts, a1.cash_account_id)
+        assert cash_rollup is not None
+        cash_rollup.name = "Current Assets"
+        cash_rollup.path = "1000"
+        cash_rollup.is_leaf = False
+        sess.add(
+            ChartOfAccounts(
+                id=cash_leaf_id,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                code="1011",
+                name="Operating Checking",
+                account_type=AccountType.ASSET,
+                normal_balance=NormalBalance.DEBIT,
+                parent_account_id=cash_rollup.id,
+                path="1000>1011",
+                depth=1,
+                is_leaf=True,
+            )
+        )
+
+    _, draft_id = _seed_statement_draft(
+        a1,
+        transactions=[
+            {
+                "date": "2026-07-05",
+                "description": "Customer deposit",
+                "amount": "100.00",
+                "direction": "deposit",
+                "proposed_account_code": "4000",
+            }
+        ],
+    )
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+            cash_account_code="1000",
+        )
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        lines = sess.execute(
+            select(JournalLine).where(
+                JournalLine.entry_id == result.journal_entry_ids[0]
+            )
+        ).scalars().all()
+        debit_line = next(line for line in lines if line.debit > 0)
+        assert debit_line.account_id == cash_leaf_id
 
 
 def test_promote_statement_honors_accept_reject_indexes(
