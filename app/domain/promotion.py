@@ -537,6 +537,23 @@ def promote_statement_draft(
             f"Cash account '{cash_account_code}' not found in this client's chart "
             "of accounts."
         )
+    if not cash_acct.is_leaf:
+        cash_prefix = f"{cash_acct.path or cash_acct.code}>"
+        cash_descendants = sorted(
+            (
+                account
+                for account in accounts_by_code.values()
+                if account.is_leaf
+                and (account.path or "").startswith(cash_prefix)
+            ),
+            key=lambda account: (account.depth, account.code),
+        )
+        if not cash_descendants:
+            raise PromotionForbiddenError(
+                f"Cash account '{cash_account_code}' is a parent/rollup with no "
+                "active posting accounts beneath it."
+            )
+        cash_acct = cash_descendants[0]
 
     overrides = account_overrides or {}
     existing_payload = draft.payload or {}
@@ -641,6 +658,17 @@ def promote_statement_draft(
                 {
                     "index": str(idx),
                     "reason": f"account code '{code}' not in chart of accounts",
+                }
+            )
+            continue
+        if not other_acct.is_leaf:
+            skipped.append(
+                {
+                    "index": str(idx),
+                    "reason": (
+                        f"account code '{code}' is a parent/rollup; "
+                        "select a posting account"
+                    ),
                 }
             )
             continue
