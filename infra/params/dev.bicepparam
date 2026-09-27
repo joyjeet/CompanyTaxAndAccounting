@@ -33,7 +33,7 @@ param enableFrontDoor = false
 param containerEnvInternalOnly = false
 
 param postgresHa = 'Disabled'
-param postgresSkuName = 'Standard_B2s'
+param postgresSkuName = 'Standard_B1ms'
 param postgresSkuTier = 'Burstable'
 param postgresGeoRedundantBackup = 'Disabled'
 
