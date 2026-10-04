@@ -5,8 +5,6 @@
 """
 from __future__ import annotations
 
-from uuid import uuid4
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -14,15 +12,14 @@ from sqlalchemy import select
 from app.db.session import tenant_session
 from app.db.tenant import AccessScope
 from app.domain.entity_form_ruleset import activate_ruleset
+from app.domain.ledger import LedgerService, LineInput
 from app.domain.tax_service import (
     MappingProposal,
     approve_mapping,
-    approve_worksheet,
     generate_worksheet,
     get_form_by_code,
     propose_mapping,
 )
-from app.domain.ledger import LedgerService, LineInput
 from app.main import create_app
 from app.models.accounting import ChartOfAccounts, TaxFormLine
 from app.models.entity_form_ruleset import EntityFormRuleset

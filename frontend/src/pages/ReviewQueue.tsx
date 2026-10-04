@@ -14,9 +14,13 @@ import {
 } from "@fluentui/react-components";
 import { OpenRegular } from "@fluentui/react-icons";
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
+import { roleDisplayName } from "../auth/firmRole";
+import { useClientScope } from "../auth/useClientScope";
+import { useFirmRole } from "../auth/useFirmRole";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
@@ -30,10 +34,25 @@ const useStyles = makeStyles({
 export default function ReviewQueue() {
   const styles = useStyles();
   const api = useApi();
+  const { capabilities, role, isLoading: roleLoading } = useFirmRole();
+  const { clientId, clientName } = useClientScope();
   const drafts = useQuery({
-    queryKey: ["drafts", "pending"],
-    queryFn: () => api.listDrafts(true),
+    queryKey: ["drafts", "pending", clientId ?? "all"],
+    queryFn: () => api.listDrafts(true, clientId ?? undefined),
   });
+
+  // Firm-wide, the queue lists every client's drafts, so each row must say
+  // which client it belongs to; a scoped view already knows its one client.
+  const clients = useQuery({
+    queryKey: ["clients"],
+    queryFn: () => api.listClients(),
+    enabled: !clientId,
+  });
+  const clientNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of clients.data ?? []) m.set(c.id, c.name);
+    return m;
+  }, [clients.data]);
 
   return (
     <div>
@@ -68,9 +87,29 @@ export default function ReviewQueue() {
         <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
           AI-classified drafts awaiting human review and promotion to journal entries.
         </Caption1>
+        {roleLoading ? (
+          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+            Resolving your team role...
+          </Caption1>
+        ) : !capabilities.canPromoteDrafts ? (
+          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+            Your role ({role ? roleDisplayName(role) : "unknown"}) can review drafts but cannot promote or reject them.
+          </Caption1>
+        ) : (
+          <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
+            You can review, promote, and reject drafts.
+          </Caption1>
+        )}
       </div>
 
-      <Section title={`${drafts.data?.length ?? 0} pending drafts`}>
+      <Section
+        title={`${drafts.data?.length ?? 0} pending drafts`}
+        subtitle={
+          clientId
+            ? `Showing ${clientName ?? "one client"} only.`
+            : "Across every client in your firm — see the Client column."
+        }
+      >
         {drafts.isLoading && <LoadingState />}
         {drafts.error && <ErrorState error={drafts.error} />}
         {drafts.data && drafts.data.length === 0 && (
@@ -80,10 +119,12 @@ export default function ReviewQueue() {
           <Table size="small">
             <TableHeader>
               <TableRow>
+                {!clientId && <TableHeaderCell>Client</TableHeaderCell>}
                 <TableHeaderCell>Kind</TableHeaderCell>
                 <TableHeaderCell>Confidence</TableHeaderCell>
                 <TableHeaderCell>Model</TableHeaderCell>
                 <TableHeaderCell>Source document</TableHeaderCell>
+                <TableHeaderCell>Posting access</TableHeaderCell>
                 <TableHeaderCell></TableHeaderCell>
               </TableRow>
             </TableHeader>
@@ -94,6 +135,16 @@ export default function ReviewQueue() {
                   d.high_confidence ? "success" : conf < 0.6 ? "danger" : "warning";
                 return (
                   <TableRow key={d.id}>
+                    {!clientId && (
+                      <TableCell>
+                        <Link
+                          to={`/clients/${d.client_id}/overview`}
+                          style={{ color: tokens.colorBrandForeground1 }}
+                        >
+                          {clientNameById.get(d.client_id) ?? shortId(d.client_id)}
+                        </Link>
+                      </TableCell>
+                    )}
                     <TableCell>{d.kind}</TableCell>
                     <TableCell>
                       <Badge appearance="filled" color={color}>
@@ -107,7 +158,12 @@ export default function ReviewQueue() {
                       <code>{shortId(d.source_document_id)}</code>
                     </TableCell>
                     <TableCell>
-                      <Link to={`/drafts/${d.id}`}>
+                      <Badge appearance="tint" color={capabilities.canPromoteDrafts ? "success" : "warning"}>
+                        {capabilities.canPromoteDrafts ? "can post" : "read only"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Link to={`/drafts/${d.id}?client=${clientId ?? d.client_id}`}>
                         <Button appearance="subtle" icon={<OpenRegular />}>
                           Review
                         </Button>

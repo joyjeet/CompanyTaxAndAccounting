@@ -608,7 +608,7 @@ def test_rollup_hides_zero_only_heads(client: TestClient, world) -> None:
         assert r.status_code == 200, r.text
         roots = r.json()["roots"]
 
-        def assert_nonzero(nodes: list[dict]) -> None:
+        def assert_nonzero(nodes: list[dict], scope: str = scope) -> None:
             for n in nodes:
                 all_zero = (
                     Decimal(n["debit_total"]) == Decimal("0")

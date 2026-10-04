@@ -259,3 +259,128 @@ def test_portal_blocked_on_open_period(client: TestClient, world) -> None:
         )
         assert r.status_code == 403, f"{endpoint}: {r.status_code} {r.text}"
         assert "not yet finalized" in r.json()["detail"]
+
+
+def _lock_period(client: TestClient, firm_h: dict, world_client) -> None:
+    lock = client.post(
+        f"/clients/{world_client.client_id}/periods/{world_client.period_id}/lock",
+        headers=firm_h,
+    )
+    assert lock.status_code == 200, lock.text
+
+
+def test_portal_date_range_clamped_to_finalized_period(client: TestClient, world) -> None:
+    """Portal may pick any range; the backend trims it to finalized days.
+
+    The "All dates" preset sends 1900..2099. Rather than 403 that (which would
+    make the default preset useless for portal users), we clamp down to the
+    locked period and echo the window we actually covered.
+    """
+    firm_h = _auth(client, "firm_staff", world.firm_a)
+    _seed_activity(client, firm_h, world.a1, world.a1.period_id)
+    _lock_period(client, firm_h, world.a1)
+
+    portal_h = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    r = client.get(
+        "/statements/profit-and-loss",
+        headers=portal_h,
+        params={
+            "client_id": str(world.a1.client_id),
+            "period_start": "1900-01-01",
+            "period_end": "2099-12-31",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["period_start"] == "2026-01-01"
+    assert body["period_end"] == "2026-12-31"
+    assert Decimal(body["net_income"]) == Decimal("1200")
+
+
+def test_portal_date_range_narrower_than_finalized_is_kept(client: TestClient, world) -> None:
+    """Clamping only trims — a range inside the locked period is untouched."""
+    firm_h = _auth(client, "firm_staff", world.firm_a)
+    _seed_activity(client, firm_h, world.a1, world.a1.period_id)
+    _lock_period(client, firm_h, world.a1)
+
+    portal_h = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    r = client.get(
+        "/statements/profit-and-loss",
+        headers=portal_h,
+        params={
+            "client_id": str(world.a1.client_id),
+            "period_start": "2026-06-01",
+            "period_end": "2026-06-30",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["period_start"] == "2026-06-01"
+    assert body["period_end"] == "2026-06-30"
+    # Activity is all dated 2026-06-15, so it still lands in the window.
+    assert Decimal(body["net_income"]) == Decimal("1200")
+
+
+def test_portal_date_range_blocked_when_nothing_finalized(client: TestClient, world) -> None:
+    """No locked period => no live report, however the range is framed."""
+    firm_h = _auth(client, "firm_staff", world.firm_a)
+    _seed_activity(client, firm_h, world.a1, world.a1.period_id)
+
+    portal_h = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    for endpoint in (
+        "/statements/profit-and-loss",
+        "/statements/balance-sheet",
+        "/statements/cash-flow",
+        "/statements/trial-balance",
+    ):
+        r = client.get(
+            endpoint,
+            headers=portal_h,
+            params={
+                "client_id": str(world.a1.client_id),
+                "period_start": "1900-01-01",
+                "period_end": "2099-12-31",
+            },
+        )
+        assert r.status_code == 403, f"{endpoint}: {r.status_code} {r.text}"
+        assert "not yet finalized" in r.json()["detail"]
+
+
+def test_portal_date_range_outside_finalized_span_blocked(client: TestClient, world) -> None:
+    """A range that never touches a locked period is refused, not silently empty."""
+    firm_h = _auth(client, "firm_staff", world.firm_a)
+    _seed_activity(client, firm_h, world.a1, world.a1.period_id)
+    _lock_period(client, firm_h, world.a1)
+
+    portal_h = _auth(client, "client_portal", world.firm_a, world.a1.client_id)
+    r = client.get(
+        "/statements/profit-and-loss",
+        headers=portal_h,
+        params={
+            "client_id": str(world.a1.client_id),
+            "period_start": "2024-01-01",
+            "period_end": "2024-12-31",
+        },
+    )
+    assert r.status_code == 403, r.text
+    assert "not yet finalized" in r.json()["detail"]
+
+
+def test_firm_date_range_is_not_clamped(client: TestClient, world) -> None:
+    """Firm scope keeps the exact range it asked for, locked or not."""
+    firm_h = _auth(client, "firm_staff", world.firm_a)
+    _seed_activity(client, firm_h, world.a1, world.a1.period_id)
+    r = client.get(
+        "/statements/profit-and-loss",
+        headers=firm_h,
+        params={
+            "client_id": str(world.a1.client_id),
+            "period_start": "2020-01-01",
+            "period_end": "2030-12-31",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["period_start"] == "2020-01-01"
+    assert body["period_end"] == "2030-12-31"
+    assert Decimal(body["net_income"]) == Decimal("1200")

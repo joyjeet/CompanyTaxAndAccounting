@@ -4,13 +4,20 @@
  */
 import config from "../config";
 import type { AuthClient } from "../auth/AuthClient";
+import { readSelection } from "../auth/signInState";
 import type {
   AgingReportOut,
   ArtifactOut,
   BalanceSheetOut,
   CashFlowOut,
+  ClientCreateIn,
+  ClientDeletabilityOut,
   ClientOut,
+  CoaCreateIn,
   CoaOut,
+  CoaTemplateOut,
+  CoaUpdateIn,
+  Industry,
   RulesEngineOut,
   ClientProfileOut,
   ClientProfileUpsertIn,
@@ -21,6 +28,7 @@ import type {
   GeneralLedgerOut,
   JournalEntryCreateIn,
   JournalEntryOut,
+  LearnRuleOut,
   MappingOut,
   RulesetOut,
   PeriodOut,
@@ -28,6 +36,7 @@ import type {
   ResetOut,
   RollupTreeOut,
   SeedOut,
+  StatementPromoteOut,
   TaxFormDetailOut,
   TaxFormOut,
   TrialBalanceOut,
@@ -36,6 +45,13 @@ import type {
   WorksheetOut,
   AutoProposeOut,
   AutoFillOut,
+  TeamInviteCreateOut,
+  TeamInviteOut,
+  TeamMemberOut,
+  TeamSummaryOut,
+  MembershipStatus,
+  StaffRole,
+  DocumentKind,
 } from "../auth/types";
 
 export class ApiError extends Error {
@@ -52,6 +68,14 @@ export class ApiClient {
     const headers = new Headers(init.headers);
     if (token) headers.set("Authorization", `Bearer ${token}`);
     if (!headers.has("Accept")) headers.set("Accept", "application/json");
+    // Context hint for membership-based authorization. The backend checks it
+    // against the caller's own memberships, so this can only ever narrow
+    // access — it is not a claim of entitlement.
+    const selection = readSelection();
+    if (selection) {
+      headers.set("X-CTAA-Firm", selection.firmId);
+      if (selection.clientId) headers.set("X-CTAA-Client", selection.clientId);
+    }
     const resp = await fetch(`${this.base}${path}`, { ...init, headers });
     if (resp.status === 204) return undefined as T;
     const text = await resp.text();
@@ -73,6 +97,12 @@ export class ApiClient {
     return body as T;
   }
 
+  private normalizePeriod(
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): { periodId?: string; periodStart?: string; periodEnd?: string } {
+    return typeof period === "string" ? { periodId: period } : period;
+  }
+
   private json<T>(path: string, method: string, body: unknown): Promise<T> {
     return this.request<T>(path, {
       method,
@@ -82,16 +112,55 @@ export class ApiClient {
   }
 
   // ----- Clients -------------------------------------------------- //
-  listClients(): Promise<ClientOut[]> {
-    return this.request<ClientOut[]>("/clients");
+  listClients(includeArchived = false): Promise<ClientOut[]> {
+    const q = includeArchived ? "?include_archived=true" : "";
+    return this.request<ClientOut[]>(`/clients${q}`);
   }
 
   getClient(id: string): Promise<ClientOut> {
     return this.request<ClientOut>(`/clients/${id}`);
   }
 
-  createClient(body: { name: string; external_code?: string | null }): Promise<ClientOut> {
+  createClient(body: ClientCreateIn): Promise<ClientOut> {
     return this.json<ClientOut>("/clients", "POST", body);
+  }
+
+  archiveClient(id: string): Promise<ClientOut> {
+    return this.json<ClientOut>(`/clients/${id}/archive`, "POST", {});
+  }
+
+  restoreClient(id: string): Promise<ClientOut> {
+    return this.json<ClientOut>(`/clients/${id}/restore`, "POST", {});
+  }
+
+  clientDeletability(id: string): Promise<ClientDeletabilityOut> {
+    return this.request<ClientDeletabilityOut>(`/clients/${id}/deletability`);
+  }
+
+  async deleteClient(id: string): Promise<void> {
+    await this.request<void>(`/clients/${id}`, { method: "DELETE" });
+  }
+
+  // ----- COA templates ------------------------------------------- //
+  listCoaTemplates(statusFilter?: string): Promise<CoaTemplateOut[]> {
+    const q = statusFilter
+      ? `?status_filter=${encodeURIComponent(statusFilter)}`
+      : "";
+    return this.request<CoaTemplateOut[]>(`/clients/coa-templates${q}`);
+  }
+
+  activateCoaTemplate(templateId: string): Promise<CoaTemplateOut> {
+    return this.json<CoaTemplateOut>(
+      `/clients/coa-templates/${templateId}/activate`,
+      "POST",
+      {},
+    );
+  }
+
+  instantiateCoa(clientId: string, industry: Industry): Promise<unknown> {
+    return this.json<unknown>(`/clients/${clientId}/coa/instantiate`, "POST", {
+      industry,
+    });
   }
 
   // ----- Client profile (entity type + contact info) ------------ //
@@ -137,16 +206,32 @@ export class ApiClient {
     return this.request<CoaOut[]>(`/clients/${clientId}/chart-of-accounts`);
   }
 
-  createAccount(
-    clientId: string,
-    body: {
-      code: string;
-      name: string;
-      account_type: string;
-      normal_balance: string;
-    },
-  ): Promise<CoaOut> {
+  createAccount(clientId: string, body: CoaCreateIn): Promise<CoaOut> {
     return this.json<CoaOut>(`/clients/${clientId}/chart-of-accounts`, "POST", body);
+  }
+
+  /** Partial update: rename, recode, retype, reparent, activate/deactivate. */
+  updateAccount(
+    clientId: string,
+    accountId: string,
+    body: CoaUpdateIn,
+  ): Promise<CoaOut> {
+    return this.json<CoaOut>(
+      `/clients/${clientId}/chart-of-accounts/${accountId}`,
+      "PATCH",
+      body,
+    );
+  }
+
+  /**
+   * Permanently removes an account. The API answers 409 when the account has
+   * journal lines or sub-accounts — deactivate those instead.
+   */
+  deleteAccount(clientId: string, accountId: string): Promise<void> {
+    return this.request<void>(
+      `/clients/${clientId}/chart-of-accounts/${accountId}`,
+      { method: "DELETE" },
+    );
   }
 
   // ----- Rules engine (admin) ------------------------------------ //
@@ -156,6 +241,35 @@ export class ApiClient {
 
   updateRulesEngine(content: string): Promise<RulesEngineOut> {
     return this.json<RulesEngineOut>("/admin/rules-engine", "PUT", { content });
+  }
+
+  // ----- Team management ----------------------------------------- //
+  listTeamMembers(): Promise<TeamSummaryOut> {
+    return this.request<TeamSummaryOut>("/team/members");
+  }
+
+  createTeamInvite(body: {
+    email: string;
+    role: StaffRole;
+    expires_in_days?: number;
+  }): Promise<TeamInviteCreateOut> {
+    return this.json<TeamInviteCreateOut>("/team/invites", "POST", body);
+  }
+
+  cancelTeamInvite(inviteId: string): Promise<TeamInviteOut> {
+    return this.json<TeamInviteOut>(`/team/invites/${inviteId}/cancel`, "POST", {});
+  }
+
+  acceptTeamInvite(token: string): Promise<TeamMemberOut> {
+    return this.json<TeamMemberOut>("/team/invites/accept", "POST", { token });
+  }
+
+  updateTeamMemberRole(memberId: string, role: StaffRole): Promise<TeamMemberOut> {
+    return this.json<TeamMemberOut>(`/team/members/${memberId}/role`, "POST", { role });
+  }
+
+  updateTeamMemberStatus(memberId: string, status: MembershipStatus): Promise<TeamMemberOut> {
+    return this.json<TeamMemberOut>(`/team/members/${memberId}/status`, "POST", { status });
   }
 
   // ----- Documents ----------------------------------------------- //
@@ -203,17 +317,28 @@ export class ApiClient {
     });
   }
 
+  updateDocumentKind(id: string, kind: DocumentKind): Promise<DocumentOut> {
+    return this.json<DocumentOut>(`/documents/${id}/kind`, "POST", { kind });
+  }
+
+  /** Remove a document uploaded by mistake. Rejected by the API (409) when
+   * journal entries were already posted from it. */
+  deleteDocument(id: string): Promise<void> {
+    return this.request<void>(`/documents/${id}`, { method: "DELETE" });
+  }
+
   // ----- Drafts -------------------------------------------------- //
-  listDrafts(pendingOnly = true): Promise<DraftOut[]> {
-    const q = pendingOnly ? "?pending_only=true" : "?pending_only=false";
-    return this.request<DraftOut[]>(`/drafts${q}`);
+  listDrafts(pendingOnly = true, clientId?: string): Promise<DraftOut[]> {
+    const q = new URLSearchParams({ pending_only: String(pendingOnly) });
+    if (clientId) q.set("client_id", clientId);
+    return this.request<DraftOut[]>(`/drafts?${q}`);
   }
 
   promoteDraft(
     draftId: string,
     body: {
       client_id?: string;
-      period_id: string;
+      period_id?: string;
       entry_date: string;
       memo?: string;
       lines: Array<{
@@ -235,18 +360,37 @@ export class ApiClient {
     draftId: string,
     body: {
       client_id?: string;
-      period_id: string;
+      period_id?: string;
       cash_account_code?: string;
       account_overrides?: Record<string, string>;
+      accepted_indexes?: number[];
+      rejected_indexes?: number[];
     },
-  ): Promise<{ journal_entry_ids: string[]; skipped: Array<{ index: string; reason: string }> }> {
+  ): Promise<StatementPromoteOut> {
     return this.json(`/drafts/${draftId}/promote-all`, "POST", body);
   }
 
+  learnStatementRule(
+    draftId: string,
+    body: {
+      client_id?: string;
+      transaction_index: number;
+      target_account_code: string;
+    },
+  ): Promise<LearnRuleOut> {
+    return this.json(`/drafts/${draftId}/learn-rule`, "POST", body);
+  }
+
   // ----- Journal entries ----------------------------------------- //
-  listJournalEntries(clientId: string, periodId?: string): Promise<JournalEntryOut[]> {
+  listJournalEntries(
+    clientId: string,
+    filter?: string | { periodId?: string; dateFrom?: string; dateTo?: string },
+  ): Promise<JournalEntryOut[]> {
     const params = new URLSearchParams({ client_id: clientId });
-    if (periodId) params.set("period_id", periodId);
+    const f = typeof filter === "string" ? { periodId: filter } : (filter ?? {});
+    if (f.periodId) params.set("period_id", f.periodId);
+    if (f.dateFrom) params.set("date_from", f.dateFrom);
+    if (f.dateTo) params.set("date_to", f.dateTo);
     return this.request<JournalEntryOut[]>(`/journal-entries?${params.toString()}`);
   }
 
@@ -259,53 +403,92 @@ export class ApiClient {
   }
 
   // ----- Statements (inline preview) ----------------------------- //
-  getProfitAndLoss(clientId: string, periodId: string): Promise<ProfitAndLossOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+  getProfitAndLoss(
+    clientId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): Promise<ProfitAndLossOut> {
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     return this.request<ProfitAndLossOut>(`/statements/profit-and-loss?${q}`);
   }
 
-  getBalanceSheet(clientId: string, periodId: string): Promise<BalanceSheetOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+  getBalanceSheet(
+    clientId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): Promise<BalanceSheetOut> {
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     return this.request<BalanceSheetOut>(`/statements/balance-sheet?${q}`);
   }
 
   getCashFlow(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     cashAccountCodes?: string[],
   ): Promise<CashFlowOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     if (cashAccountCodes && cashAccountCodes.length > 0) {
       q.set("cash_account_codes", cashAccountCodes.join(","));
     }
     return this.request<CashFlowOut>(`/statements/cash-flow?${q}`);
   }
 
-  getTrialBalance(clientId: string, periodId: string): Promise<TrialBalanceOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+  getTrialBalance(
+    clientId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): Promise<TrialBalanceOut> {
+    const q = new URLSearchParams({ client_id: clientId });
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) q.set("period_id", normalized.periodId);
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
     return this.request<TrialBalanceOut>(`/statements/trial-balance?${q}`);
   }
 
   // ----- PART C: client-facing reports ---------------------------- //
+  private applyPeriodQuery(
+    q: URLSearchParams,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
+  ): void {
+    const normalized = this.normalizePeriod(period);
+    if (normalized.periodId) {
+      q.set("period_id", normalized.periodId);
+      return;
+    }
+    if (normalized.periodStart) q.set("period_start", normalized.periodStart);
+    if (normalized.periodEnd) q.set("period_end", normalized.periodEnd);
+  }
+
   getGeneralLedger(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountId: string,
   ): Promise<GeneralLedgerOut> {
     const q = new URLSearchParams({
       client_id: clientId,
-      period_id: periodId,
       account_id: accountId,
     });
+    this.applyPeriodQuery(q, period);
     return this.request<GeneralLedgerOut>(`/statements/general-ledger?${q}`);
   }
 
   getArAging(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountCodes?: string[],
   ): Promise<AgingReportOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    const q = new URLSearchParams({ client_id: clientId });
+    this.applyPeriodQuery(q, period);
     if (accountCodes && accountCodes.length > 0) {
       q.set("account_codes", accountCodes.join(","));
     }
@@ -314,10 +497,11 @@ export class ApiClient {
 
   getApAging(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountCodes?: string[],
   ): Promise<AgingReportOut> {
-    const q = new URLSearchParams({ client_id: clientId, period_id: periodId });
+    const q = new URLSearchParams({ client_id: clientId });
+    this.applyPeriodQuery(q, period);
     if (accountCodes && accountCodes.length > 0) {
       q.set("account_codes", accountCodes.join(","));
     }
@@ -326,27 +510,24 @@ export class ApiClient {
 
   getAccountActivity(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     accountId: string,
   ): Promise<DrillDownOut> {
     const q = new URLSearchParams({
       client_id: clientId,
-      period_id: periodId,
       account_id: accountId,
     });
+    this.applyPeriodQuery(q, period);
     return this.request<DrillDownOut>(`/statements/account-activity?${q}`);
   }
 
   getAccountRollup(
     clientId: string,
-    periodId: string,
+    period: string | { periodId?: string; periodStart?: string; periodEnd?: string },
     scope: "balance_sheet" | "profit_and_loss" | "trial_balance" = "trial_balance",
   ): Promise<RollupTreeOut> {
-    const q = new URLSearchParams({
-      client_id: clientId,
-      period_id: periodId,
-      scope,
-    });
+    const q = new URLSearchParams({ client_id: clientId, scope });
+    this.applyPeriodQuery(q, period);
     return this.request<RollupTreeOut>(`/statements/account-rollup?${q}`);
   }
 
@@ -391,7 +572,9 @@ export class ApiClient {
 
   // ----- Reports / artifacts ------------------------------------- //
   generateStatementArtifact(body: {
-    period_id: string;
+    period_id?: string;
+    period_start?: string;
+    period_end?: string;
     kind: string;
     format: string;
     cash_account_codes?: string[];
@@ -400,10 +583,15 @@ export class ApiClient {
     return this.json<ArtifactOut>("/reports/statements/generate", "POST", body);
   }
 
-  listArtifacts(opts?: { period_id?: string; kind?: string }): Promise<ArtifactOut[]> {
+  listArtifacts(opts?: {
+    period_id?: string;
+    kind?: string;
+    client_id?: string;
+  }): Promise<ArtifactOut[]> {
     const q = new URLSearchParams();
     if (opts?.period_id) q.set("period_id", opts.period_id);
     if (opts?.kind) q.set("kind", opts.kind);
+    if (opts?.client_id) q.set("client_id", opts.client_id);
     const tail = q.toString() ? `?${q}` : "";
     return this.request<ArtifactOut[]>(`/reports/artifacts${tail}`);
   }

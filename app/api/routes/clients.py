@@ -6,10 +6,12 @@ both by RLS and by an explicit guard.
 """
 from __future__ import annotations
 
-from datetime import date
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,20 +19,47 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
+from app.domain.account_classification import coerce_sub_type
 from app.domain.audit import write_audit
+from app.domain.client_lifecycle import (
+    ClientHasDataError,
+    ClientNotFoundError,
+    archive_client,
+    client_data_counts,
+    delete_client,
+    restore_client,
+)
+from app.domain.client_profile import (
+    ClientProfileValidationError,
+    upsert_profile,
+)
+from app.domain.coa import (
+    UNSET as COA_UNSET,
+)
+from app.domain.coa import (
+    CoaConflictError,
+    CoaNotFoundError,
+    CoaValidationError,
+    account_usage,
+)
+from app.domain.coa import create_account as coa_create_account
+from app.domain.coa import delete_account as coa_delete_account
+from app.domain.coa import update_account as coa_update_account
 from app.domain.coa_templates import (
     CoaTemplateError,
     CoaTemplateForbiddenError,
+    activate_template,
     instantiate_for_client,
 )
 from app.models.accounting import AccountingPeriod, ChartOfAccounts, Client
 from app.models.coa_template import CoaTemplate
 from app.models.enums import (
+    AccountSubType,
     AccountType,
     AuditAction,
     CoaTemplateStatus,
+    EntityType,
     Industry,
-    NormalBalance,
 )
 
 router = APIRouter(prefix="/clients", tags=["clients"])
@@ -44,11 +73,52 @@ class ClientOut(BaseModel):
     firm_id: UUID
     name: str
     external_code: str | None
+    # Archived clients keep every row they ever had, but drop out of the
+    # default list and refuse new postings.
+    is_active: bool = True
+    archived_at: datetime | None = None
+    # Populated only by the create endpoint, so the UI can tell the user
+    # whether onboarding finished or still needs a manual COA step.
+    coa_seeded: bool | None = None
+    coa_seed_error: str | None = None
 
 
 class ClientCreateIn(BaseModel):
+    """Onboarding payload.
+
+    Everything past `external_code` is optional profile detail. Supplying it
+    up front means the client is usable immediately instead of requiring a
+    separate profile edit; `industry` in particular selects which overlay is
+    applied when the chart of accounts is seeded.
+    """
+
     name: str = Field(min_length=1, max_length=255)
     external_code: str | None = Field(default=None, max_length=64)
+
+    # ----- Tax profile
+    industry: Industry = Industry.GENERIC
+    entity_type: EntityType | None = None
+    tax_year: int | None = Field(default=None, ge=1900, le=2200)
+    home_state: str | None = Field(default=None, max_length=2)
+    fiscal_year_end_month: int | None = Field(default=None, ge=1, le=12)
+
+    # ----- Identity / contact
+    business_legal_name: str | None = Field(default=None, max_length=255)
+    dba_name: str | None = Field(default=None, max_length=255)
+    ein: str | None = Field(default=None, max_length=32)
+    email: str | None = Field(default=None, max_length=320)
+    phone: str | None = Field(default=None, max_length=32)
+
+    # ----- Address
+    address_line1: str | None = Field(default=None, max_length=255)
+    address_line2: str | None = Field(default=None, max_length=255)
+    city: str | None = Field(default=None, max_length=128)
+    address_state: str | None = Field(default=None, max_length=2)
+    postal_code: str | None = Field(default=None, max_length=16)
+
+    # A new client should come with a usable chart of accounts. Set false to
+    # opt out (e.g. when importing an existing chart straight after).
+    seed_coa: bool = True
 
 
 class PeriodOut(BaseModel):
@@ -72,17 +142,51 @@ class CoaOut(BaseModel):
     code: str
     name: str
     account_type: str
+    # Reporting bucket within account_type (cogs / operating_expense /
+    # other_income / current_asset / ...). Drives statement placement.
+    sub_type: str
     normal_balance: str
     is_active: bool
-    is_leaf: bool
     parent_account_id: UUID | None = None
+    # Hierarchy, so the UI can indent without recomputing the tree.
+    depth: int = 0
+    is_leaf: bool = True
+    # Usage, so the UI can tell "removable" from "deactivate only" without a
+    # round-trip per row. Populated by the list endpoint.
+    journal_line_count: int = 0
+    child_count: int = 0
 
 
 class CoaCreateIn(BaseModel):
     code: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=255)
     account_type: AccountType
-    normal_balance: NormalBalance
+    # Omit to derive from the account code (5xxx -> COGS, 9500+ -> income
+    # tax, and so on). Supply it when the code does not follow the
+    # convention, or to override the inferred bucket.
+    sub_type: AccountSubType | None = None
+    # Omit to create a top-level account. A sub-account must share its
+    # parent's account_type.
+    parent_account_id: UUID | None = None
+    # NOTE: `normal_balance` is intentionally absent — it is derived from
+    # `account_type` via NORMAL_BALANCE_FOR. Clients that still send it are
+    # ignored rather than rejected.
+
+
+class CoaUpdateIn(BaseModel):
+    """Partial update. Only the supplied keys change.
+
+    `parent_account_id` is three-valued: absent = leave alone, null = promote
+    to top level, a UUID = reparent. Pydantic cannot express that on its own,
+    so the route inspects `model_fields_set`.
+    """
+
+    code: str | None = Field(default=None, min_length=1, max_length=32)
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    account_type: AccountType | None = None
+    sub_type: AccountSubType | None = None
+    parent_account_id: UUID | None = None
+    is_active: bool | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -114,16 +218,100 @@ def _load_client_or_404(sess: Session, client_id: UUID) -> Client:
     return c
 
 
+@contextmanager
+def _coa_errors() -> Iterator[None]:
+    """Map chart-of-accounts domain errors onto HTTP status codes.
+
+    409 for "collides with existing data" (duplicate code, still referenced),
+    422 for "structurally invalid" (bad parent, type mismatch, cycle), 404 for
+    a missing account. Without this the duplicate-code case surfaced as a raw
+    IntegrityError 500.
+    """
+    try:
+        yield
+    except CoaNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(e)
+        ) from e
+    except CoaConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except CoaValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        ) from e
+
+
+def _coa_out(
+    a: ChartOfAccounts,
+    *,
+    usage: dict[UUID, tuple[int, int]] | None = None,
+) -> CoaOut:
+    lines, children = (usage or {}).get(a.id, (0, 0))
+    return CoaOut(
+        id=a.id,
+        client_id=a.client_id,
+        code=a.code,
+        name=a.name,
+        account_type=a.account_type.value,
+        sub_type=coerce_sub_type(
+            a.sub_type, code=a.code, account_type=a.account_type
+        ).value,
+        normal_balance=a.normal_balance.value,
+        is_active=a.is_active,
+        parent_account_id=a.parent_account_id,
+        depth=a.depth,
+        is_leaf=a.is_leaf,
+        journal_line_count=lines,
+        child_count=children,
+    )
+
+
+def _client_out(c: Client, **extra: object) -> ClientOut:
+    return ClientOut(
+        id=c.id,
+        firm_id=c.firm_id,
+        name=c.name,
+        external_code=c.external_code,
+        is_active=c.is_active,
+        archived_at=c.archived_at,
+        **extra,  # type: ignore[arg-type]
+    )
+
+
+@contextmanager
+def _lifecycle_errors() -> Iterator[None]:
+    """Map archive/restore/delete domain errors onto HTTP status codes.
+
+    409 rather than 422 for "has books": the request is well-formed, it
+    conflicts with the state of the resource.
+    """
+    try:
+        yield
+    except ClientNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(e)
+        ) from e
+    except ClientHasDataError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(e)
+        ) from e
+
+
 # --------------------------------------------------------------------------- #
 # Clients
 # --------------------------------------------------------------------------- #
 @router.get("", response_model=list[ClientOut])
-def list_clients(sess: Session = Depends(db_session)) -> list[ClientOut]:
-    rows = sess.execute(select(Client).order_by(Client.name)).scalars().all()
-    return [
-        ClientOut(id=c.id, firm_id=c.firm_id, name=c.name, external_code=c.external_code)
-        for c in rows
-    ]
+def list_clients(
+    include_archived: bool = Query(
+        False, description="Include archived clients in the result."
+    ),
+    sess: Session = Depends(db_session),
+) -> list[ClientOut]:
+    stmt = select(Client).order_by(Client.name)
+    if not include_archived:
+        stmt = stmt.where(Client.is_active.is_(True))
+    rows = sess.execute(stmt).scalars().all()
+    return [_client_out(c) for c in rows]
 
 
 @router.post("", response_model=ClientOut, status_code=status.HTTP_201_CREATED)
@@ -141,7 +329,145 @@ def create_client(
     )
     sess.add(c)
     sess.flush()
-    return ClientOut(id=c.id, firm_id=c.firm_id, name=c.name, external_code=c.external_code)
+
+    try:
+        upsert_profile(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=c.id,
+            actor=identity.subject,
+            scope=identity.scope,
+            industry=body.industry,
+            entity_type=body.entity_type,
+            tax_year=body.tax_year,
+            home_state=body.home_state,
+            fiscal_year_end_month=body.fiscal_year_end_month,
+            business_legal_name=body.business_legal_name,
+            dba_name=body.dba_name,
+            ein=body.ein,
+            email=body.email,
+            phone=body.phone,
+            address_line1=body.address_line1,
+            address_line2=body.address_line2,
+            city=body.city,
+            address_state=body.address_state,
+            postal_code=body.postal_code,
+        )
+    except ClientProfileValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        ) from e
+
+    # Seed the default chart of accounts so the client is immediately
+    # postable. A missing/inactive template is a firm-configuration problem,
+    # not a reason to lose the client record — report it instead of failing.
+    coa_seeded = False
+    coa_seed_error: str | None = None
+    if body.seed_coa:
+        try:
+            instantiate_for_client(
+                sess,
+                firm_id=identity.firm_id,
+                client_id=c.id,
+                industry=body.industry,
+                actor=identity.subject,
+                scope=identity.scope,
+            )
+            coa_seeded = True
+        except CoaTemplateError as e:
+            coa_seed_error = str(e)
+
+    sess.flush()
+    return _client_out(
+        c, coa_seeded=coa_seeded, coa_seed_error=coa_seed_error
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Client lifecycle (archive / restore / delete)
+# --------------------------------------------------------------------------- #
+class ClientDeletabilityOut(BaseModel):
+    """Whether this client can be hard-deleted, and why not if it can't."""
+
+    client_id: UUID
+    can_delete: bool
+    # Label -> count, e.g. {"journal entry": 12}. Empty when can_delete.
+    blocking_counts: dict[str, int]
+
+
+@router.post("/{client_id}/archive", response_model=ClientOut)
+def archive_client_endpoint(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> ClientOut:
+    """Hide a client and stop new postings. Reversible, nothing is removed."""
+    _require_firm_scope(identity)
+    with _lifecycle_errors():
+        c = archive_client(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+        )
+    return _client_out(c)
+
+
+@router.post("/{client_id}/restore", response_model=ClientOut)
+def restore_client_endpoint(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> ClientOut:
+    """Bring an archived client back into active use."""
+    _require_firm_scope(identity)
+    with _lifecycle_errors():
+        c = restore_client(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+        )
+    return _client_out(c)
+
+
+@router.get("/{client_id}/deletability", response_model=ClientDeletabilityOut)
+def client_deletability(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> ClientDeletabilityOut:
+    """Report whether a hard delete is allowed, so the UI can say why not."""
+    _require_firm_scope(identity)
+    _load_client_or_404(sess, client_id)
+    counts = client_data_counts(sess, client_id=client_id)
+    return ClientDeletabilityOut(
+        client_id=client_id,
+        can_delete=not counts,
+        blocking_counts=counts,
+    )
+
+
+@router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_client_endpoint(
+    client_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> None:
+    """Permanently remove a client that has no books.
+
+    Returns 409 the moment any real history exists — those clients are
+    archived instead. Records the firm is required to keep are never
+    destroyed by this endpoint.
+    """
+    _require_firm_scope(identity)
+    with _lifecycle_errors():
+        delete_client(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -202,6 +528,55 @@ def list_coa_templates(
     return out
 
 
+@router.post(
+    "/coa-templates/{template_id}/activate", response_model=CoaTemplateOut
+)
+def activate_coa_template(
+    template_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> CoaTemplateOut:
+    """Flip a DRAFT COA template to ACTIVE, superseding any prior version.
+
+    Templates ship as DRAFT on purpose so a human signs off on the chart
+    before any client is onboarded onto it. This endpoint is that sign-off:
+    firm-scope only, and it writes an audit row naming the actor.
+    Idempotent -- activating an already-ACTIVE template is a no-op.
+    """
+    _require_firm_scope(identity)
+    try:
+        tpl = activate_template(
+            sess,
+            firm_id=identity.firm_id,
+            actor=identity.subject,
+            scope=identity.scope,
+            template_id=template_id,
+        )
+    except CoaTemplateForbiddenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    except CoaTemplateError as exc:
+        msg = str(exc)
+        code_ = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in msg.lower()
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code_, detail=msg) from exc
+
+    return CoaTemplateOut(
+        id=tpl.id,
+        key=tpl.key,
+        display_name=tpl.display_name,
+        kind=tpl.kind.value,
+        industry=tpl.industry,
+        version=tpl.version,
+        status=tpl.status.value,
+        node_count=len(tpl.nodes),
+    )
+
+
 @router.get("/{client_id}", response_model=ClientOut)
 def get_client(
     client_id: UUID,
@@ -210,7 +585,7 @@ def get_client(
 ) -> ClientOut:
     _require_client_access(identity, client_id)
     c = _load_client_or_404(sess, client_id)
-    return ClientOut(id=c.id, firm_id=c.firm_id, name=c.name, external_code=c.external_code)
+    return _client_out(c)
 
 
 # --------------------------------------------------------------------------- #
@@ -337,9 +712,7 @@ def lock_period(
         is_locked=p.is_locked,
     )
 
-# --------------------------------------------------------------------------- #
-# Chart of Accounts
-# --------------------------------------------------------------------------- #@router.post("/{client_id}/periods/{period_id}/unlock", response_model=PeriodOut)
+@router.post("/{client_id}/periods/{period_id}/unlock", response_model=PeriodOut)
 def unlock_period(
     client_id: UUID,
     period_id: UUID,
@@ -375,6 +748,11 @@ def unlock_period(
         end_date=p.end_date,
         is_locked=p.is_locked,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Chart of Accounts
+# --------------------------------------------------------------------------- #
 @router.get("/{client_id}/chart-of-accounts", response_model=list[CoaOut])
 def list_chart_of_accounts(
     client_id: UUID,
@@ -392,20 +770,8 @@ def list_chart_of_accounts(
         .scalars()
         .all()
     )
-    return [
-        CoaOut(
-            id=a.id,
-            client_id=a.client_id,
-            code=a.code,
-            name=a.name,
-            account_type=a.account_type.value,
-            normal_balance=a.normal_balance.value,
-            is_active=a.is_active,
-            is_leaf=a.is_leaf,
-            parent_account_id=a.parent_account_id,
-        )
-        for a in rows
-    ]
+    usage = account_usage(sess, client_id=client_id)
+    return [_coa_out(a, usage=usage) for a in rows]
 
 
 @router.post(
@@ -421,29 +787,83 @@ def create_account(
 ) -> CoaOut:
     _require_firm_scope(identity)
     _load_client_or_404(sess, client_id)
-    a = ChartOfAccounts(
-        id=uuid4(),
-        firm_id=identity.firm_id,
-        client_id=client_id,
-        code=body.code,
-        name=body.name,
-        account_type=body.account_type,
-        normal_balance=body.normal_balance,
-        is_active=True,
+    with _coa_errors():
+        a = coa_create_account(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+            code=body.code,
+            name=body.name,
+            account_type=body.account_type,
+            sub_type=body.sub_type,
+            parent_account_id=body.parent_account_id,
+        )
+    return _coa_out(a)
+
+
+@router.patch(
+    "/{client_id}/chart-of-accounts/{account_id}",
+    response_model=CoaOut,
+)
+def update_account(
+    client_id: UUID,
+    account_id: UUID,
+    body: CoaUpdateIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> CoaOut:
+    """Rename, recode, retype, reparent, or (de)activate an account.
+
+    Deactivating is the safe counterpart to DELETE: it keeps every posted
+    journal line intact while dropping the account out of pickers.
+    """
+    _require_firm_scope(identity)
+    _load_client_or_404(sess, client_id)
+    # Absent vs explicit-null matters for parent_account_id.
+    parent_arg: object = (
+        body.parent_account_id
+        if "parent_account_id" in body.model_fields_set
+        else COA_UNSET
     )
-    sess.add(a)
-    sess.flush()
-    return CoaOut(
-        id=a.id,
-        client_id=a.client_id,
-        code=a.code,
-        name=a.name,
-        account_type=a.account_type.value,
-        normal_balance=a.normal_balance.value,
-        is_active=a.is_active,
-        is_leaf=a.is_leaf,
-        parent_account_id=a.parent_account_id,
-    )
+    with _coa_errors():
+        a = coa_update_account(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+            account_id=account_id,
+            code=body.code,
+            name=body.name,
+            account_type=body.account_type,
+            sub_type=body.sub_type,
+            parent_account_id=parent_arg,
+            is_active=body.is_active,
+        )
+    return _coa_out(a, usage=account_usage(sess, client_id=client_id))
+
+
+@router.delete(
+    "/{client_id}/chart-of-accounts/{account_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_account(
+    client_id: UUID,
+    account_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> None:
+    """Remove an account. Refused (409) if it has journal lines or children."""
+    _require_firm_scope(identity)
+    _load_client_or_404(sess, client_id)
+    with _coa_errors():
+        coa_delete_account(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            actor=identity.subject,
+            account_id=account_id,
+        )
 
 
 # --------------------------------------------------------------------------- #

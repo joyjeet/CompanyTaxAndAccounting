@@ -32,6 +32,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { useApi } from "../../api/useApi";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
 import { fmtDate, fmtMoney, shortId, todayIso } from "../../lib/format";
@@ -73,20 +74,20 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
   const toasterId = useId("je-toaster");
   const { dispatchToast } = useToastController(toasterId);
 
-  const periods = useQuery({
-    queryKey: ["periods", clientId],
-    queryFn: () => api.listPeriods(clientId),
-  });
   const accounts = useQuery({
     queryKey: ["accounts", clientId],
     queryFn: () => api.listAccounts(clientId),
   });
 
-  const [periodFilter, setPeriodFilter] = useState<string | undefined>(undefined);
+  const dateFilter = useReportPeriod("all");
 
   const entries = useQuery({
-    queryKey: ["entries", clientId, periodFilter],
-    queryFn: () => api.listJournalEntries(clientId, periodFilter),
+    queryKey: ["entries", clientId, dateFilter.range.startDate, dateFilter.range.endDate],
+    queryFn: () =>
+      api.listJournalEntries(clientId, {
+        dateFrom: dateFilter.range.startDate,
+        dateTo: dateFilter.range.endDate,
+      }),
   });
 
   const accountMap = useMemo(
@@ -96,7 +97,6 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
 
   // ---- Post dialog ----
   const [open, setOpen] = useState(false);
-  const [period, setPeriod] = useState("");
   const [entryDate, setEntryDate] = useState(todayIso());
   const [memo, setMemo] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([
@@ -118,7 +118,6 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
     mutationFn: () =>
       api.postJournalEntry({
         client_id: clientId,
-        period_id: period,
         entry_date: entryDate,
         memo: memo || null,
         lines: lines
@@ -174,19 +173,7 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
         }}
         toolbar={
           <div style={{ display: "flex", columnGap: 12 }}>
-            <Dropdown
-              placeholder="All periods"
-              value={periods.data?.find((p) => p.id === periodFilter)?.name ?? "All periods"}
-              selectedOptions={periodFilter ? [periodFilter] : []}
-              onOptionSelect={(_, d) => setPeriodFilter(d.optionValue || undefined)}
-            >
-              <Option value="">All periods</Option>
-              {(periods.data ?? []).map((p) => (
-                <Option key={p.id} value={p.id}>
-                  {p.name}
-                </Option>
-              ))}
-            </Dropdown>
+            <ReportPeriodPicker state={dateFilter} />
             <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="primary" icon={<AddRegular />}>
@@ -198,34 +185,17 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
                   <DialogTitle>Post manual journal entry</DialogTitle>
                   <DialogContent>
                     <div style={{ display: "grid", rowGap: 12, marginTop: 8 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                        <Field label="Period" required>
-                          <Dropdown
-                            placeholder="Select period"
-                            selectedOptions={period ? [period] : []}
-                            value={periods.data?.find((p) => p.id === period)?.name ?? ""}
-                            onOptionSelect={(_, d) => setPeriod(d.optionValue ?? "")}
-                          >
-                            {(periods.data ?? []).map((p) => (
-                              <Option
-                                key={p.id}
-                                value={p.id}
-                                text={p.is_locked ? `${p.name} (locked)` : p.name}
-                                disabled={p.is_locked}
-                              >
-                                {p.is_locked ? `${p.name} (locked)` : p.name}
-                              </Option>
-                            ))}
-                          </Dropdown>
-                        </Field>
-                        <Field label="Entry date" required>
-                          <Input
-                            type="date"
-                            value={entryDate}
-                            onChange={(_, d) => setEntryDate(d.value)}
-                          />
-                        </Field>
-                      </div>
+                      <Field
+                        label="Entry date"
+                        required
+                        hint="The books are continuous — the entry is recorded on this exact date."
+                      >
+                        <Input
+                          type="date"
+                          value={entryDate}
+                          onChange={(_, d) => setEntryDate(d.value)}
+                        />
+                      </Field>
                       <Field label="Memo">
                         <Input value={memo} onChange={(_, d) => setMemo(d.value)} />
                       </Field>
@@ -312,7 +282,7 @@ export default function JournalEntriesTab({ clientId }: { clientId: string }) {
                     </DialogTrigger>
                     <Button
                       appearance="primary"
-                      disabled={!period || !totals.balanced || post.isPending}
+                      disabled={!totals.balanced || post.isPending}
                       onClick={() => post.mutate()}
                     >
                       Post

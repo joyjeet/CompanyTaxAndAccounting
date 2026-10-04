@@ -41,6 +41,9 @@ param apiImage string
 @description('Container image for the worker role.')
 param workerImage string
 
+@description('Container image for the UI role.')
+param uiImage string
+
 @secure()
 @description('Postgres administrator password. Supplied from CI via KV reference; never committed.')
 param postgresAdminPassword string
@@ -86,6 +89,8 @@ param apiMinReplicas int = 1
 param apiMaxReplicas int = 10
 param workerMinReplicas int = 1
 param workerMaxReplicas int = 20
+param uiMinReplicas int = 1
+param uiMaxReplicas int = 3
 
 @description('Provision Front Door + WAF in front of the ACA app. Set false to save cost on dev/smoke deploys.')
 param enableFrontDoor bool = true
@@ -110,6 +115,9 @@ param acrLoginServer string = ''
 @description('ACR resource name. Required when `acrLoginServer` is set so we can create the AcrPull role assignment inside the same resource group.')
 param acrName string = ''
 
+@description('Resource group that contains the shared ACR used by the container apps.')
+param acrResourceGroup string = 'rg-ctax-shared-cus'
+
 var commonTags = {
   app: namePrefix
   env: env
@@ -126,6 +134,8 @@ var commonTags = {
 // ---------------------------------------------------------------------------
 var prefix = '${namePrefix}-${env}-${locationShort}'
 var u = uniqueString(subscription().id, env, locationShort, namePrefix)
+var runtimeAppEnv = env == 'dev' ? 'test' : (env == 'staging' ? 'staging' : 'prod')
+var runtimeAppAuthMode = env == 'dev' ? 'test' : 'jwt'
 var names = {
   rg:           'rg-${prefix}'
   vnet:         'vnet-${prefix}'
@@ -138,6 +148,8 @@ var names = {
   containerEnv: 'cae-${prefix}'
   apiApp:       'ca-${prefix}-api'
   workerApp:    'ca-${prefix}-worker'
+  uiApp:        'ca-${prefix}-ui'
+  migrationJob: 'ca-${prefix}-migrate'
   frontDoor:    'afd-${prefix}'
   wafPolicy:    take(replace('waf${namePrefix}${env}${locationShort}', '-', ''), 64)
   uami:         'id-${prefix}-app'
@@ -172,7 +184,7 @@ module identity 'modules/identity.bicep' = {
 }
 
 module acrPull 'modules/acrRoleAssignment.bicep' = if (!empty(acrName)) {
-  scope: rg
+  scope: resourceGroup(acrResourceGroup)
   name: 'acrPull'
   params: {
     acrName: acrName
@@ -282,12 +294,18 @@ module apiApp 'modules/containerapp.bicep' = {
     uamiClientId: identity.outputs.uamiClientId
     image: apiImage
     role: 'api'
+    appEnv: runtimeAppEnv
+    appAuthMode: runtimeAppAuthMode
+    // Without Front Door the API is internal-only; the UI proxies to it inside
+    // the environment, so it never needs a public ingress.
+    ingressExternal: enableFrontDoor
     minReplicas: apiMinReplicas
     maxReplicas: apiMaxReplicas
     keyVaultUri: keyvault.outputs.keyVaultUri
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     postgresFqdn: postgres.outputs.serverFqdn
     postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
     storageAccountName: storage.outputs.storageName
     serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
     corsOrigins: corsOrigins
@@ -309,14 +327,68 @@ module workerApp 'modules/containerapp.bicep' = {
     uamiClientId: identity.outputs.uamiClientId
     image: workerImage
     role: 'worker'
+    appEnv: runtimeAppEnv
+    appAuthMode: runtimeAppAuthMode
     minReplicas: workerMinReplicas
     maxReplicas: workerMaxReplicas
     keyVaultUri: keyvault.outputs.keyVaultUri
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     postgresFqdn: postgres.outputs.serverFqdn
     postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
     storageAccountName: storage.outputs.storageName
     serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
+    acrLoginServer: acrLoginServer
+  }
+  dependsOn: [ acrPull ]
+}
+
+module uiApp 'modules/containerapp.bicep' = {
+  scope: rg
+  name: 'uiApp'
+  params: {
+    location: location
+    name: names.uiApp
+    tags: commonTags
+    environmentId: containerEnv.outputs.envId
+    uamiId: identity.outputs.uamiId
+    uamiClientId: identity.outputs.uamiClientId
+    image: uiImage
+    role: 'ui'
+    appEnv: runtimeAppEnv
+    appAuthMode: runtimeAppAuthMode
+    // No Front Door: the UI is the only public app and proxies /api to the
+    // internal API's FQDN. With Front Door, that routing is done at the edge.
+    apiOrigin: enableFrontDoor ? '' : apiApp.outputs.fqdn
+    minReplicas: uiMinReplicas
+    maxReplicas: uiMaxReplicas
+    keyVaultUri: keyvault.outputs.keyVaultUri
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    postgresFqdn: postgres.outputs.serverFqdn
+    postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
+    storageAccountName: storage.outputs.storageName
+    serviceBusFqdn: replace(replace(servicebus.outputs.serviceBusEndpoint, 'https://', ''), '/', '')
+    acrLoginServer: acrLoginServer
+  }
+  dependsOn: [ acrPull ]
+}
+
+module migrationJob 'modules/migrationjob.bicep' = {
+  scope: rg
+  name: 'migrationJob'
+  params: {
+    location: location
+    name: names.migrationJob
+    tags: commonTags
+    environmentId: containerEnv.outputs.envId
+    uamiId: identity.outputs.uamiId
+    uamiClientId: identity.outputs.uamiClientId
+    image: apiImage
+    keyVaultUri: keyvault.outputs.keyVaultUri
+    postgresFqdn: postgres.outputs.serverFqdn
+    postgresDatabase: firmDatabases[0]
+    postgresAdminPassword: postgresAdminPassword
     acrLoginServer: acrLoginServer
   }
   dependsOn: [ acrPull ]
@@ -329,7 +401,8 @@ module frontdoor 'modules/frontdoor.bicep' = if (enableFrontDoor) {
     afdName: names.frontDoor
     wafPolicyName: names.wafPolicy
     tags: commonTags
-    originHostName: apiApp.outputs.fqdn
+    webOriginHostName: uiApp.outputs.fqdn
+    apiOriginHostName: apiApp.outputs.fqdn
     originPrivateLinkResourceId: containerEnv.outputs.envId
     wafMode: wafMode
   }
@@ -350,6 +423,7 @@ module alerts 'modules/alerts.bicep' = if (enableAlerts) {
 
 output rgName string = rg.name
 output apiFqdn string = apiApp.outputs.fqdn
+output migrationJobName string = migrationJob.outputs.jobName
 output frontDoorEndpoint string = enableFrontDoor ? frontdoor!.outputs.endpointHostName : ''
 output keyVaultUri string = keyvault.outputs.keyVaultUri
 output postgresFqdn string = postgres.outputs.serverFqdn

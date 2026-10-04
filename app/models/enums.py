@@ -26,6 +26,74 @@ NORMAL_BALANCE_FOR: dict[AccountType, NormalBalance] = {
 }
 
 
+class AccountSubType(enum.StrEnum):
+    """Reporting classification within an ``AccountType``.
+
+    ``AccountType`` carries the five accounting-equation classes, which is
+    what the ledger needs to sign a balance. It is NOT enough to lay out a
+    financial statement: "expense" alone cannot tell you whether an account
+    belongs above the gross-profit line (COGS), between gross profit and
+    operating income (operating expense), or below it (interest, taxes).
+
+    Before this enum existed the statement builder inferred those buckets
+    from numeric code ranges, which silently disagreed with the shipped
+    chart of accounts and pushed every operating expense below the
+    operating-income line. The classification is now explicit data on the
+    account, so renumbering the chart can never move a line on the P&L.
+
+    Values mirror the QuickBooks/Xero account-type vocabulary so imports
+    and exports map one-to-one.
+    """
+
+    # --- Assets (balance sheet ordering) --- #
+    CURRENT_ASSET = "current_asset"
+    FIXED_ASSET = "fixed_asset"
+    INTANGIBLE_ASSET = "intangible_asset"
+    OTHER_ASSET = "other_asset"
+    # --- Liabilities --- #
+    CURRENT_LIABILITY = "current_liability"
+    LONG_TERM_LIABILITY = "long_term_liability"
+    # --- Equity --- #
+    EQUITY = "equity"
+    # --- Revenue (P&L ordering) --- #
+    OPERATING_REVENUE = "operating_revenue"
+    OTHER_INCOME = "other_income"
+    # --- Expense (P&L ordering) --- #
+    COGS = "cogs"
+    OPERATING_EXPENSE = "operating_expense"
+    OTHER_EXPENSE = "other_expense"
+    INCOME_TAX = "income_tax"
+
+
+# Which AccountType each sub-type is legal under. Enforced when a COA row
+# is created or re-typed so a "cogs" account can never be an asset.
+ACCOUNT_TYPE_FOR_SUBTYPE: dict[AccountSubType, AccountType] = {
+    AccountSubType.CURRENT_ASSET: AccountType.ASSET,
+    AccountSubType.FIXED_ASSET: AccountType.ASSET,
+    AccountSubType.INTANGIBLE_ASSET: AccountType.ASSET,
+    AccountSubType.OTHER_ASSET: AccountType.ASSET,
+    AccountSubType.CURRENT_LIABILITY: AccountType.LIABILITY,
+    AccountSubType.LONG_TERM_LIABILITY: AccountType.LIABILITY,
+    AccountSubType.EQUITY: AccountType.EQUITY,
+    AccountSubType.OPERATING_REVENUE: AccountType.REVENUE,
+    AccountSubType.OTHER_INCOME: AccountType.REVENUE,
+    AccountSubType.COGS: AccountType.EXPENSE,
+    AccountSubType.OPERATING_EXPENSE: AccountType.EXPENSE,
+    AccountSubType.OTHER_EXPENSE: AccountType.EXPENSE,
+    AccountSubType.INCOME_TAX: AccountType.EXPENSE,
+}
+
+# Fallback when a caller supplies only an AccountType. Chosen to be the
+# least surprising bucket for a hand-created account: operating, current.
+DEFAULT_SUBTYPE_FOR: dict[AccountType, AccountSubType] = {
+    AccountType.ASSET: AccountSubType.CURRENT_ASSET,
+    AccountType.LIABILITY: AccountSubType.CURRENT_LIABILITY,
+    AccountType.EQUITY: AccountSubType.EQUITY,
+    AccountType.REVENUE: AccountSubType.OPERATING_REVENUE,
+    AccountType.EXPENSE: AccountSubType.OPERATING_EXPENSE,
+}
+
+
 class JournalEntryStatus(enum.StrEnum):
     DRAFT = "draft"
     POSTED = "posted"
@@ -82,6 +150,36 @@ class AuditAction(enum.StrEnum):
     ENTITY_FORM_RULESET_ACTIVATE = "entity_form_ruleset_activate"
     TAX_WORKSHEET_REJECT = "tax_worksheet_reject"
     TAX_WORKSHEET_SUPERSEDE = "tax_worksheet_supersede"
+    USER_INVITE_CREATE = "user_invite_create"
+    USER_INVITE_CANCEL = "user_invite_cancel"
+    USER_INVITE_ACCEPT = "user_invite_accept"
+    USER_ROLE_UPDATE = "user_role_update"
+    USER_STATUS_UPDATE = "user_status_update"
+    # Client lifecycle.
+    CLIENT_ARCHIVE = "client_archive"
+    CLIENT_RESTORE = "client_restore"
+    CLIENT_DELETE = "client_delete"
+
+
+class StaffRole(enum.StrEnum):
+    FIRM_OWNER = "firm_owner"
+    FIRM_ADMIN = "firm_admin"
+    MANAGER = "manager"
+    STAFF = "staff"
+    READ_ONLY = "read_only"
+    CLIENT_PORTAL = "client_portal"
+
+
+class MembershipStatus(enum.StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
+class InviteStatus(enum.StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
 
 
 class OcrStatus(enum.StrEnum):
@@ -247,17 +345,44 @@ class CoaNodeOrigin(enum.StrEnum):
 
 
 class Industry(enum.StrEnum):
-    """Industry overlays the firm currently supports.
+    """Industries a client can be classified under.
 
     Treat values as strings on the wire; the enum exists for type-safety in
-    seed code. New industries are added by (a) appending a value here and
-    (b) adding a seed file under `app/data/coa_templates/<industry>.py`.
+    seed code. An industry does NOT have to ship a COA overlay -- most do
+    not, and those clients simply get the general chart. Adding a seed file
+    under `app/data/coa_templates/<industry>.py` is what turns an industry
+    into an overlay; the value here is what drives reporting and the
+    entity/industry-specific tax questionnaires.
     """
 
     GENERIC = "generic"
+    # Overlays currently bundled.
     CONSTRUCTION = "construction"
     RETAIL_ECOMMERCE = "retail_ecommerce"
     PROFESSIONAL_SERVICES = "professional_services"
+    # No overlay yet -- these fall back to the general chart.
+    AGRICULTURE = "agriculture"
+    AUTOMOTIVE = "automotive"
+    CHILDCARE = "childcare"
+    EDUCATION = "education"
+    ENERGY_UTILITIES = "energy_utilities"
+    FINANCIAL_SERVICES = "financial_services"
+    FITNESS_WELLNESS = "fitness_wellness"
+    HEALTHCARE = "healthcare"
+    HOSPITALITY = "hospitality"
+    INSURANCE = "insurance"
+    LEGAL_SERVICES = "legal_services"
+    MANUFACTURING = "manufacturing"
+    MEDIA_ENTERTAINMENT = "media_entertainment"
+    NONPROFIT = "nonprofit"
+    PERSONAL_SERVICES = "personal_services"
+    PROPERTY_MANAGEMENT = "property_management"
+    REAL_ESTATE = "real_estate"
+    RESTAURANT_FOOD_SERVICE = "restaurant_food_service"
+    SOFTWARE_SAAS = "software_saas"
+    TRANSPORTATION_LOGISTICS = "transportation_logistics"
+    VETERINARY = "veterinary"
+    WHOLESALE_DISTRIBUTION = "wholesale_distribution"
 
 
 class EntityType(enum.StrEnum):

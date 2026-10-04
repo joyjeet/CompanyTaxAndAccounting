@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     #          The application also accepts a small set of test-only tokens.
     app_auth_mode: Literal["jwt", "test"] = "test"
 
+    # Where firm_id / client_id / scope come from once the token is verified.
+    # 'claims'     : read them from the token (needs directory extension
+    #                attributes + a claims-mapping policy; revocation waits for
+    #                token expiry).
+    # 'membership' : resolve them from our own firm_membership rows. Revocation
+    #                is immediate and onboarding needs no directory admin.
+    # Production should use 'membership'; 'claims' remains the default so the
+    # existing test-token fixtures keep working unchanged.
+    app_authz_source: Literal["claims", "membership"] = "claims"
+
     # OIDC parameters (used when app_auth_mode == 'jwt'). For Entra ID these
     # come from the App Registration in the directory. NEVER commit secrets.
     oidc_issuer: str | None = None
@@ -130,6 +140,20 @@ class Settings(BaseSettings):
     app_categorizer_backend: Literal[
         "xero_rule_engine", "dictionary", "azure_openai"
     ] = "xero_rule_engine"
+    # Where categorization rules are READ FROM and WRITTEN TO at runtime.
+    #
+    # This must not point at a tracked file. Reviewers accepting a suggested
+    # account teach the rule engine (see app/domain/promotion.py), and the
+    # rules-engine API lets operators edit rules directly — both rewrite this
+    # file in place. Pointing it at `app/data/` dirtied the working tree on
+    # every such action, and `scripts/open_pr.sh` runs `git add -A`, so the
+    # churn landed in unrelated PRs.
+    #
+    # `data/` is gitignored, so runtime edits stay out of version control. When
+    # this file is absent — a fresh clone, or a container, since the Dockerfile
+    # copies `app/` but not the gitignored `data/` — the loader falls back to
+    # the bundled defaults that ship at DEFAULT_RULES_FILE, which remain
+    # tracked. See app/integrations/account_categorizer.py.
     app_categorizer_rules_file: str = "data/categorization_rules.yaml"
     azure_openai_endpoint: str | None = None
     azure_openai_api_key: str | None = None

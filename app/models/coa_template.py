@@ -128,6 +128,9 @@ class CoaTemplateNode(Base):
         ),
         nullable=False,
     )
+    # Reporting classification within `account_type` — copied verbatim onto
+    # `chart_of_accounts.sub_type` when the template is instantiated.
+    sub_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # `parent_code` may point at a code in the SAME template (general base)
     # or at a code in the general base (industry overlays). It's a string
     # rather than an FK so overlay nodes can reference general nodes without

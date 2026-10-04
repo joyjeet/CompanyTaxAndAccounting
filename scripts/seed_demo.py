@@ -16,11 +16,22 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
 from app.db.session import tenant_session, unscoped_session
 from app.db.tenant import AccessScope, TenantContext
 from app.models.accounting import AccountingPeriod, ChartOfAccounts, Client, Firm
 from app.models.client_profile import ClientProfile
-from app.models.enums import AccountType, EntityType, Industry, NormalBalance
+from app.models.enums import (
+    AccountType,
+    EntityType,
+    Industry,
+    MembershipStatus,
+    NormalBalance,
+    StaffRole,
+)
+from app.models.identity import FirmMembership, UserAccount
 
 
 def _create_firm(name: str) -> UUID:
@@ -146,9 +157,68 @@ def _create_client_and_coa(firm_id: UUID, client_name: str) -> tuple[UUID, UUID]
     return client_id, period_id
 
 
+DEMO_STAFF_SUBJECT = "dev-user@example.com"
+DEMO_PORTAL_SUBJECT = "dev-client@example.com"
+
+
+def _get_or_create_user(sess: Session, subject: str) -> UUID:
+    """`user_account.subject` is unique, and the demo stack re-runs this script
+    on every boot, so a plain INSERT would crash the container on restart."""
+    existing = sess.execute(
+        select(UserAccount.id).where(UserAccount.subject == subject)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    user_id = uuid4()
+    sess.add(UserAccount(id=user_id, subject=subject, email=subject))
+    return user_id
+
+
+def _create_memberships(firm_id: UUID, client_id: UUID) -> None:
+    """Give the two default dev-login subjects real membership rows.
+
+    Without these, `APP_AUTHZ_SOURCE=membership` resolves no workspace and the
+    UI parks you on "You're signed in, but not set up yet" even though the
+    token is perfectly valid.
+
+    `user_account` has no RLS, so it is written unscoped. `firm_membership`
+    does, so it is written inside the firm's tenant context.
+    """
+    with unscoped_session() as sess:
+        staff_user_id = _get_or_create_user(sess, DEMO_STAFF_SUBJECT)
+        portal_user_id = _get_or_create_user(sess, DEMO_PORTAL_SUBJECT)
+
+    with tenant_session(
+        TenantContext(firm_id=firm_id, client_id=None, scope=AccessScope.FIRM)
+    ) as sess:
+        sess.add_all(
+            [
+                # Staff see the whole firm — client_id stays NULL.
+                FirmMembership(
+                    id=uuid4(),
+                    firm_id=firm_id,
+                    user_id=staff_user_id,
+                    client_id=None,
+                    role=StaffRole.FIRM_OWNER,
+                    status=MembershipStatus.ACTIVE,
+                ),
+                # Portal users are pinned to exactly one client.
+                FirmMembership(
+                    id=uuid4(),
+                    firm_id=firm_id,
+                    user_id=portal_user_id,
+                    client_id=client_id,
+                    role=StaffRole.CLIENT_PORTAL,
+                    status=MembershipStatus.ACTIVE,
+                ),
+            ]
+        )
+
+
 def main() -> None:
     firm_id = _create_firm("Demo CPA")
     client_id, period_id = _create_client_and_coa(firm_id, "Demo Client Inc.")
+    _create_memberships(firm_id, client_id)
     print("Seeded demo data.")
     print(f"  firm_id   = {firm_id}")
     print(f"  client_id = {client_id}")
@@ -157,6 +227,10 @@ def main() -> None:
     print("Use these in the frontend dev login form:")
     print(f"  Firm ID:   {firm_id}")
     print(f"  Client ID: {client_id}  (only required for role=client_portal)")
+    print()
+    print("Memberships (used when APP_AUTHZ_SOURCE=membership):")
+    print(f"  {DEMO_STAFF_SUBJECT:<24} firm_owner    -> whole firm")
+    print(f"  {DEMO_PORTAL_SUBJECT:<24} client_portal -> Demo Client Inc.")
 
 
 if __name__ == "__main__":

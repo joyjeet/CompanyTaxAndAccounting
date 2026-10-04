@@ -83,6 +83,13 @@ class Client(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     external_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Archived clients keep every row they ever had; they are hidden from
+    # pickers and refuse new postings. Retention rules mean a departed
+    # client's books have to survive long after the engagement ends.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -123,6 +130,13 @@ class ChartOfAccounts(Base):
         ),
         nullable=False,
     )
+    # Reporting classification within `account_type` (COGS vs operating
+    # expense vs other expense, current vs fixed asset, ...). Drives how the
+    # account is laid out on the P&L and balance sheet. Stored as a plain
+    # String rather than a PG enum so a new sub-type ships as a data change.
+    # Nullable only for rows created before migration 0012; readers fall
+    # back to code-range inference when it is NULL.
+    sub_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # --- Hierarchy (Phase 8) -------------------------------------------- #
     # Self-FK; root accounts have parent NULL. CHECK constraint in the
     # migration forbids cycles via path prefix and forbids cross-client FKs.

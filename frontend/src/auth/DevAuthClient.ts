@@ -52,7 +52,7 @@ export class DevAuthClient implements AuthClient {
     const body = {
       sub: req.sub,
       role: req.role,
-      firm_id: req.firmId,
+      firm_id: req.firmId ?? null,
       client_id: req.clientId ?? null,
     };
     const resp = await fetch(`${this.apiBase}/auth/dev-token`, {

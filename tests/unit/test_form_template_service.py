@@ -1,8 +1,9 @@
 """Unit tests for the FormTemplate registry service (Phase 8b)."""
 from __future__ import annotations
 
+from uuid import UUID, uuid4
+
 import pytest
-from sqlalchemy import select
 
 from app.db.session import tenant_session, unscoped_session
 from app.db.tenant import AccessScope, TenantContext
@@ -16,22 +17,19 @@ from app.domain.form_template import (
     verify_template,
 )
 from app.models.enums import FormTemplateStatus, TaxFormCode
-from app.models.form_template import FormTemplate
 
 
 def _scoped_firm() -> TenantContext:
     # form_template is a reference table — no firm_id column — but the
     # service still requires AccessScope.FIRM for governance. We can use
     # any non-zero UUID as firm_id since the audit row is firm-level.
-    from uuid import uuid4
     return TenantContext(firm_id=uuid4(), scope=AccessScope.FIRM)
 
 
-def _make_firm() -> "UUID":  # type: ignore[name-defined]
+def _make_firm() -> UUID:
     """Create a Firm row + return its id so audit FK is satisfied."""
-    from uuid import uuid4
-
     from app.models.accounting import Firm
+
     firm_id = uuid4()
     with unscoped_session() as sess:
         sess.add(Firm(id=firm_id, name=f"TmplTestFirm-{firm_id}"))

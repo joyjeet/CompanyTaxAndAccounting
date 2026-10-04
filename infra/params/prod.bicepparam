@@ -1,11 +1,14 @@
 using '../main.bicep'
 
 param env = 'prod'
-param location = 'eastus2'
-param locationShort = 'eus'
+param location = 'centralus'
+param locationShort = 'cus'
 
-param apiImage = 'ctaaprodeus.azurecr.io/ctaa-api:prod'
-param workerImage = 'ctaaprodeus.azurecr.io/ctaa-worker:prod'
+param apiImage = 'ctaaprodcus.azurecr.io/ctaa-api:prod'
+param workerImage = 'ctaaprodcus.azurecr.io/ctaa-worker:prod'
+param uiImage = 'ctaaprodcus.azurecr.io/ctaa-ui:prod'
+param acrLoginServer = 'ctaxdemocusreg.azurecr.io'
+param acrName = 'ctaxdemocusreg'
 
 param postgresAdminPassword = ''
 
@@ -31,3 +34,5 @@ param apiMinReplicas = 3
 param apiMaxReplicas = 20
 param workerMinReplicas = 2
 param workerMaxReplicas = 30
+param uiMinReplicas = 2
+param uiMaxReplicas = 10

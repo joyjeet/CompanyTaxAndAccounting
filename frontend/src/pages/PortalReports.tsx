@@ -22,7 +22,7 @@ import { ArrowDownloadRegular } from "@fluentui/react-icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { useApi } from "../api/useApi";
-import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../components/States";
@@ -42,7 +42,7 @@ const STATUS_COLOR: Record<string, "success" | "warning" | "informative"> = {
 export default function PortalReports() {
   const styles = useStyles();
   const api = useApi();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
   const toasterId = useId("portal-reports-toaster");
   const { dispatchToast } = useToastController(toasterId);
 

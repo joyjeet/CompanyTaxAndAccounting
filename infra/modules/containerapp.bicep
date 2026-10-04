@@ -10,7 +10,7 @@ param environmentId string
 param uamiId string
 param uamiClientId string
 param image string
-@allowed([ 'api', 'worker' ])
+@allowed([ 'api', 'worker', 'ui' ])
 param role string = 'api'
 param minReplicas int = 1
 param maxReplicas int = 10
@@ -20,14 +20,29 @@ param appInsightsConnectionString string
 param postgresFqdn string
 @description('Postgres database name.')
 param postgresDatabase string = 'ctaa'
+@secure()
+@description('Postgres admin password used to compose runtime and owner DB URLs.')
+param postgresAdminPassword string
 @description('Storage account name (for Blob via Identity).')
 param storageAccountName string
 @description('Service Bus FQDN.')
 param serviceBusFqdn string
+@description('Application runtime environment value consumed by app.core.config.Settings.app_env.')
+@allowed([ 'local', 'test', 'staging', 'prod' ])
+param appEnv string = 'prod'
+@description('Application auth mode consumed by app.core.config.Settings.app_auth_mode.')
+@allowed([ 'jwt', 'test' ])
+param appAuthMode string = 'jwt'
 @description('Comma-separated CORS origins (API only).')
 param corsOrigins string = ''
 @description('Service Bus queue name (worker scale target).')
 param queueName string = 'extraction-jobs'
+
+@description('Whether this app gets a public (external) ingress. Set false for the API in the no-Front-Door topology so it is reachable only inside the environment.')
+param ingressExternal bool = true
+
+@description('Internal FQDN of the API app, injected into the UI container as API_ORIGIN so its nginx can proxy /api to the API. Empty when Front Door fronts the API instead.')
+param apiOrigin string = ''
 
 @description('ACR login server (e.g. ctaaprodeus.azurecr.io). When supplied, the container app is configured to pull from this ACR using the UAMI. The caller is responsible for granting AcrPull on the UAMI before deployment.')
 param acrLoginServer string = ''
@@ -39,14 +54,17 @@ param readinessPath string = '/readyz'
 param revisionSuffix string = take(uniqueString(image, readinessPath), 10)
 
 var commonEnv = [
-  { name: 'APP_ENV',                     value: 'prod' }
-  { name: 'APP_AUTH_MODE',               value: 'jwt' }
+  { name: 'APP_ENV',                     value: appEnv }
+  { name: 'APP_AUTH_MODE',               value: appAuthMode }
+  { name: 'APP_QUEUE_BACKEND',           value: appEnv == 'prod' ? 'redis' : 'memory' }
   { name: 'APP_KEK_PROVIDER',            value: 'keyvault' }
   { name: 'AZURE_KEYVAULT_URL',          value: keyVaultUri }
   { name: 'AZURE_CLIENT_ID',             value: uamiClientId }
   { name: 'APP_CORS_ORIGINS',            value: corsOrigins }
   { name: 'POSTGRES_FQDN',               value: postgresFqdn }
   { name: 'POSTGRES_DATABASE',           value: postgresDatabase }
+  { name: 'DATABASE_URL',                secretRef: 'database-url' }
+  { name: 'DATABASE_OWNER_URL',          secretRef: 'database-owner-url' }
   { name: 'AZURE_STORAGE_ACCOUNT',       value: storageAccountName }
   { name: 'AZURE_SERVICEBUS_FQDN',       value: serviceBusFqdn }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
@@ -55,13 +73,19 @@ var commonEnv = [
   { name: 'OTEL_RESOURCE_ATTRIBUTES',    value: 'service.name=${name},service.role=${role}' }
 ]
 
-var apiIngress = role == 'api' ? {
-  external: true
-  targetPort: 8000
+var databaseUrl = 'postgresql+psycopg://app_user:${postgresAdminPassword}@${postgresFqdn}:5432/${postgresDatabase}?sslmode=require'
+var databaseOwnerUrl = 'postgresql+psycopg://ctaa_owner:${postgresAdminPassword}@${postgresFqdn}:5432/${postgresDatabase}?sslmode=require'
+
+var appIngress = role == 'worker' ? null : {
+  external: ingressExternal
+  targetPort: role == 'ui' ? 8080 : 8000
   transport: 'auto'
   allowInsecure: false
   traffic: [ { latestRevision: true, weight: 100 } ]
-} : null
+}
+
+// The UI proxies /api to the internal API; give it the target via env.
+var uiExtraEnv = (role == 'ui' && !empty(apiOrigin)) ? [ { name: 'API_ORIGIN', value: apiOrigin } ] : []
 
 var workerScale = [
   {
@@ -85,6 +109,13 @@ var apiScale = [
   }
 ]
 
+var uiScale = [
+  {
+    name: 'http-concurrent'
+    http: { metadata: { concurrentRequests: '60' } }
+  }
+]
+
 resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
   name: name
   location: location
@@ -97,8 +128,18 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
     environmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
-      ingress: apiIngress
+      ingress: appIngress
       maxInactiveRevisions: 3
+      secrets: [
+        {
+          name: 'database-url'
+          value: databaseUrl
+        }
+        {
+          name: 'database-owner-url'
+          value: databaseOwnerUrl
+        }
+      ]
       registries: empty(acrLoginServer) ? [] : [
         {
           server: acrLoginServer
@@ -113,31 +154,31 @@ resource app 'Microsoft.App/containerApps@2024-10-02-preview' = {
           name: name
           image: image
           resources: { cpu: json('0.5'), memory: '1Gi' }
-          env: commonEnv
-          probes: role == 'api' ? [
+          env: concat(commonEnv, uiExtraEnv)
+          probes: role == 'worker' ? [] : [
             {
               type: 'Liveness'
-              httpGet: { path: '/healthz', port: 8000 }
+              httpGet: { path: role == 'ui' ? '/' : '/healthz', port: role == 'ui' ? 8080 : 8000 }
               initialDelaySeconds: 10
               periodSeconds: 30
             }
             {
               type: 'Readiness'
-              httpGet: { path: readinessPath, port: 8000 }
+              httpGet: { path: role == 'ui' ? '/' : readinessPath, port: role == 'ui' ? 8080 : 8000 }
               initialDelaySeconds: 5
               periodSeconds: 15
             }
-          ] : []
+          ]
         }
       ]
       scale: {
         minReplicas: minReplicas
         maxReplicas: maxReplicas
-        rules: role == 'api' ? apiScale : workerScale
+        rules: role == 'api' ? apiScale : (role == 'ui' ? uiScale : workerScale)
       }
     }
   }
 }
 
-output fqdn string = role == 'api' ? app.properties.configuration.ingress.fqdn : ''
+output fqdn string = role == 'worker' ? '' : app.properties.configuration.ingress.fqdn
 output appId string = app.id

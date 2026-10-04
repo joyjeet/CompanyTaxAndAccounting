@@ -6,6 +6,7 @@ than aborting the batch.
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
@@ -20,14 +21,18 @@ from app.domain.promotion import (
 )
 from app.integrations.account_categorizer import load_rules_from_file
 from app.models.accounting import (
+    AccountingPeriod,
+    ChartOfAccounts,
     DraftClassification,
     JournalEntry,
     JournalLine,
     SourceDocument,
 )
 from app.models.enums import (
+    AccountType,
     DraftKind,
     DraftStatus,
+    NormalBalance,
     OcrStatus,
 )
 from tests.conftest import SeededWorld, ctx_firm_for_client
@@ -261,6 +266,145 @@ def test_promote_statement_account_overrides(world: SeededWorld) -> None:
     assert result.skipped == []
 
 
+def test_promote_statement_resolves_cash_rollup_to_leaf(
+    world: SeededWorld,
+) -> None:
+    a1 = world.a1
+    cash_leaf_id = uuid4()
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        cash_rollup = sess.get(ChartOfAccounts, a1.cash_account_id)
+        assert cash_rollup is not None
+        cash_rollup.name = "Current Assets"
+        cash_rollup.path = "1000"
+        cash_rollup.is_leaf = False
+        sess.add(
+            ChartOfAccounts(
+                id=cash_leaf_id,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                code="1011",
+                name="Operating Checking",
+                account_type=AccountType.ASSET,
+                normal_balance=NormalBalance.DEBIT,
+                parent_account_id=cash_rollup.id,
+                path="1000>1011",
+                depth=1,
+                is_leaf=True,
+            )
+        )
+
+    _, draft_id = _seed_statement_draft(
+        a1,
+        transactions=[
+            {
+                "date": "2026-07-05",
+                "description": "Customer deposit",
+                "amount": "100.00",
+                "direction": "deposit",
+                "proposed_account_code": "4000",
+            }
+        ],
+    )
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+            cash_account_code="1000",
+        )
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        lines = sess.execute(
+            select(JournalLine).where(
+                JournalLine.entry_id == result.journal_entry_ids[0]
+            )
+        ).scalars().all()
+        debit_line = next(line for line in lines if line.debit > 0)
+        assert debit_line.account_id == cash_leaf_id
+
+
+def test_promote_statement_honors_accept_reject_indexes(
+    world: SeededWorld,
+) -> None:
+    a1 = world.a1
+    txns = [
+        {
+            "date": "2026-07-05",
+            "raw_date": "07/05",
+            "description": "Accepted deposit",
+            "amount": "100.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+        {
+            "date": "2026-07-06",
+            "raw_date": "07/06",
+            "description": "Rejected payment",
+            "amount": "25.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+            accepted_indexes={0},
+            rejected_indexes={1},
+        )
+
+    assert len(result.journal_entry_ids) == 1
+    assert len(result.skipped) == 1
+    assert result.skipped[0]["index"] == "1"
+    assert "rejected by reviewer" in result.skipped[0]["reason"]
+
+
+def test_promote_statement_explicit_accept_confirms_low_confidence_row(
+    world: SeededWorld,
+) -> None:
+    a1 = world.a1
+    txns = [
+        {
+            "date": "2026-07-05",
+            "raw_date": "07/05",
+            "description": "Low confidence payment",
+            "amount": "100.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+            "_categorizer_needs_review": True,
+            "_categorizer_confidence": 0.45,
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+            accepted_indexes={0},
+        )
+
+    assert len(result.journal_entry_ids) == 1
+    assert result.skipped == []
+
+
 def test_promote_statement_persists_override_into_rules_file(
     world: SeededWorld,
     tmp_path,
@@ -323,6 +467,205 @@ def test_promote_statement_persists_override_into_rules_file(
     assert learned[0].conditions[1].field == "description"
     assert learned[0].conditions[1].operator == "contains"
     assert learned[0].conditions[1].value == "staples order"
+
+
+def test_promote_statement_uses_open_period_for_transaction_date(
+    world: SeededWorld,
+) -> None:
+    """Rows post against the open period that covers each transaction date."""
+    a1 = world.a1
+
+    period_2025_id = uuid4()
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        sess.add(
+            AccountingPeriod(
+                id=period_2025_id,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                name="2025",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 12, 31),
+                is_locked=False,
+            )
+        )
+
+    txns = [
+        {
+            "date": "2026-07-05",  # inside the period
+            "description": "Square deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+        {
+            "date": "2025-12-28",  # outside selected period, but in open 2025 period
+            "description": "Prior-year payment",
+            "amount": "60.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+        )
+
+    assert len(result.journal_entry_ids) == 2
+    assert result.skipped == []
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        entries = (
+            sess.execute(
+                select(JournalEntry).where(
+                    JournalEntry.id.in_(result.journal_entry_ids)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(entries) == 2
+        by_date = {je.entry_date: je for je in entries}
+        assert date(2026, 7, 5) in by_date
+        assert date(2025, 12, 28) in by_date
+
+        je_2026 = by_date[date(2026, 7, 5)]
+        je_2025 = by_date[date(2025, 12, 28)]
+        assert je_2026.period_id == a1.period_id
+        assert je_2025.period_id == period_2025_id
+
+
+def test_promote_statement_honours_dates_outside_the_selected_period(
+    world: SeededWorld,
+) -> None:
+    """Books are continuous: rows post on their own dates, not the period's."""
+    a1 = world.a1
+    txns = [
+        {
+            "date": "2025-07-05",
+            "description": "Square deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+        {
+            "date": "2025-07-15",
+            "description": "Office supplies",
+            "amount": "40.00",
+            "direction": "payment",
+            "proposed_account_code": "5000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+        )
+
+    assert len(result.journal_entry_ids) == 2
+    assert result.skipped == []
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        entries = (
+            sess.execute(
+                select(JournalEntry).where(
+                    JournalEntry.id.in_(result.journal_entry_ids)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(entries) == 2
+        # The 2025 dates are honoured verbatim — no clamping to the selected
+        # period, which is bypassed entirely because each row has a real date.
+        assert {je.entry_date for je in entries} == {
+            date(2025, 7, 5),
+            date(2025, 7, 15),
+        }
+        assert all(je.period_id != a1.period_id for je in entries)
+
+
+def test_promote_statement_skips_unparseable_dates(world: SeededWorld) -> None:
+    a1 = world.a1
+    txns = [
+        {
+            "date": "07/05/2026",  # not ISO 8601
+            "description": "Square deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with pytest.raises(AlreadyPromotedError):
+        with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+            promote_statement_draft(
+                sess,
+                firm_id=a1.firm_id,
+                client_id=a1.client_id,
+                actor="reviewer",
+                scope=AccessScope.FIRM,
+                draft_id=draft_id,
+                period_id=a1.period_id,
+            )
+
+
+def test_promote_statement_undated_row_falls_back_to_period_start(
+    world: SeededWorld,
+) -> None:
+    """A row the parser could not date still posts, at the period start.
+
+    `bank_statement._format_date` yields "" when the statement header carries
+    no inferable year. Skipping those would make such a statement post
+    nothing, so the fallback is deliberate — it is the one remaining case
+    where the posted date is not the transaction's own.
+    """
+    a1 = world.a1
+    txns = [
+        {
+            "date": "",
+            "raw_date": "07/05",
+            "description": "Undated deposit",
+            "amount": "500.00",
+            "direction": "deposit",
+            "proposed_account_code": "4000",
+        },
+    ]
+    _, draft_id = _seed_statement_draft(a1, transactions=txns)
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        result = promote_statement_draft(
+            sess,
+            firm_id=a1.firm_id,
+            client_id=a1.client_id,
+            actor="reviewer",
+            scope=AccessScope.FIRM,
+            draft_id=draft_id,
+            period_id=a1.period_id,
+        )
+
+    assert len(result.journal_entry_ids) == 1
+    assert result.skipped == []
+
+    with tenant_session(ctx_firm_for_client(a1.firm_id, a1.client_id)) as sess:
+        je = sess.get(JournalEntry, result.journal_entry_ids[0])
+        assert je is not None
+        assert je.entry_date == date(2026, 1, 1)
 
 
 def test_promote_statement_rejects_non_statement_draft(

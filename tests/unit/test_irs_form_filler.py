@@ -236,8 +236,8 @@ def test_f1120s_computed_lines_are_explicitly_written() -> None:
     assert values.get("f1_19[0]") == "26,807"   # 1c = 1a - 1b
     assert values.get("f1_21[0]") == "26,676"   # 3 = 1c - 2
     assert values.get("f1_24[0]") == "26,676"   # 6 = 3 + 4 + 5
-    assert values.get("f1_38[0]") == "6,714"    # 21 = total deductions
-    assert values.get("f1_39[0]") == "19,962"   # 22 = 6 - 21
+    assert values.get("f1_39[0]") == "6,714"    # 21 = total deductions
+    assert values.get("f1_40[0]") == "19,962"   # 22 = 6 - 21
 
 
 def test_f1120s_computed_lines_tie_out_with_rounded_display_values() -> None:
@@ -264,5 +264,5 @@ def test_f1120s_computed_lines_tie_out_with_rounded_display_values() -> None:
     assert values.get("f1_24[0]") == "26,676"   # line 6
     assert values.get("f1_26[0]") == "4,700"    # line 8
     assert values.get("f1_37[0]") == "2,014"    # line 19
-    assert values.get("f1_38[0]") == "6,714"    # line 21
-    assert values.get("f1_39[0]") == "19,962"   # line 22 = 26,676 - 6,714
+    assert values.get("f1_39[0]") == "6,714"    # line 21
+    assert values.get("f1_40[0]") == "19,962"   # line 22 = 26,676 - 6,714

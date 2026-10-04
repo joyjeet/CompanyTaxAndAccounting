@@ -20,21 +20,28 @@ Three presentations are produced:
   contra side. Opening + closing cash MUST tie to the corresponding balance
   sheet line; we assert on every render.
 
-Classification heuristics
--------------------------
-Because the schema does NOT carry a per-account "current vs non-current" or
-"operating vs investing vs financing" tag, we use deterministic rules based on
-the chart-of-accounts code prefix and the `AccountType`. These rules are
-encoded once here, documented, and surfaced on every presented payload via
-`assumptions: tuple[str, ...]` so the reviewer / reader can verify them.
+Classification
+--------------
+Every account carries an explicit `sub_type` (see `AccountSubType`) that
+says which statement bucket it belongs to — COGS vs operating expense vs
+other expense, current vs fixed asset, and so on. That classification is
+the source of truth here.
 
-If a CoA does not match the convention, the affected account falls into a
-safe-bucket: assets default to CURRENT; liabilities default to CURRENT;
-non-cash side of a cash JE defaults to OPERATING. Defaults never raise.
+Previously these buckets were inferred from chart-of-accounts code ranges.
+That was fragile: the ranges hard-coded here disagreed with the shipped
+chart, which pushed every operating expense below the operating-income
+line and left the Operating Expenses section empty. Codes are now a
+human-facing label only — renumbering an account cannot move it on a
+statement.
 
-The conventions are CONFIGURABLE via `PresentationRules` so a future client
-who codes their CoA differently can override the prefixes without changing
-the engine.
+Accounts created before the `sub_type` column existed are classified by
+`app.domain.account_classification.infer_sub_type`, which applies the same
+code ranges the shipped chart uses. Cash-flow operating/investing/financing
+classification is derived from the contra account's type and sub_type, and
+is surfaced on the presented payload via `assumptions: tuple[str, ...]`.
+
+Defaults never raise: an unrecognised account falls into the operating /
+current bucket for its type.
 """
 from __future__ import annotations
 
@@ -46,6 +53,7 @@ from uuid import UUID
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
+from app.domain.account_classification import coerce_sub_type
 from app.domain.statements import (
     AccountBalance,
     BalanceSheet,
@@ -58,7 +66,7 @@ from app.models.accounting import (
     JournalEntry,
     JournalLine,
 )
-from app.models.enums import AccountType, JournalEntryStatus
+from app.models.enums import AccountSubType, AccountType, JournalEntryStatus
 
 ZERO = Decimal("0")
 HUNDRED = Decimal("100")
@@ -69,48 +77,31 @@ HUNDRED = Decimal("100")
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True, slots=True)
 class PresentationRules:
-    """Prefix-based classification rules.
+    """Classification rules for the presentation layer.
 
-    Defaults follow the common US small-business CoA convention used by the
-    seeded test world:
-
-      1000-1499 : current assets
-      1500-1999 : non-current assets (PP&E, intangibles)
-      2000-2499 : current liabilities
-      2500-2999 : long-term liabilities
-      3000-3999 : equity
-      4000-4999 : revenue
-      5000-5999 : COGS / operating expenses
-      6000-6999 : other expense
-      7000-7999 : other income
+    Statement bucketing now reads `AccountBalance.sub_type` throughout, so
+    there is nothing left to configure. The type is retained because it is
+    part of the public `present_*` signatures and carries the `assumptions`
+    disclosure that every presented payload surfaces to the reader.
     """
-
-    current_asset_max_code: str = "1499"
-    current_liability_max_code: str = "2499"
-    cogs_code_range: tuple[str, str] = ("5000", "5099")
-    other_income_code_min: str = "7000"
-    other_expense_code_min: str = "6000"
-
-    # Cash flow: code prefixes mapped to a CF section. Account types take
-    # priority; codes are used to differentiate within an asset or liability
-    # account type.
-    long_term_asset_min: str = "1500"
-    long_term_liability_min: str = "2500"
 
     @property
     def assumptions(self) -> tuple[str, ...]:
         return (
-            f"Current assets: code <= {self.current_asset_max_code}; "
-            f"non-current assets: code >= {self.long_term_asset_min}.",
-            f"Current liabilities: code <= {self.current_liability_max_code}; "
-            f"long-term liabilities: code >= {self.long_term_liability_min}.",
-            f"COGS: code in [{self.cogs_code_range[0]}..{self.cogs_code_range[1]}]; "
-            f"all other expense accounts: operating expense.",
-            f"Other income: code >= {self.other_income_code_min}; "
-            f"other expense: code >= {self.other_expense_code_min}.",
+            "Statement sections come from each account's sub_type "
+            "(cogs / operating_expense / other_expense / income_tax, "
+            "current_asset / fixed_asset / intangible_asset / other_asset, "
+            "current_liability / long_term_liability, "
+            "operating_revenue / other_income). Account codes are labels "
+            "only and do not affect placement.",
+            "Accounts with no sub_type recorded are classified from their "
+            "code using the standard ranges of the shipped chart of "
+            "accounts (5xxx COGS, 9100-9499 other expense, 9500-9899 "
+            "income tax, 4500-4999 other income, and so on).",
             "Cash-flow classification (operating/investing/financing) is "
-            "inferred from the contra account type and code on every cash JE; "
-            "see the assumptions list on PresentedCashFlow for the exact rule.",
+            "inferred from the contra account's type and sub_type on every "
+            "cash JE; see the assumptions list on PresentedCashFlow for the "
+            "exact rule.",
         )
 
 
@@ -173,18 +164,24 @@ class PresentedProfitAndLoss:
     prior_period_end: date | None = None
 
 
-def _is_cogs(code: str, rules: PresentationRules) -> bool:
-    lo, hi = rules.cogs_code_range
-    return lo <= code <= hi
+def _is_cogs(balance: AccountBalance) -> bool:
+    return balance.sub_type is AccountSubType.COGS
 
 
-def _is_other_income(code: str, rules: PresentationRules) -> bool:
-    return code >= rules.other_income_code_min
+def _is_other_income(balance: AccountBalance) -> bool:
+    return balance.sub_type is AccountSubType.OTHER_INCOME
 
 
-def _is_other_expense(code: str, rules: PresentationRules) -> bool:
-    # Excludes COGS (which is its own bucket).
-    return code >= rules.other_expense_code_min and not _is_cogs(code, rules)
+def _is_below_the_line_expense(balance: AccountBalance) -> bool:
+    """Non-operating expense: interest, losses, and income tax.
+
+    These sit below operating income, so they are excluded from the
+    Operating Expenses subtotal but still reduce net income.
+    """
+    return balance.sub_type in (
+        AccountSubType.OTHER_EXPENSE,
+        AccountSubType.INCOME_TAX,
+    )
 
 
 def _split_pl(
@@ -203,11 +200,11 @@ def _split_pl(
     op_exp: list[AccountBalance] = []
     other_exp: list[AccountBalance] = []
     for r in pl.revenue:
-        (other_inc if _is_other_income(r.code, rules) else op_revenue).append(r)
+        (other_inc if _is_other_income(r) else op_revenue).append(r)
     for e in pl.expenses:
-        if _is_cogs(e.code, rules):
+        if _is_cogs(e):
             cogs.append(e)
-        elif _is_other_expense(e.code, rules):
+        elif _is_below_the_line_expense(e):
             other_exp.append(e)
         else:
             op_exp.append(e)
@@ -277,27 +274,27 @@ def present_profit_and_loss(
     gp_var = oi_var = ni_var = None
     if prior is not None:
         prior_rev = sum(
-            (b.signed_balance for b in prior.revenue if not _is_other_income(b.code, rules)),
+            (b.signed_balance for b in prior.revenue if not _is_other_income(b)),
             start=ZERO,
         )
         prior_cogs = sum(
-            (b.signed_balance for b in prior.expenses if _is_cogs(b.code, rules)),
+            (b.signed_balance for b in prior.expenses if _is_cogs(b)),
             start=ZERO,
         )
         prior_op_exp = sum(
             (
                 b.signed_balance
                 for b in prior.expenses
-                if not _is_cogs(b.code, rules) and not _is_other_expense(b.code, rules)
+                if not _is_cogs(b) and not _is_below_the_line_expense(b)
             ),
             start=ZERO,
         )
         prior_other_inc = sum(
-            (b.signed_balance for b in prior.revenue if _is_other_income(b.code, rules)),
+            (b.signed_balance for b in prior.revenue if _is_other_income(b)),
             start=ZERO,
         )
         prior_other_exp = sum(
-            (b.signed_balance for b in prior.expenses if _is_other_expense(b.code, rules)),
+            (b.signed_balance for b in prior.expenses if _is_below_the_line_expense(b)),
             start=ZERO,
         )
         prior_gross = prior_rev - prior_cogs
@@ -353,16 +350,18 @@ class PresentedBalanceSheet:
 def _bs_split_assets(
     accounts: list[AccountBalance], rules: PresentationRules,
 ) -> tuple[list[AccountBalance], list[AccountBalance]]:
+    """Current vs non-current, driven by sub_type.
+
+    Fixed, intangible, and other assets are all non-current on the face of
+    the balance sheet; only `current_asset` sits above the line.
+    """
     cur: list[AccountBalance] = []
     non_cur: list[AccountBalance] = []
     for a in accounts:
-        if a.code <= rules.current_asset_max_code:
+        if a.sub_type is AccountSubType.CURRENT_ASSET:
             cur.append(a)
-        elif a.code >= rules.long_term_asset_min:
-            non_cur.append(a)
         else:
-            # Default safe-bucket: current.
-            cur.append(a)
+            non_cur.append(a)
     return cur, non_cur
 
 
@@ -372,9 +371,7 @@ def _bs_split_liabilities(
     cur: list[AccountBalance] = []
     lt: list[AccountBalance] = []
     for a in accounts:
-        if a.code <= rules.current_liability_max_code:
-            cur.append(a)
-        elif a.code >= rules.long_term_liability_min:
+        if a.sub_type is AccountSubType.LONG_TERM_LIABILITY:
             lt.append(a)
         else:
             cur.append(a)
@@ -475,31 +472,27 @@ class PresentedCashFlow:
 
 
 def _classify_contra(
-    account_type: AccountType, code: str, rules: PresentationRules,
+    account_type: AccountType, sub_type: AccountSubType, rules: PresentationRules,
 ) -> str:
     """Return one of 'operating' | 'investing' | 'financing'.
 
     Heuristic (flagged in assumptions):
-      * REVENUE / EXPENSE                                          -> operating
-      * ASSET with code <= current_asset_max_code (current asset)  -> operating
-      * ASSET with code >= long_term_asset_min (fixed/long-term)   -> investing
-      * LIABILITY with code <= current_liability_max_code          -> operating
-      * LIABILITY with code >= long_term_liability_min             -> financing
-      * EQUITY                                                     -> financing
+      * REVENUE / EXPENSE                       -> operating
+      * ASSET, current                          -> operating
+      * ASSET, fixed / intangible / other       -> investing
+      * LIABILITY, current                      -> operating
+      * LIABILITY, long-term                    -> financing
+      * EQUITY                                  -> financing
     Default safe-bucket: operating.
     """
     if account_type in (AccountType.REVENUE, AccountType.EXPENSE):
         return "operating"
     if account_type is AccountType.ASSET:
-        if code <= rules.current_asset_max_code:
+        if sub_type is AccountSubType.CURRENT_ASSET:
             return "operating"
-        if code >= rules.long_term_asset_min:
-            return "investing"
-        return "operating"
+        return "investing"
     if account_type is AccountType.LIABILITY:
-        if code <= rules.current_liability_max_code:
-            return "operating"
-        if code >= rules.long_term_liability_min:
+        if sub_type is AccountSubType.LONG_TERM_LIABILITY:
             return "financing"
         return "operating"
     if account_type is AccountType.EQUITY:
@@ -610,7 +603,13 @@ def present_cash_flow(
                 share = cash_net  # one non-cash line — gets the whole impact
             else:
                 share = (abs(signed) / non_cash_signed_total) * cash_net
-            section = _classify_contra(ca.account_type, ca.code, rules)
+            section = _classify_contra(
+                ca.account_type,
+                coerce_sub_type(
+                    ca.sub_type, code=ca.code, account_type=ca.account_type
+                ),
+                rules,
+            )
             bucket = (
                 op_buckets if section == "operating"
                 else inv_buckets if section == "investing"

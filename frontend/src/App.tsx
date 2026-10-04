@@ -9,13 +9,16 @@ import {
 } from "react-router-dom";
 
 import { AuthProvider, useAuth } from "./auth/AuthContext";
+import { TenantProvider, useEffectiveIdentity } from "./auth/TenantContext";
 import AppShell from "./components/AppShell";
 import RequireAuth from "./components/RequireAuth";
 import ArtifactsLibrary from "./pages/ArtifactsLibrary";
+import BankTransactions from "./pages/BankTransactions";
 import ClientList from "./pages/ClientList";
 import ClientDetail from "./pages/client/ClientDetail";
 import Dashboard from "./pages/Dashboard";
 import DraftDetail from "./pages/DraftDetail";
+import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
 import PortalDocuments from "./pages/PortalDocuments";
 import PortalHome from "./pages/PortalHome";
@@ -24,6 +27,7 @@ import PortalReports from "./pages/PortalReports";
 import ReviewQueue from "./pages/ReviewQueue";
 import RulesEngine from "./pages/RulesEngine";
 import TaxFormsLibrary from "./pages/TaxFormsLibrary";
+import TeamMembers from "./pages/TeamMembers";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,20 +40,21 @@ const queryClient = new QueryClient({
  * portal users -> PortalHome.
  */
 function HomeRedirect() {
-  const { identity } = useAuth();
-  if (!identity) return <Navigate to="/login" replace />;
+  const identity = useEffectiveIdentity();
+  if (!identity) return <Navigate to="/welcome" replace />;
   return identity.role === "firm_staff" ? <Dashboard /> : <Navigate to="/portal" replace />;
 }
 
 /**
- * Watches for token expiry and bounces to /login.
+ * Watches for token expiry and bounces to the landing page.
  */
 function SessionWatcher() {
   const { isAuthenticated } = useAuth();
   const navigate = useNavigate();
   useEffect(() => {
-    if (!isAuthenticated && window.location.pathname !== "/login") {
-      navigate("/login", { replace: true });
+    const path = window.location.pathname;
+    if (!isAuthenticated && path !== "/login" && path !== "/welcome") {
+      navigate("/welcome", { replace: true });
     }
   }, [isAuthenticated, navigate]);
   return null;
@@ -64,9 +69,11 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <SessionWatcher />
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
+          <TenantProvider>
+            <SessionWatcher />
+            <Routes>
+              <Route path="/welcome" element={<LandingPage />} />
+              <Route path="/login" element={<LoginPage />} />
 
             {/* Firm staff routes */}
             <Route
@@ -89,8 +96,21 @@ export default function App() {
                 </RequireAuth>
               }
             />
+            {/* The active tab lives in the URL so a client view can be
+                bookmarked, shared, and survives a refresh or Back. Bare
+                /clients/:id still works and lands on Overview. */}
             <Route
               path="/clients/:id"
+              element={
+                <RequireAuth roles={["firm_staff"]}>
+                  <AuthenticatedShell>
+                    <ClientDetail />
+                  </AuthenticatedShell>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/clients/:id/:tab"
               element={
                 <RequireAuth roles={["firm_staff"]}>
                   <AuthenticatedShell>
@@ -105,6 +125,16 @@ export default function App() {
                 <RequireAuth roles={["firm_staff"]}>
                   <AuthenticatedShell>
                     <ReviewQueue />
+                  </AuthenticatedShell>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/bank-transactions"
+              element={
+                <RequireAuth roles={["firm_staff"]}>
+                  <AuthenticatedShell>
+                    <BankTransactions />
                   </AuthenticatedShell>
                 </RequireAuth>
               }
@@ -145,6 +175,16 @@ export default function App() {
                 <RequireAuth roles={["firm_staff"]}>
                   <AuthenticatedShell>
                     <RulesEngine />
+                  </AuthenticatedShell>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/team"
+              element={
+                <RequireAuth roles={["firm_staff"]}>
+                  <AuthenticatedShell>
+                    <TeamMembers />
                   </AuthenticatedShell>
                 </RequireAuth>
               }
@@ -193,7 +233,8 @@ export default function App() {
             />
 
             <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+            </Routes>
+          </TenantProvider>
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

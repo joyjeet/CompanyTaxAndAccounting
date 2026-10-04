@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Caption1,
-  Divider,
   makeStyles,
   shorthands,
   Text,
@@ -11,21 +10,29 @@ import {
 } from "@fluentui/react-components";
 import {
   ArrowExitRegular,
+  ArrowLeft24Regular,
   BookContacts24Regular,
+  BuildingBank24Regular,
+  Calendar24Regular,
   ChartMultipleRegular,
   ClipboardTaskListLtr24Regular,
+  DataUsage24Regular,
   Document24Regular,
   DocumentBulletList24Regular,
   Home24Regular,
   PersonCircle24Regular,
-  ShieldCheckmark24Regular,
+  PeopleTeam24Regular,
+  ReceiptMoney24Regular,
   TaskListSquareLtr24Regular,
   Wrench24Regular,
 } from "@fluentui/react-icons";
+import { useQuery } from "@tanstack/react-query";
 import { type ReactNode } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
+import { useApi } from "../api/useApi";
 import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import { shortId } from "../lib/format";
 
 interface NavItem {
@@ -39,7 +46,9 @@ const FIRM_NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: <Home24Regular />, end: true },
   { to: "/clients", label: "Clients", icon: <BookContacts24Regular /> },
   { to: "/review", label: "Review queue", icon: <ClipboardTaskListLtr24Regular /> },
+  { to: "/bank-transactions", label: "Bank transactions", icon: <DataUsage24Regular /> },
   { to: "/rules-engine", label: "Rules engine", icon: <Wrench24Regular /> },
+  { to: "/team", label: "Team access", icon: <PeopleTeam24Regular /> },
   { to: "/artifacts", label: "Artifacts", icon: <DocumentBulletList24Regular /> },
   { to: "/tax/forms", label: "Tax forms", icon: <TaskListSquareLtr24Regular /> },
 ];
@@ -50,6 +59,41 @@ const PORTAL_NAV: NavItem[] = [
   { to: "/portal/reports", label: "My reports", icon: <ChartMultipleRegular /> },
   { to: "/portal/profile", label: "My profile", icon: <PersonCircle24Regular /> },
 ];
+
+/** Matches `/clients/<uuid>` and anything nested under it. */
+const CLIENT_PATH = /^\/clients\/([0-9a-f-]{36})(?:\/|$)/i;
+
+/**
+ * The client id the user is currently working inside, or null at firm level.
+ *
+ * Firm staff can see every client in the firm, which is correct for a
+ * CPA — but once they open a client they are, in effect, standing in that
+ * client's books, and firm-wide lists are noise at best and confusing at
+ * worst. Two ways to be "inside" a client: the URL path (the client
+ * workspace) or an explicit `?client=` filter on a firm-wide page.
+ */
+function activeClientId(pathname: string, search: string): string | null {
+  const m = CLIENT_PATH.exec(pathname);
+  if (m) return m[1];
+  return new URLSearchParams(search).get("client");
+}
+
+function clientNav(id: string): NavItem[] {
+  return [
+    { to: `/clients/${id}/overview`, label: "Overview", icon: <Home24Regular /> },
+    { to: `/clients/${id}/profile`, label: "Profile", icon: <PersonCircle24Regular /> },
+    { to: `/clients/${id}/periods`, label: "Periods", icon: <Calendar24Regular /> },
+    { to: `/clients/${id}/accounts`, label: "Chart of accounts", icon: <BuildingBank24Regular /> },
+    { to: `/clients/${id}/documents`, label: "Documents", icon: <Document24Regular /> },
+    { to: `/review?client=${id}`, label: "Review queue", icon: <ClipboardTaskListLtr24Regular /> },
+    { to: `/bank-transactions?client=${id}`, label: "Bank transactions", icon: <DataUsage24Regular /> },
+    { to: `/clients/${id}/journal`, label: "Journal entries", icon: <ReceiptMoney24Regular /> },
+    { to: `/clients/${id}/statements`, label: "Statements", icon: <ChartMultipleRegular /> },
+    { to: `/clients/${id}/reports`, label: "Reports", icon: <DocumentBulletList24Regular /> },
+    { to: `/clients/${id}/tax`, label: "Tax", icon: <TaskListSquareLtr24Regular /> },
+    { to: `/clients/${id}/artifacts`, label: "Artifacts", icon: <DocumentBulletList24Regular /> },
+  ];
+}
 
 const useStyles = makeStyles({
   root: {
@@ -146,11 +190,46 @@ const useStyles = makeStyles({
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
-  const { identity, client, isAuthenticated } = useAuth();
+  const api = useApi();
+  const { isAuthenticated, signOut } = useAuth();
+  const identity = useEffectiveIdentity();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const isFirm = identity?.role === "firm_staff";
-  const nav = isFirm ? FIRM_NAV : PORTAL_NAV;
+  const inClient = isFirm
+    ? activeClientId(location.pathname, location.search)
+    : null;
+  const nav = !isFirm ? PORTAL_NAV : inClient ? clientNav(inClient) : FIRM_NAV;
+
+  // Only to label the sidebar. The client list is already cached by the
+  // Clients page, so this is usually free.
+  const activeClient = useQuery({
+    queryKey: ["client", inClient],
+    queryFn: () => api.getClient(inClient as string),
+    enabled: Boolean(inClient),
+    staleTime: 60_000,
+  });
+
+  const team = useQuery({
+    queryKey: ["team", "summary", "shell"],
+    queryFn: () => api.listTeamMembers(),
+    enabled: Boolean(isFirm),
+    staleTime: 60_000,
+  });
+  const effectiveRole = isFirm && identity && team.data
+    ? team.data.members.find((m) => m.subject === identity.sub)?.role ?? null
+    : null;
+
+  // Drives the Review-queue badge. Shares its cache key with the Dashboard,
+  // which already fetches exactly this, so it costs no extra request. Inside
+  // a client workspace it counts only that client's work.
+  const pending = useQuery({
+    queryKey: ["drafts", "pending", inClient ?? "all"],
+    queryFn: () => api.listDrafts(true, inClient ?? undefined),
+    enabled: isFirm && isAuthenticated,
+  });
+  const pendingCount = pending.data?.length ?? 0;
 
   return (
     <div className={styles.root}>
@@ -170,6 +249,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
               <Badge appearance="tint" color={isFirm ? "brand" : "informative"}>
                 {isFirm ? "Firm staff" : "Client portal"}
               </Badge>
+              {effectiveRole && (
+                <Badge appearance="outline" color="brand">
+                  {effectiveRole.replaceAll("_", " ")}
+                </Badge>
+              )}
               <div className={styles.identity}>
                 <Text size={200} weight="semibold">
                   {identity.sub}
@@ -189,8 +273,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 appearance="subtle"
                 icon={<ArrowExitRegular />}
                 onClick={async () => {
-                  await client.logout();
-                  navigate("/login", { replace: true });
+                  // Via signOut (not client.logout) so the stored tenant
+                  // selection is dropped — otherwise the next person to sign
+                  // in on this tab inherits the previous workspace hint.
+                  await signOut();
+                  navigate("/welcome", { replace: true });
                 }}
               >
                 Sign out
@@ -201,31 +288,58 @@ export default function AppShell({ children }: { children: ReactNode }) {
       </header>
 
       <aside className={styles.sidebar}>
-        <div className={styles.sidebarHeader}>
-          {isFirm ? "Workspace" : "Portal"}
-        </div>
-        {nav.map((n) => (
-          <NavLink
-            key={n.to}
-            to={n.to}
-            end={n.end}
-            className={({ isActive }) =>
-              isActive ? `${styles.navItem} ${styles.navItemActive}` : styles.navItem
-            }
-          >
-            {n.icon}
-            <span>{n.label}</span>
-          </NavLink>
-        ))}
-        <Divider style={{ margin: "12px 0" }} />
-        <div className={styles.sidebarHeader}>System</div>
-        <div
-          className={styles.navItem}
-          style={{ cursor: "default", color: tokens.colorNeutralForeground3 }}
-        >
-          <ShieldCheckmark24Regular />
-          <Caption1>RLS · audit · crypto-shred</Caption1>
-        </div>
+        {inClient ? (
+          <>
+            <NavLink to="/clients" className={styles.navItem}>
+              <ArrowLeft24Regular />
+              <span>All clients</span>
+            </NavLink>
+            <div className={styles.sidebarHeader}>
+              {activeClient.data?.name ?? "Client"}
+            </div>
+          </>
+        ) : (
+          <div className={styles.sidebarHeader}>
+            {isFirm ? "Workspace" : "Portal"}
+          </div>
+        )}
+        {nav.map((n) => {
+          const navPath = n.to.split("?")[0];
+          // NavLink matches on pathname only, so the `?client=` links
+          // highlight correctly on their own. The one gap is `/clients/:id`
+          // with no tab, which renders Overview.
+          const forceActive =
+            inClient !== null &&
+            navPath === `/clients/${inClient}/overview` &&
+            location.pathname === `/clients/${inClient}`;
+          return (
+            <NavLink
+              key={n.to}
+              to={n.to}
+              end={n.end}
+              className={({ isActive }) =>
+                isActive || forceActive
+                  ? `${styles.navItem} ${styles.navItemActive}`
+                  : styles.navItem
+              }
+            >
+              {n.icon}
+              <span>{n.label}</span>
+              {/* How much work is waiting is the one thing worth knowing
+                  without clicking through. */}
+              {navPath === "/review" && pendingCount > 0 && (
+                <Badge
+                  appearance="filled"
+                  color="danger"
+                  size="small"
+                  style={{ marginLeft: "auto" }}
+                >
+                  {pendingCount}
+                </Badge>
+              )}
+            </NavLink>
+          );
+        })}
       </aside>
 
       <main className={styles.content}>{children}</main>

@@ -231,6 +231,22 @@ const useStyles = makeStyles({
     color: tokens.colorBrandForeground1,
     fontWeight: tokens.fontWeightSemibold,
   },
+  /**
+   * Replaces the plain grid div. A native `fieldset[disabled]` disables every
+   * form control inside it in one stroke, so view mode cannot be defeated by
+   * a control that forgot to read the flag. Default fieldset chrome is
+   * stripped so it lays out exactly as the div it replaced.
+   */
+  fieldset: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    columnGap: "16px",
+    rowGap: "12px",
+    ...shorthands.borderWidth("0"),
+    ...shorthands.padding("0"),
+    ...shorthands.margin("0"),
+    minInlineSize: "0",
+  },
 });
 
 // --------------------------------------------------------------------- //
@@ -261,6 +277,13 @@ export default function ClientProfileForm({
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  /**
+   * The form opens read-only. Editing every field the moment the page loads
+   * meant a stray keystroke or an autofill could silently change an EIN or a
+   * filing address, and the only thing standing between that and a save was
+   * remembering not to click Save.
+   */
+  const [editing, setEditing] = useState(false);
 
   // Reset draft when the server data arrives or changes.
   const serverDraft = useMemo(
@@ -288,8 +311,12 @@ export default function ClientProfileForm({
     return JSON.stringify(serverDraft) !== JSON.stringify(draft);
   }, [serverDraft, draft]);
 
-  const set = <K extends keyof Draft>(k: K, v: Draft[K]) =>
+  // Second line of defence behind `fieldset[disabled]`: even if a control
+  // slips through, view mode cannot mutate the draft.
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => {
+    if (!editing) return;
     setDraft((d) => ({ ...d, [k]: v }));
+  };
 
   if (profile.isLoading) {
     return <Spinner label="Loading profile…" />;
@@ -302,13 +329,18 @@ export default function ClientProfileForm({
 
   const onSave = () => {
     const body = diff(serverDraft, draft);
-    if (Object.keys(body).length === 0) return;
-    mutation.mutate(body);
+    if (Object.keys(body).length === 0) {
+      setEditing(false);
+      return;
+    }
+    mutation.mutate(body, { onSuccess: () => setEditing(false) });
   };
 
-  const onReset = () => {
+  /** Leave edit mode, throwing away anything not saved. */
+  const onCancel = () => {
     setDraft(serverDraft);
     setErrorMsg(null);
+    setEditing(false);
   };
 
   return (
@@ -342,7 +374,7 @@ export default function ClientProfileForm({
           clientName ? `Filing details for ${clientName}` : "Filing details"
         }
       >
-        <div className={styles.grid}>
+        <fieldset className={styles.fieldset} disabled={!editing}>
           <Field label="Legal name (as shown on tax filings)">
             <Input
               value={draft.business_legal_name}
@@ -468,7 +500,7 @@ export default function ClientProfileForm({
               ))}
             </Dropdown>
           </Field>
-        </div>
+        </fieldset>
       </DashboardCard>
 
       {/* ----------- Contact & address ----------- */}
@@ -476,7 +508,7 @@ export default function ClientProfileForm({
         overline="Contact & address"
         subtitle="How we reach you, and the address that prints on official forms"
       >
-        <div className={styles.grid}>
+        <fieldset className={styles.fieldset} disabled={!editing}>
           <Field label="Phone">
             <Input
               type="tel"
@@ -556,26 +588,39 @@ export default function ClientProfileForm({
               placeholder="US"
             />
           </Field>
-        </div>
+        </fieldset>
 
         <div className={styles.footer}>
-          {dirty && (
+          {!editing && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Read-only. Choose Edit to make changes.
+            </Caption1>
+          )}
+          {editing && dirty && (
             <Text className={styles.formNote}>You have unsaved changes</Text>
           )}
-          <Button
-            appearance="secondary"
-            disabled={!dirty || mutation.isPending}
-            onClick={onReset}
-          >
-            Discard
-          </Button>
-          <Button
-            appearance="primary"
-            disabled={!dirty || mutation.isPending}
-            onClick={onSave}
-          >
-            {mutation.isPending ? "Saving…" : "Save profile"}
-          </Button>
+          {editing ? (
+            <>
+              <Button
+                appearance="secondary"
+                disabled={mutation.isPending}
+                onClick={onCancel}
+              >
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={!dirty || mutation.isPending}
+                onClick={onSave}
+              >
+                {mutation.isPending ? "Saving…" : "Save profile"}
+              </Button>
+            </>
+          ) : (
+            <Button appearance="primary" onClick={() => setEditing(true)}>
+              Edit profile
+            </Button>
+          )}
         </div>
       </DashboardCard>
     </div>

@@ -21,6 +21,7 @@ and depreciation/amortization grouping.
 """
 from __future__ import annotations
 
+from app.domain.account_classification import infer_sub_type
 from app.models.enums import AccountType, CoaTemplateKind
 
 # Each node: (code, name, account_type, parent_code, sort_order)
@@ -260,6 +261,7 @@ TEMPLATE = {
             "code": code,
             "name": name,
             "account_type": acct_type,
+            "sub_type": infer_sub_type(code, acct_type),
             "parent_code": parent,
             "sort_order": sort,
         }

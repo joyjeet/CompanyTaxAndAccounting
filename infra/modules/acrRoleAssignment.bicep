@@ -1,9 +1,11 @@
 // ----------------------------------------------------------------------------
 // acrRoleAssignment.bicep
 // Grants AcrPull to the workload UAMI on an existing Azure Container Registry
-// in the same resource group. Only needed when the container apps pull from a
-// private ACR (i.e. main.bicep param `acrLoginServer` is non-empty).
+// in the ACR's resource group. Only needed when the container apps pull
+// from a private ACR (i.e. main.bicep param `acrLoginServer` is non-empty).
 // ----------------------------------------------------------------------------
+targetScope = 'resourceGroup'
+
 param acrName string
 param principalId string
 

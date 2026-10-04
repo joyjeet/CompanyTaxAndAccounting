@@ -13,7 +13,7 @@
 #   4. Wait until the new revision is healthy and print the live URL.
 #
 # Reads:
-#   SUBSCRIPTION_ID — defaults to the project pin (do NOT override casually).
+#   SUBSCRIPTION_ID — from the environment or .azure.env (see .azure.env.example).
 #   ACR_NAME        — defaults to ctaxdemocusreg
 #   ACR_RG          — defaults to rg-ctax-shared-cus
 #   APP_NAME        — defaults to ca-ctax-demo-cus-ui
@@ -22,7 +22,9 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-0270f50b-f296-40a3-9f05-3f8ff04ba8bc}"
+# Resolves SUBSCRIPTION_ID from the environment or the untracked .azure.env.
+# shellcheck source=scripts/_azure_env.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_azure_env.sh"
 ACR_NAME="${ACR_NAME:-ctaxdemocusreg}"
 ACR_RG="${ACR_RG:-rg-ctax-shared-cus}"
 APP_NAME="${APP_NAME:-ca-ctax-demo-cus-ui}"

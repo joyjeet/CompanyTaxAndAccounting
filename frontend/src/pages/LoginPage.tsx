@@ -13,11 +13,11 @@ import {
   Text,
   tokens,
 } from "@fluentui/react-components";
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
-import config from "../config";
+import config, { type Audience } from "../config";
 
 const useStyles = makeStyles({
   shell: {
@@ -63,14 +63,16 @@ const useStyles = makeStyles({
 
 export default function LoginPage() {
   const styles = useStyles();
-  const { client, isAuthenticated } = useAuth();
+  const { client, isAuthenticated, signIn } = useAuth();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
 
-  // During dev/test we want the firm + client IDs pre-populated so the
-  // tester never has to paste UUIDs. Precedence:
-  //   1. localStorage (what the user last entered) — survives reloads
-  //   2. Vite build-time env (VITE_DEV_DEFAULT_*) — baked into the image
-  //   3. empty string
+  // Which desk the user came through on the landing page. A routing hint for
+  // choosing the authority and pre-filling this dev form — the backend still
+  // decides what the account can actually reach.
+  const audience: Audience = params.get("as") === "client" ? "client" : "firm";
+
+  // During dev/test we keep only a few UX defaults in storage.
   const lsFirm = typeof window !== "undefined"
     ? window.localStorage.getItem("ctaa.dev.firmId") || ""
     : "";
@@ -82,11 +84,73 @@ export default function LoginPage() {
     : "";
 
   const [sub, setSub] = useState(lsSub || "dev-user@example.com");
-  const [role, setRole] = useState<"firm_staff" | "client_portal">("firm_staff");
+  const [role, setRole] = useState<"firm_staff" | "client_portal">(
+    audience === "client" ? "client_portal" : "firm_staff"
+  );
   const [firmId, setFirmId] = useState(lsFirm || config.dev.defaultFirmId);
   const [clientId, setClientId] = useState(lsClient || config.dev.defaultClientId);
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [firms, setFirms] = useState<Array<{
+    id: string;
+    name: string;
+    clients: Array<{ id: string; name: string }>;
+  }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (config.authMode !== "dev") return;
+    let cancelled = false;
+    const load = async () => {
+      setOptionsLoading(true);
+      try {
+        const resp = await fetch(`${config.apiBase}/auth/dev-login-options`);
+        if (!resp.ok) throw new Error(`dev-login-options failed (${resp.status})`);
+        const body = (await resp.json()) as {
+          firms: Array<{
+            id: string;
+            name: string;
+            clients: Array<{ id: string; name: string }>;
+          }>;
+        };
+        if (cancelled) return;
+        setFirms(body.firms ?? []);
+      } catch {
+        // Keep backward compatibility: if endpoint unavailable, login still
+        // works with configured default IDs.
+      } finally {
+        if (!cancelled) setOptionsLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (firms.length === 0) return;
+    if (!firmId || !firms.some((f) => f.id === firmId)) {
+      setFirmId(firms[0].id);
+    }
+  }, [firms, firmId]);
+
+  const selectedFirm = useMemo(
+    () => firms.find((f) => f.id === firmId) ?? null,
+    [firms, firmId],
+  );
+
+  useEffect(() => {
+    if (role !== "client_portal") return;
+    const clients = selectedFirm?.clients ?? [];
+    if (clients.length === 0) {
+      setClientId("");
+      return;
+    }
+    if (!clientId || !clients.some((c) => c.id === clientId)) {
+      setClientId(clients[0].id);
+    }
+  }, [role, selectedFirm, clientId]);
 
   if (isAuthenticated) {
     navigate("/", { replace: true });
@@ -110,7 +174,7 @@ export default function LoginPage() {
           <div style={{ marginTop: 16 }}>
             <Button
               appearance="primary"
-              onClick={() => client.login().catch((e) => setError(String(e)))}
+              onClick={() => signIn(audience).catch((e) => setError(String(e)))}
             >
               Continue
             </Button>
@@ -155,7 +219,7 @@ export default function LoginPage() {
               await client.login({
                 sub,
                 role,
-                firmId: trimmedFirm,
+                firmId: trimmedFirm || undefined,
                 clientId: trimmedClient || undefined,
               });
               navigate("/", { replace: true });
@@ -179,17 +243,40 @@ export default function LoginPage() {
               <Option value="client_portal">Client portal (portal user)</Option>
             </Dropdown>
           </Field>
-          <Field label="Firm ID (UUID)" required>
-            <Input value={firmId} onChange={(_, d) => setFirmId(d.value)} />
-          </Field>
-          <Field
-            label={
-              role === "client_portal" ? "Client ID (required)" : "Client ID (optional)"
-            }
-            required={role === "client_portal"}
-          >
-            <Input value={clientId} onChange={(_, d) => setClientId(d.value)} />
-          </Field>
+          {firms.length > 0 ? (
+            <Field label="Firm" required>
+              <Dropdown
+                value={selectedFirm?.name ?? ""}
+                selectedOptions={firmId ? [firmId] : []}
+                onOptionSelect={(_, d) => setFirmId(d.optionValue ?? "")}
+              >
+                {firms.map((f) => (
+                  <Option key={f.id} value={f.id} text={f.name}>
+                    {f.name}
+                  </Option>
+                ))}
+              </Dropdown>
+            </Field>
+          ) : (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              {optionsLoading ? "Loading firm options..." : "Using default dev firm configuration."}
+            </Caption1>
+          )}
+          {role === "client_portal" && firms.length > 0 && (
+            <Field label="Client" required>
+              <Dropdown
+                value={selectedFirm?.clients.find((c) => c.id === clientId)?.name ?? ""}
+                selectedOptions={clientId ? [clientId] : []}
+                onOptionSelect={(_, d) => setClientId(d.optionValue ?? "")}
+              >
+                {(selectedFirm?.clients ?? []).map((c) => (
+                  <Option key={c.id} value={c.id} text={c.name}>
+                    {c.name}
+                  </Option>
+                ))}
+              </Dropdown>
+            </Field>
+          )}
           <div style={{ marginTop: 8 }}>
             <Button appearance="primary" type="submit" disabled={busy}>
               {busy ? <Spinner size="tiny" /> : "Sign in"}

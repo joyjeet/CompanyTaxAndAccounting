@@ -33,12 +33,13 @@ from uuid import UUID
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
+from app.domain.account_classification import coerce_sub_type
 from app.models.accounting import (
     ChartOfAccounts,
     JournalEntry,
     JournalLine,
 )
-from app.models.enums import AccountType, JournalEntryStatus
+from app.models.enums import AccountSubType, AccountType, JournalEntryStatus
 
 ZERO = Decimal("0")
 
@@ -52,6 +53,10 @@ class AccountBalance:
     debit_total: Decimal
     credit_total: Decimal
     signed_balance: Decimal
+    # Reporting bucket within `account_type` (cogs / operating_expense /
+    # other_income / current_asset / ...). Always populated: falls back to
+    # code-range inference for rows predating migration 0012.
+    sub_type: AccountSubType = AccountSubType.OPERATING_EXPENSE
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +174,9 @@ def _balances_for(
                 debit_total=debit,
                 credit_total=credit,
                 signed_balance=_signed(a.account_type, debit, credit),
+                sub_type=coerce_sub_type(
+                    a.sub_type, code=a.code, account_type=a.account_type
+                ),
             )
         )
     out.sort(key=lambda x: x.code)

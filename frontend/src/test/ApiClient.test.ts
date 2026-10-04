@@ -80,4 +80,89 @@ describe("ApiClient", () => {
     ];
     expect(url).toBe("/api/tax/mappings?form_code=F1120S&client_id=client-123");
   });
+
+  it("posts create team invite payload to /team/invites", async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "inv-1",
+          email: "x@example.com",
+          role: "staff",
+          status: "pending",
+          expires_at: "2026-07-25T00:00:00Z",
+          created_at: "2026-07-19T00:00:00Z",
+          invite_token: "tok",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const api = new ApiClient(fakeAuth("tok-123"), "/api");
+    await api.createTeamInvite({ email: "x@example.com", role: "staff", expires_in_days: 5 });
+
+    const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe("/api/team/invites");
+    expect(init.method).toBe("POST");
+    expect(String(init.body)).toContain('"email":"x@example.com"');
+    expect(String(init.body)).toContain('"role":"staff"');
+    expect(String(init.body)).toContain('"expires_in_days":5');
+  });
+
+  it("posts document kind correction to /documents/:id/kind", async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "doc-1",
+          client_id: "c-1",
+          kind: "invoice",
+          filename: "x.pdf",
+          content_type: "application/pdf",
+          sha256: "abc",
+          ocr_status: "complete",
+          ocr_completed_at: null,
+          ocr_error: null,
+          received_at: "2026-07-19T00:00:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const api = new ApiClient(fakeAuth("tok-123"), "/api");
+    await api.updateDocumentKind("doc-1", "invoice");
+
+    const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe("/api/documents/doc-1/kind");
+    expect(init.method).toBe("POST");
+    expect(String(init.body)).toContain('"kind":"invoice"');
+  });
+
+  it("posts learn-rule payload to /drafts/:id/learn-rule", async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ learned_rule_count: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const api = new ApiClient(fakeAuth("tok-123"), "/api");
+    await api.learnStatementRule("draft-1", {
+      transaction_index: 2,
+      target_account_code: "8010",
+    });
+
+    const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe("/api/drafts/draft-1/learn-rule");
+    expect(init.method).toBe("POST");
+    expect(String(init.body)).toContain('"transaction_index":2');
+    expect(String(init.body)).toContain('"target_account_code":"8010"');
+  });
 });

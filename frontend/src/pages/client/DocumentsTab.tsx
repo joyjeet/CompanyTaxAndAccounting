@@ -3,6 +3,7 @@ import {
   Body1,
   Button,
   Caption1,
+  Dropdown,
   Dialog,
   DialogActions,
   DialogBody,
@@ -11,8 +12,8 @@ import {
   DialogTitle,
   DialogTrigger,
   Field,
-  Input,
   makeStyles,
+  Option,
   MessageBar,
   MessageBarActions,
   MessageBarBody,
@@ -34,13 +35,17 @@ import {
 } from "@fluentui/react-components";
 import { ArrowUploadRegular, DatabaseSearchRegular, DeleteRegular } from "@fluentui/react-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useApi } from "../../api/useApi";
+import type { DocumentKind, DocumentOut } from "../../auth/types";
 import InfoHint from "../../components/InfoHint";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
 import { fmtDateTime, shortId } from "../../lib/format";
+import { isWithinRange } from "../../lib/reportPeriods";
 import DocumentDetailDialog from "./DocumentDetailDialog";
 
 const useStyles = makeStyles({
@@ -64,16 +69,61 @@ const OCR_COLORS: Record<string, "success" | "warning" | "danger" | "informative
   pending: "informative",
 };
 
+const DOCUMENT_KIND_OPTIONS: DocumentKind[] = [
+  "generic",
+  "bank_transaction",
+  "invoice",
+  "receipt",
+  "tax_form",
+  "tax_form_w2",
+  "tax_form_1099_nec",
+  "tax_form_1099_int",
+  "tax_form_1098",
+];
+
+function kindLabel(kind: DocumentKind): string {
+  switch (kind) {
+    case "generic":
+      return "Auto-detect";
+    case "bank_transaction":
+      return "Bank transaction";
+    case "invoice":
+      return "Invoice";
+    case "receipt":
+      return "Receipt";
+    case "tax_form":
+      return "Tax form";
+    case "tax_form_w2":
+      return "W-2";
+    case "tax_form_1099_nec":
+      return "1099-NEC";
+    case "tax_form_1099_int":
+      return "1099-INT";
+    case "tax_form_1098":
+      return "1098";
+    default:
+      return kind;
+  }
+}
+
 export default function DocumentsTab({ clientId }: { clientId: string }) {
   const styles = useStyles();
+  const navigate = useNavigate();
   const api = useApi();
   const qc = useQueryClient();
   const toasterId = useId("docs-toaster");
   const { dispatchToast } = useToastController(toasterId);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [kindHint, setKindHint] = useState("generic");
+  const [kindHint, setKindHint] = useState<DocumentKind>("generic");
   // Document detail dialog: when set, the click-to-view modal is open.
   const [openDocId, setOpenDocId] = useState<string | null>(null);
+  const [lastUpload, setLastUpload] = useState<{
+    sourceDocumentId: string;
+    autoPromotedCount: number;
+  } | null>(null);
+  const [highlightedDocumentId, setHighlightedDocumentId] = useState<string | null>(null);
+  const rowRefs = useRef<Record<string, HTMLElement | null>>({});
+  const dateFilter = useReportPeriod("all");
 
   // Setup-state checks: a brand-new client has no periods/accounts, so any
   // upload would land as a draft with nowhere to be promoted to. We surface
@@ -146,6 +196,32 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
     },
   });
 
+  // Remove a single document uploaded by mistake. The API refuses (409) when
+  // journal entries were already posted from it.
+  const [docToDelete, setDocToDelete] = useState<DocumentOut | null>(null);
+  const removeDoc = useMutation({
+    mutationFn: (id: string) => api.deleteDocument(id),
+    onSuccess: () => {
+      dispatchToast(
+        <Toast><ToastTitle>Document removed</ToastTitle></Toast>,
+        { intent: "success" },
+      );
+      setDocToDelete(null);
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["drafts"] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Could not remove document</ToastTitle>
+          <ToastBody>{err.message}</ToastBody>
+        </Toast>,
+        { intent: "error" },
+      );
+      setDocToDelete(null);
+    },
+  });
+
   const docs = useQuery({
     queryKey: ["documents"],
     queryFn: () => api.listDocuments(),
@@ -160,6 +236,34 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
       return stillWorking ? 2000 : false;
     },
   });
+
+  const pendingDrafts = useQuery({
+    queryKey: ["drafts", "pending"],
+    queryFn: () => api.listDrafts(true),
+  });
+
+  const pendingDraftByDocId = useMemo(
+    () => new Map((pendingDrafts.data ?? []).map((d) => [d.source_document_id, d.id])),
+    [pendingDrafts.data],
+  );
+
+  const recentDraftId =
+    lastUpload ? pendingDraftByDocId.get(lastUpload.sourceDocumentId) ?? null : null;
+  const pendingDraftCount = pendingDrafts.data?.length ?? 0;
+
+  useEffect(() => {
+    if (!highlightedDocumentId) return;
+    const row = rowRefs.current[highlightedDocumentId];
+    if (!row) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.focus();
+    const timer = window.setTimeout(() => {
+      setHighlightedDocumentId((current) =>
+        current === highlightedDocumentId ? null : current,
+      );
+    }, 7000);
+    return () => window.clearTimeout(timer);
+  }, [highlightedDocumentId, docs.data]);
 
   const upload = useMutation({
     mutationFn: (file: File) => api.uploadDocument(file, kindHint, clientId),
@@ -176,6 +280,11 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         title = `Uploaded · sha ${shortId(r.sha256)} — draft queued in Review queue`;
         body = "Open Review queue (firm-staff sidebar) to approve, edit, or reject.";
       }
+      setLastUpload({
+        sourceDocumentId: r.source_document_id,
+        autoPromotedCount: autoPosted,
+      });
+      setHighlightedDocumentId(r.source_document_id);
       dispatchToast(
         <Toast>
           <ToastTitle>{title}</ToastTitle>
@@ -199,7 +308,27 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
     },
   });
 
-  const clientDocs = (docs.data ?? []).filter((d) => d.client_id === clientId);
+  const updateKind = useMutation({
+    mutationFn: ({ id, kind }: { id: string; kind: DocumentKind }) =>
+      api.updateDocumentKind(id, kind),
+    onSuccess: (updated) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Document kind updated to {kindLabel(updated.kind)}.</ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["documents"] });
+      qc.invalidateQueries({ queryKey: ["document-detail", updated.id] });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const clientDocs = (docs.data ?? []).filter(
+    (d) => d.client_id === clientId && isWithinRange(d.received_at, dateFilter.range),
+  );
 
   return (
     <div>
@@ -225,8 +354,20 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         </MessageBar>
       )}
       <div className={styles.uploader}>
-        <Field label="Kind hint" hint="generic / bank_statement / invoice / receipt …">
-          <Input value={kindHint} onChange={(_, d) => setKindHint(d.value)} />
+        <Field label="Document kind (optional)" hint="Leave on Auto-detect unless you know the exact document type.">
+          <Dropdown
+            value={kindLabel(kindHint)}
+            selectedOptions={[kindHint]}
+            onOptionSelect={(_, d) => {
+              if (d.optionValue) setKindHint(d.optionValue as DocumentKind);
+            }}
+          >
+            {DOCUMENT_KIND_OPTIONS.map((kind) => (
+              <Option key={kind} value={kind} text={kindLabel(kind)}>
+                {kindLabel(kind)}
+              </Option>
+            ))}
+          </Dropdown>
         </Field>
         <input
           ref={inputRef}
@@ -245,6 +386,39 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         >
           Upload file
         </Button>
+        <Button appearance="secondary" onClick={() => navigate("/review")}>
+          Review queue <Badge appearance="filled" color={pendingDraftCount > 0 ? "danger" : "informative"}>{pendingDraftCount}</Badge>
+        </Button>
+        {lastUpload && (
+          <Button
+            appearance="secondary"
+            onClick={() => {
+              if (recentDraftId) {
+                navigate(`/drafts/${recentDraftId}`);
+                return;
+              }
+              navigate("/review");
+            }}
+          >
+            {recentDraftId ? "Review uploaded statement" : "Open review queue"}
+          </Button>
+        )}
+        {(lastUpload?.autoPromotedCount ?? 0) > 0 && (
+          <>
+            <Button
+              appearance="secondary"
+              onClick={() => navigate(`/clients/${clientId}?tab=statements`)}
+            >
+              View statements (P&L, BS, CF)
+            </Button>
+            <Button
+              appearance="secondary"
+              onClick={() => navigate(`/clients/${clientId}?tab=journal`)}
+            >
+              View posted journal entries
+            </Button>
+          </>
+        )}
         <Dialog open={resetOpen} onOpenChange={(_, d) => setResetOpen(d.open)}>
           <DialogTrigger disableButtonEnhancement>
             <Button
@@ -306,8 +480,9 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
                   <i> pending → in_progress → complete</i>.
                 </li>
                 <li>
-                  <b>Classification</b> proposes a journal entry and writes
-                  a <b>draft</b> row. The draft shows up in the firm-staff{" "}
+                  <b>Classification</b> uses AI to detect the actual document
+                  kind and proposes a journal entry as a <b>draft</b> row.
+                  The draft shows up in the firm-staff{" "}
                   <b>Review queue</b> for a CPA to approve, edit, or reject.
                 </li>
                 <li>
@@ -324,11 +499,25 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Documents are linked to the currently-active client identity.
         </Caption1>
+        {lastUpload && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            {recentDraftId
+              ? "Next step: review this upload and approve or edit it before posting."
+              : lastUpload.autoPromotedCount > 0
+                ? "This upload auto-posted to the ledger. Review queue still shows other pending drafts."
+                : "Upload processed. If the review button is not ready yet, open Review queue in a few seconds."}
+          </Caption1>
+        )}
       </div>
 
       <Section
         title={`${clientDocs.length} documents for this client`}
         subtitle="Click a row to inspect OCR fields, derived drafts, and open the original file. The list auto-refreshes while a document is still processing."
+        toolbar={
+          <div style={{ display: "flex", columnGap: 12 }}>
+            <ReportPeriodPicker state={dateFilter} />
+          </div>
+        }
         help={{
           title: "Reading the OCR badge",
           body: (
@@ -353,7 +542,14 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         {docs.isLoading && <LoadingState />}
         {docs.error && <ErrorState error={docs.error} />}
         {!docs.isLoading && clientDocs.length === 0 && (
-          <EmptyState title="No documents" description="Upload a file to get started." />
+          <EmptyState
+            title="No documents"
+            description={
+              dateFilter.preset === "all"
+                ? "Upload a file to get started."
+                : `No documents received in ${dateFilter.range.label}. Widen the date range to see more.`
+            }
+          />
         )}
         {clientDocs.length > 0 && (
           <Table size="small">
@@ -362,28 +558,87 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
                 <TableHeaderCell>Filename</TableHeaderCell>
                 <TableHeaderCell>Kind</TableHeaderCell>
                 <TableHeaderCell>OCR</TableHeaderCell>
-                <TableHeaderCell>SHA-256</TableHeaderCell>
+                <TableHeaderCell>Uploaded by</TableHeaderCell>
                 <TableHeaderCell>Received</TableHeaderCell>
+                <TableHeaderCell>Next step</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {clientDocs.map((d) => (
+              {clientDocs.map((d) => {
+                const draftId = pendingDraftByDocId.get(d.id);
+                return (
                 <TableRow
                   key={d.id}
+                  ref={(el) => {
+                    rowRefs.current[d.id] = el;
+                  }}
+                  tabIndex={0}
                   onClick={() => setOpenDocId(d.id)}
-                  style={{ cursor: "pointer" }}
+                  style={{
+                    cursor: "pointer",
+                    backgroundColor:
+                      highlightedDocumentId === d.id
+                        ? tokens.colorBrandBackground2
+                        : undefined,
+                    transition: "background-color 160ms ease-in-out",
+                  }}
                 >
                   <TableCell>{d.filename ?? "(no name)"}</TableCell>
-                  <TableCell>{d.kind}</TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Dropdown
+                      size="small"
+                      value={kindLabel(d.kind as DocumentKind)}
+                      selectedOptions={[d.kind]}
+                      disabled={
+                        updateKind.isPending && updateKind.variables?.id === d.id
+                      }
+                      onOptionSelect={(_, data) => {
+                        const next = data.optionValue as DocumentKind | undefined;
+                        if (!next || next === d.kind) return;
+                        updateKind.mutate({ id: d.id, kind: next });
+                      }}
+                    >
+                      {DOCUMENT_KIND_OPTIONS.map((kind) => (
+                        <Option key={kind} value={kind} text={kindLabel(kind)}>
+                          {kindLabel(kind)}
+                        </Option>
+                      ))}
+                    </Dropdown>
+                  </TableCell>
                   <TableCell>
                     <Badge appearance="tint" color={OCR_COLORS[d.ocr_status] ?? "informative"}>
                       {d.ocr_status}
                     </Badge>
                   </TableCell>
-                  <TableCell><code>{shortId(d.sha256)}</code></TableCell>
+                  <TableCell>{d.uploaded_by ?? "—"}</TableCell>
                   <TableCell>{fmtDateTime(d.received_at)}</TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      {draftId ? (
+                        <Button
+                          size="small"
+                          appearance="secondary"
+                          onClick={() => navigate(`/drafts/${draftId}`)}
+                        >
+                          Review
+                        </Button>
+                      ) : d.ocr_status === "complete" ? (
+                        <Caption1>No review needed</Caption1>
+                      ) : (
+                        <Caption1>Processing…</Caption1>
+                      )}
+                      <Button
+                        size="small"
+                        appearance="subtle"
+                        icon={<DeleteRegular />}
+                        aria-label={`Remove ${d.filename ?? "document"}`}
+                        title="Remove document"
+                        onClick={() => setDocToDelete(d)}
+                      />
+                    </div>
+                  </TableCell>
                 </TableRow>
-              ))}
+              );})}
             </TableBody>
           </Table>
         )}
@@ -392,6 +647,36 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         documentId={openDocId}
         onClose={() => setOpenDocId(null)}
       />
+      <Dialog
+        open={!!docToDelete}
+        onOpenChange={(_, data) => !data.open && setDocToDelete(null)}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Remove document?</DialogTitle>
+            <DialogContent>
+              <Body1 block>
+                Remove <b>{docToDelete?.filename ?? "this document"}</b>? Any
+                pending drafts derived from it are discarded. If journal
+                entries were already posted from it, removal is blocked until
+                you reject or reverse those entries.
+              </Body1>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDocToDelete(null)}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={removeDoc.isPending}
+                onClick={() => docToDelete && removeDoc.mutate(docToDelete.id)}
+              >
+                {removeDoc.isPending ? <Spinner size="tiny" /> : "Remove"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }

@@ -1,13 +1,16 @@
 import {
+  Button,
   Badge,
   Body1,
   Caption1,
   makeStyles,
+  mergeClasses,
   shorthands,
   Text,
   tokens,
 } from "@fluentui/react-components";
 import {
+  PeopleTeam24Regular,
   BookContacts24Regular,
   ClipboardTaskListLtr24Regular,
   Document24Regular,
@@ -18,7 +21,7 @@ import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
-import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtDateTime, shortId } from "../lib/format";
@@ -39,6 +42,25 @@ const useStyles = makeStyles({
     display: "flex",
     alignItems: "center",
     columnGap: "16px",
+  },
+  // A KPI that navigates. Kept visually identical at rest so the row does not
+  // become a wall of buttons — the affordance appears on hover/focus.
+  kpiLink: {
+    textDecoration: "none",
+    color: "inherit",
+    cursor: "pointer",
+    ":hover": {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
+      boxShadow: tokens.shadow8,
+    },
+    ":active": {
+      backgroundColor: tokens.colorNeutralBackground1Pressed,
+    },
+    ":focus-visible": {
+      ...shorthands.outline("2px", "solid", tokens.colorStrokeFocus2),
+      outlineOffset: "2px",
+    },
   },
   kpiIcon: {
     width: "44px",
@@ -72,33 +94,60 @@ const useStyles = makeStyles({
     gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
     gap: "16px",
   },
+  quickActions: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "8px",
+  },
 });
 
 function Kpi({
   icon,
   label,
   value,
+  to,
+  describedAs,
 }: {
   icon: ReactNode;
   label: string;
   value: ReactNode;
+  /** Where clicking the tile goes. Omit to render a static tile. */
+  to?: string;
+  /** Overrides the link's accessible name when the destination is not
+   *  self-evident from the label (e.g. "Documents" opening the client list). */
+  describedAs?: string;
 }) {
   const styles = useStyles();
-  return (
-    <div className={styles.kpi}>
+
+  const body = (
+    <>
       <div className={styles.kpiIcon}>{icon}</div>
       <div>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{label}</Caption1>
         <div className={styles.kpiValue}>{value}</div>
       </div>
-    </div>
+    </>
+  );
+
+  if (!to) {
+    return <div className={styles.kpi}>{body}</div>;
+  }
+
+  return (
+    <Link
+      to={to}
+      className={mergeClasses(styles.kpi, styles.kpiLink)}
+      aria-label={describedAs ?? label}
+    >
+      {body}
+    </Link>
   );
 }
 
 export default function Dashboard() {
   const styles = useStyles();
   const api = useApi();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
 
   const clients = useQuery({ queryKey: ["clients"], queryFn: () => api.listClients() });
   const drafts = useQuery({
@@ -110,10 +159,25 @@ export default function Dashboard() {
     queryKey: ["artifacts"],
     queryFn: () => api.listArtifacts(),
   });
+  const team = useQuery({
+    queryKey: ["team", "summary"],
+    queryFn: () => api.listTeamMembers(),
+  });
 
-  const anyError = clients.error || drafts.error || docs.error || artifacts.error;
+  const anyError = clients.error || drafts.error || docs.error || artifacts.error || team.error;
   const anyLoading =
-    clients.isLoading || drafts.isLoading || docs.isLoading || artifacts.isLoading;
+    clients.isLoading || drafts.isLoading || docs.isLoading || artifacts.isLoading || team.isLoading;
+
+  const clientsList = Array.isArray(clients.data) ? clients.data : [];
+  const draftsList = Array.isArray(drafts.data) ? drafts.data : [];
+  const docsList = Array.isArray(docs.data) ? docs.data : [];
+  const artifactsList = Array.isArray(artifacts.data) ? artifacts.data : [];
+  const teamMembers = Array.isArray(team.data?.members) ? team.data.members : [];
+  const teamInvites = Array.isArray(team.data?.invites) ? team.data.invites : [];
+
+  const teamMembersCount = teamMembers.length;
+  const pendingInvitesCount = teamInvites.filter((i) => i.status === "pending").length;
+  const disabledMembersCount = teamMembers.filter((m) => m.status === "disabled").length;
 
   return (
     <div>
@@ -132,22 +196,37 @@ export default function Dashboard() {
         <Kpi
           icon={<BookContacts24Regular />}
           label="Clients"
-          value={anyLoading ? "…" : clients.data?.length ?? 0}
+          value={anyLoading ? "…" : clientsList.length}
+          to="/clients"
         />
         <Kpi
           icon={<ClipboardTaskListLtr24Regular />}
           label="Pending drafts"
-          value={anyLoading ? "…" : drafts.data?.length ?? 0}
+          value={anyLoading ? "…" : draftsList.length}
+          to="/review"
+          describedAs="Pending drafts — open the review queue"
         />
+        {/* Documents are per-client (/clients/:id/documents); there is no
+            firm-wide documents page, so this opens the client list. */}
         <Kpi
           icon={<Document24Regular />}
           label="Documents"
-          value={anyLoading ? "…" : docs.data?.length ?? 0}
+          value={anyLoading ? "…" : docsList.length}
+          to="/clients"
+          describedAs="Documents — choose a client to view their documents"
         />
         <Kpi
           icon={<DocumentBulletList24Regular />}
           label="Artifacts"
-          value={anyLoading ? "…" : artifacts.data?.length ?? 0}
+          value={anyLoading ? "…" : artifactsList.length}
+          to="/artifacts"
+        />
+        <Kpi
+          icon={<PeopleTeam24Regular />}
+          label="Team members"
+          value={anyLoading ? "…" : teamMembersCount}
+          to="/team"
+          describedAs="Team members — open team access"
         />
       </div>
 
@@ -172,14 +251,14 @@ export default function Dashboard() {
           }}
         >
           {clients.isLoading && <LoadingState />}
-          {clients.data && clients.data.length === 0 && (
+          {clientsList.length === 0 && !clients.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               No clients yet.
             </Body1>
           )}
-          {clients.data && clients.data.length > 0 && (
+          {clientsList.length > 0 && (
             <div className={styles.list}>
-              {clients.data.slice(0, 6).map((c) => (
+              {clientsList.slice(0, 6).map((c) => (
                 <Link
                   to={`/clients/${c.id}`}
                   key={c.id}
@@ -218,15 +297,20 @@ export default function Dashboard() {
           }}
         >
           {docs.isLoading && <LoadingState />}
-          {docs.data && docs.data.length === 0 && (
+          {docsList.length === 0 && !docs.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               No uploads yet.
             </Body1>
           )}
-          {docs.data && docs.data.length > 0 && (
+          {docsList.length > 0 && (
             <div className={styles.list}>
-              {docs.data.slice(0, 6).map((d) => (
-                <div className={styles.listItem} key={d.id}>
+              {docsList.slice(0, 6).map((d) => (
+                <Link
+                  to={`/clients/${d.client_id}/documents`}
+                  key={d.id}
+                  className={styles.listItem}
+                  style={{ textDecoration: "none", color: "inherit" }}
+                >
                   <div>
                     <Text weight="semibold">{d.filename ?? "(no filename)"}</Text>
                     <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
@@ -245,7 +329,7 @@ export default function Dashboard() {
                   >
                     {d.ocr_status}
                   </Badge>
-                </div>
+                </Link>
               ))}
             </div>
           )}
@@ -273,14 +357,14 @@ export default function Dashboard() {
           }}
         >
           {drafts.isLoading && <LoadingState />}
-          {drafts.data && drafts.data.length === 0 && (
+          {draftsList.length === 0 && !drafts.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               Inbox zero — nothing waiting.
             </Body1>
           )}
-          {drafts.data && drafts.data.length > 0 && (
+          {draftsList.length > 0 && (
             <div className={styles.list}>
-              {drafts.data.slice(0, 6).map((d) => {
+              {draftsList.slice(0, 6).map((d) => {
                 const conf = Number.parseFloat(d.confidence);
                 return (
                   <Link
@@ -315,6 +399,53 @@ export default function Dashboard() {
         </Section>
 
         <Section
+          title="Team access"
+          subtitle="Membership, invites, and role health"
+          help={{
+            title: "Why this matters",
+            body: (
+              <>
+                Team access controls who can review drafts, generate final
+                artifacts, and manage client records. Keep pending invites and
+                disabled accounts tidy to reduce access drift.
+              </>
+            ),
+          }}
+        >
+          {team.isLoading && <LoadingState />}
+          {team.data && (
+            <div style={{ display: "grid", gap: 10 }}>
+              <div className={styles.list}>
+                <div className={styles.listItem}>
+                  <Text>Members</Text>
+                  <Badge appearance="filled" color="brand">{teamMembersCount}</Badge>
+                </div>
+                <div className={styles.listItem}>
+                  <Text>Pending invites</Text>
+                  <Badge appearance="tint" color={pendingInvitesCount > 0 ? "warning" : "success"}>
+                    {pendingInvitesCount}
+                  </Badge>
+                </div>
+                <div className={styles.listItem}>
+                  <Text>Disabled members</Text>
+                  <Badge appearance="tint" color={disabledMembersCount > 0 ? "danger" : "success"}>
+                    {disabledMembersCount}
+                  </Badge>
+                </div>
+              </div>
+              <div className={styles.quickActions}>
+                <Link to="/team" style={{ textDecoration: "none" }}>
+                  <Button appearance="primary">Open team access</Button>
+                </Link>
+                <Link to="/team" style={{ textDecoration: "none" }}>
+                  <Button appearance="secondary">Create or accept invite</Button>
+                </Link>
+              </div>
+            </div>
+          )}
+        </Section>
+
+        <Section
           title="Latest artifacts"
           subtitle="Generated statements, tax worksheets, audit packages"
           help={{
@@ -335,14 +466,14 @@ export default function Dashboard() {
           }}
         >
           {artifacts.isLoading && <LoadingState />}
-          {artifacts.data && artifacts.data.length === 0 && (
+          {artifactsList.length === 0 && !artifacts.isLoading && (
             <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
               No artifacts generated yet.
             </Body1>
           )}
-          {artifacts.data && artifacts.data.length > 0 && (
+          {artifactsList.length > 0 && (
             <div className={styles.list}>
-              {artifacts.data.slice(0, 6).map((a) => (
+              {artifactsList.slice(0, 6).map((a) => (
                 <div key={a.id} className={styles.listItem}>
                   <div>
                     <Text weight="semibold">{a.title}</Text>

@@ -2,15 +2,15 @@ name: CD
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
     inputs:
       target_env:
         description: 'Target environment'
         required: true
-        default: 'staging'
+        default: 'dev'
         type: choice
-        options: ['staging', 'prod']
+        options: ['dev', 'prod']
 
 # Trust boundary: production deploy requires the protected
 # `prod` environment in GitHub repo settings, which enforces
@@ -20,20 +20,28 @@ permissions:
   contents: read
 
 concurrency:
-  group: cd-${{ github.event.inputs.target_env || 'staging' }}
+  group: cd-${{ github.event.inputs.target_env || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  # Nothing is built or deployed until the full suite passes. This is the
+  # same workflow that gates pull requests, so a direct push to `dev` gets
+  # exactly the same scrutiny as a reviewed change.
+  quality-gate:
+    uses: ./.github/workflows/tests.yml
+
   build-and-push:
+    needs: quality-gate
     runs-on: ubuntu-latest
     outputs:
       api_image: ${{ steps.image.outputs.api_image }}
       worker_image: ${{ steps.image.outputs.worker_image }}
+      ui_image: ${{ steps.image.outputs.ui_image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -46,12 +54,16 @@ jobs:
           REG="${{ vars.ACR_NAME }}.azurecr.io"
           echo "api_image=${REG}/ctaa-api:${SHA}" >> "$GITHUB_OUTPUT"
           echo "worker_image=${REG}/ctaa-worker:${SHA}" >> "$GITHUB_OUTPUT"
+          echo "ui_image=${REG}/ctaa-ui:${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: ACR login
         run: az acr login --name "${{ vars.ACR_NAME }}"
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Build & push API image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
@@ -67,71 +79,132 @@ jobs:
           docker tag "${{ steps.image.outputs.api_image }}" "${{ steps.image.outputs.worker_image }}"
           docker push "${{ steps.image.outputs.worker_image }}"
 
-  deploy-staging:
+      - name: Build & push UI image
+        uses: docker/build-push-action@v7
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.ui_image }}
+          build-args: |
+            VITE_API_BASE=/api
+            VITE_AUTH_MODE=dev
+          provenance: true
+          sbom: true
+
+  deploy-dev:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment:
-      name: staging
-    if: ${{ github.event_name == 'push' || github.event.inputs.target_env == 'staging' }}
+      name: dev
+    if: ${{ (github.event_name == 'push' && github.ref_name == 'dev') || (github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'dev') }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: actions/checkout@v7
+      - uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy staging
+      - name: Deploy dev
         run: |
           PG_PWD=$(az keyvault secret show \
             --vault-name "${{ vars.BOOTSTRAP_KV }}" \
-            --name pg-admin-pwd-staging \
+            --name "${{ vars.PG_ADMIN_SECRET_NAME }}" \
             --query value -o tsv)
-          az deployment sub create \
-            --location eastus2 \
-            --name "ctaa-staging-${{ github.run_id }}" \
+
+          az deployment sub what-if \
+            --location "${{ vars.AZURE_LOCATION }}" \
+            --name "ctaa-dev-whatif-${{ github.run_id }}" \
             --template-file infra/main.bicep \
-            --parameters infra/params/staging.bicepparam \
+            --parameters infra/params/dev.bicepparam \
             --parameters \
               apiImage="${{ needs.build-and-push.outputs.api_image }}" \
               workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
+              postgresAdminPassword="$PG_PWD" \
+            -o none
+
+          az deployment sub create \
+            --location "${{ vars.AZURE_LOCATION }}" \
+            --name "ctaa-dev-${{ github.run_id }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/params/dev.bicepparam \
+            --parameters \
+              apiImage="${{ needs.build-and-push.outputs.api_image }}" \
+              workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
-        run: |
-          az containerapp job start \
-            --name "ca-ctaa-staging-eus-migrate" \
-            --resource-group "rg-ctaa-staging-eus" || \
-            echo "Migration job not found — first deploy. Skipping."
+        env:
+          MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+        run: ./scripts/run_migration_job.sh
 
   deploy-prod:
     needs: build-and-push
     runs-on: ubuntu-latest
     environment:
       name: prod
-    if: ${{ github.event.inputs.target_env == 'prod' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.target_env == 'prod' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: actions/checkout@v7
+      - uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Safety check - ensure prod template/params
+        run: |
+          grep -q "using '../main.bicep'" infra/params/prod.bicepparam
+          grep -q "param env = 'prod'" infra/params/prod.bicepparam
+          if grep -q "main-demo.bicep" infra/params/prod.bicepparam; then
+            echo "Refusing to deploy prod with demo template."
+            exit 1
+          fi
+      - name: Safety check - block destructive what-if changes
+        run: |
+          PG_PWD=$(az keyvault secret show \
+            --vault-name "${{ vars.BOOTSTRAP_KV }}" \
+            --name "${{ vars.PG_ADMIN_SECRET_NAME }}" \
+            --query value -o tsv)
+
+          az deployment sub what-if \
+            --location "${{ vars.AZURE_LOCATION }}" \
+            --name "ctaa-prod-whatif-${{ github.run_id }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/params/prod.bicepparam \
+            --parameters \
+              apiImage="${{ needs.build-and-push.outputs.api_image }}" \
+              workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
+              postgresAdminPassword="$PG_PWD" \
+            -o json > whatif-prod.json
+
+          if jq -e '.changes[]? | select(.changeType == "Delete")' whatif-prod.json >/dev/null; then
+            echo "Refusing prod deploy: what-if reported Delete operations:"
+            jq -r '.changes[]? | select(.changeType == "Delete") | .resourceId // "<unknown-resource>"' whatif-prod.json | sed 's/^/- /'
+            exit 1
+          fi
+
+          echo "Prod what-if safety passed: no Delete operations detected."
       - name: Deploy prod
         run: |
           PG_PWD=$(az keyvault secret show \
             --vault-name "${{ vars.BOOTSTRAP_KV }}" \
-            --name pg-admin-pwd-prod \
+            --name "${{ vars.PG_ADMIN_SECRET_NAME }}" \
             --query value -o tsv)
           az deployment sub create \
-            --location eastus2 \
+            --location "${{ vars.AZURE_LOCATION }}" \
             --name "ctaa-prod-${{ github.run_id }}" \
             --template-file infra/main.bicep \
             --parameters infra/params/prod.bicepparam \
             --parameters \
               apiImage="${{ needs.build-and-push.outputs.api_image }}" \
               workerImage="${{ needs.build-and-push.outputs.worker_image }}" \
+              uiImage="${{ needs.build-and-push.outputs.ui_image }}" \
               postgresAdminPassword="$PG_PWD"
       - name: Run migrations
-        run: |
-          az containerapp job start \
-            --name "ca-ctaa-prod-eus-migrate" \
-            --resource-group "rg-ctaa-prod-eus"
+        env:
+          MIGRATION_JOB_NAME: ${{ vars.MIGRATION_JOB_NAME }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+        run: ./scripts/run_migration_job.sh

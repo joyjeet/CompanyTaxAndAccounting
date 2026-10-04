@@ -21,10 +21,12 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
+from app.domain.exceptions import ClientArchivedError
 from app.domain.promotion import (
     AlreadyPromotedError,
     PromoteLineInput,
     PromotionForbiddenError,
+    learn_statement_rule,
     promote_draft,
     promote_statement_draft,
     reject_draft,
@@ -38,6 +40,7 @@ router = APIRouter(prefix="/drafts", tags=["drafts"])
 # --------------------------------------------------------------------------- #
 class DraftOut(BaseModel):
     id: UUID
+    client_id: UUID
     source_document_id: UUID
     kind: str
     status: str
@@ -73,15 +76,27 @@ def _resolve_promote_client_id(
 @router.get("", response_model=list[DraftOut])
 def list_drafts(
     pending_only: bool = True,
+    client_id: UUID | None = None,
     sess: Session = Depends(db_session),
 ) -> list[DraftOut]:
+    """List drafts visible to this identity.
+
+    RLS already confines the result to the caller's firm (and, for portal
+    identities, to their own client). `client_id` narrows further: it is
+    what the UI passes when firm staff are working inside one client's
+    workspace, so a firm with 200 clients doesn't get all 200 clients'
+    transactions in one list.
+    """
     q = select(DraftClassification)
     if pending_only:
         q = q.where(DraftClassification.status == DraftStatus.PENDING_REVIEW)
+    if client_id is not None:
+        q = q.where(DraftClassification.client_id == client_id)
     rows = sess.execute(q).scalars().all()
     return [
         DraftOut(
             id=d.id,
+            client_id=d.client_id,
             source_document_id=d.source_document_id,
             kind=d.kind.value,
             status=d.status.value,
@@ -106,8 +121,9 @@ class PromoteLineIn(BaseModel):
 
 class PromoteIn(BaseModel):
     client_id: UUID | None = None
-    period_id: UUID
     entry_date: date
+    # Optional: the period is derived from `entry_date` unless pinned.
+    period_id: UUID | None = None
     memo: str | None = None
     lines: list[PromoteLineIn]
 
@@ -159,7 +175,7 @@ def promote(
         )
     except PromotionForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
-    except AlreadyPromotedError as e:
+    except (AlreadyPromotedError, ClientArchivedError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     return PromoteOut(journal_entry_id=je_id)
 
@@ -168,16 +184,34 @@ def promote(
 # Statement promote-all — one balanced JE per transaction in payload.transactions.
 class StatementPromoteIn(BaseModel):
     client_id: UUID | None = None
-    period_id: UUID
+    period_id: UUID | None = None
     cash_account_code: str = "1000"
     # Optional remap: {"3": "4100", "7": "5200"} — transaction index -> code.
     # Keyed as strings so JSON-from-the-wire stays clean.
     account_overrides: dict[str, str] | None = None
+    # Optional row decisions from the review UI.
+    accepted_indexes: list[int] | None = None
+    rejected_indexes: list[int] | None = None
 
 
 class StatementPromoteOut(BaseModel):
     journal_entry_ids: list[UUID]
     skipped: list[dict[str, str]]
+    posted_indexes: list[int]
+    excluded_indexes: list[int]
+    pending_indexes: list[int]
+    review_complete: bool
+    learned_rule_count: int
+
+
+class LearnRuleIn(BaseModel):
+    client_id: UUID | None = None
+    transaction_index: int
+    target_account_code: str
+
+
+class LearnRuleOut(BaseModel):
+    learned_rule_count: int
 
 
 @router.post("/{draft_id}/promote-all", response_model=StatementPromoteOut)
@@ -225,15 +259,60 @@ def promote_all(
             period_id=body.period_id,
             cash_account_code=body.cash_account_code,
             account_overrides=overrides,
+            accepted_indexes=set(body.accepted_indexes or []),
+            rejected_indexes=set(body.rejected_indexes or []),
         )
     except PromotionForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
-    except AlreadyPromotedError as e:
+    except (AlreadyPromotedError, ClientArchivedError) as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     return StatementPromoteOut(
         journal_entry_ids=result.journal_entry_ids,
         skipped=result.skipped,
+        posted_indexes=result.posted_indexes,
+        excluded_indexes=result.excluded_indexes,
+        pending_indexes=result.pending_indexes,
+        review_complete=result.review_complete,
+        learned_rule_count=result.learned_rule_count,
     )
+
+
+@router.post("/{draft_id}/learn-rule", response_model=LearnRuleOut)
+def learn_rule(
+    draft_id: UUID,
+    body: LearnRuleIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> LearnRuleOut:
+    if identity.scope is not AccessScope.FIRM:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only firm-scope users can learn rules.",
+        )
+
+    client_id = _resolve_promote_client_id(
+        sess,
+        draft_id=draft_id,
+        identity=identity,
+        body_client_id=body.client_id,
+    )
+
+    try:
+        learned = learn_statement_rule(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=client_id,
+            scope=identity.scope,
+            draft_id=draft_id,
+            transaction_index=body.transaction_index,
+            target_account_code=body.target_account_code,
+        )
+    except PromotionForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except AlreadyPromotedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+
+    return LearnRuleOut(learned_rule_count=learned)
 
 
 # --------------------------------------------------------------------------- #

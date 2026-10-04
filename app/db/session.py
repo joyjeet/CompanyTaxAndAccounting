@@ -103,6 +103,33 @@ def tenant_session(ctx: TenantContext) -> Iterator[Session]:
 
 
 @contextmanager
+def subject_session(subject: str) -> Iterator[Session]:
+    """Yield a session that can read ONLY the given subject's own memberships.
+
+    Sets `app.current_subject` and nothing else. The `p_self_read` policy on
+    `firm_membership` (migration 0015) keys off that GUC, so this session can
+    see the caller's membership rows and no tenant data whatsoever — every
+    tenant-scoped policy is keyed on `app.current_firm`, which stays unset and
+    therefore evaluates to FALSE.
+
+    This exists to break the chicken-and-egg in login: we cannot set the tenant
+    GUCs until we know which firm the user belongs to. Use it ONLY for identity
+    resolution; all real work goes through `tenant_session`.
+    """
+    sess = SessionLocal()
+    try:
+        sess.begin()
+        _set_local(sess, "app.current_subject", subject)
+        yield sess
+        sess.commit()
+    except Exception:
+        sess.rollback()
+        raise
+    finally:
+        sess.close()
+
+
+@contextmanager
 def unscoped_session() -> Iterator[Session]:
     """Open a session as the runtime app role with NO tenant context set.
 

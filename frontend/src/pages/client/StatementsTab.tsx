@@ -2,9 +2,7 @@ import {
   Badge,
   Button,
   Caption1,
-  Dropdown,
   makeStyles,
-  Option,
   Tab,
   TabList,
   Table,
@@ -26,9 +24,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { useApi } from "../../api/useApi";
+import ReportPeriodPicker, { useReportPeriod } from "../../components/ReportPeriodPicker";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
-import { fmtDate, fmtMoney } from "../../lib/format";
+import { fmtMoney } from "../../lib/format";
 
 type StatementTab = "tb" | "pl" | "bs" | "cf";
 
@@ -62,41 +61,54 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
   const { dispatchToast } = useToastController(toasterId);
 
   const [tab, setTab] = useState<StatementTab>("tb");
-  const [periodId, setPeriodId] = useState<string>("");
-
-  const periods = useQuery({
-    queryKey: ["periods", clientId],
-    queryFn: async () => {
-      const ps = await api.listPeriods(clientId);
-      if (ps.length > 0 && !periodId) setPeriodId(ps[0].id);
-      return ps;
-    },
-  });
+  const dateFilter = useReportPeriod("all");
+  const period = dateFilter.range;
 
   const tb = useQuery({
-    queryKey: ["tb", clientId, periodId],
-    queryFn: () => api.getTrialBalance(clientId, periodId),
-    enabled: !!periodId && tab === "tb",
+    queryKey: ["tb", clientId, period.startDate, period.endDate],
+    queryFn: () =>
+      api.getTrialBalance(clientId, {
+        periodStart: period.startDate,
+        periodEnd: period.endDate,
+      }),
+    enabled: tab === "tb",
   });
   const pl = useQuery({
-    queryKey: ["pl", clientId, periodId],
-    queryFn: () => api.getProfitAndLoss(clientId, periodId),
-    enabled: !!periodId && tab === "pl",
+    queryKey: ["pl", clientId, period.startDate, period.endDate],
+    queryFn: () =>
+      api.getProfitAndLoss(clientId, {
+        periodStart: period.startDate,
+        periodEnd: period.endDate,
+      }),
+    enabled: tab === "pl",
   });
   const bs = useQuery({
-    queryKey: ["bs", clientId, periodId],
-    queryFn: () => api.getBalanceSheet(clientId, periodId),
-    enabled: !!periodId && tab === "bs",
+    queryKey: ["bs", clientId, period.startDate, period.endDate],
+    queryFn: () =>
+      api.getBalanceSheet(clientId, {
+        periodStart: period.startDate,
+        periodEnd: period.endDate,
+      }),
+    enabled: tab === "bs",
   });
   const cf = useQuery({
-    queryKey: ["cf", clientId, periodId],
-    queryFn: () => api.getCashFlow(clientId, periodId),
-    enabled: !!periodId && tab === "cf",
+    queryKey: ["cf", clientId, period.startDate, period.endDate],
+    queryFn: () =>
+      api.getCashFlow(clientId, {
+        periodStart: period.startDate,
+        periodEnd: period.endDate,
+      }),
+    enabled: tab === "cf",
   });
 
   const generate = useMutation({
     mutationFn: (kind: "profit_and_loss" | "balance_sheet" | "cash_flow") =>
-      api.generateStatementArtifact({ period_id: periodId, kind, format: "pdf" }),
+      api.generateStatementArtifact({
+        period_start: period.startDate,
+        period_end: period.endDate,
+        kind,
+        format: "pdf",
+      }),
     onSuccess: () => {
       dispatchToast(<Toast><ToastTitle>PDF artifact generated</ToastTitle></Toast>, { intent: "success" });
       qc.invalidateQueries({ queryKey: ["artifacts"] });
@@ -106,37 +118,15 @@ export default function StatementsTab({ clientId }: { clientId: string }) {
     },
   });
 
-  if (periods.isLoading) return <LoadingState />;
-  if (periods.error) return <ErrorState error={periods.error} />;
-  if (!periods.data || periods.data.length === 0) {
-    return <EmptyState title="No periods" description="Create a period before previewing statements." />;
-  }
-
-  const periodLabel = periods.data.find((p) => p.id === periodId)?.name ?? "";
-
   return (
     <div>
       <Toaster toasterId={toasterId} />
       <div className={styles.toolbar}>
-        <Dropdown
-          value={periodLabel}
-          selectedOptions={periodId ? [periodId] : []}
-          onOptionSelect={(_, d) => d.optionValue && setPeriodId(d.optionValue)}
-        >
-          {periods.data.map((p) => (
-            <Option
-              key={p.id}
-              value={p.id}
-              text={`${p.name} (${fmtDate(p.start_date)} – ${fmtDate(p.end_date)})`}
-            >
-              {p.name} ({fmtDate(p.start_date)} – {fmtDate(p.end_date)})
-            </Option>
-          ))}
-        </Dropdown>
+        <ReportPeriodPicker state={dateFilter} />
         <Button
           appearance="secondary"
           icon={<DocumentPdfRegular />}
-          disabled={!periodId || generate.isPending || tab === "tb"}
+          disabled={generate.isPending || tab === "tb"}
           onClick={() => {
             const kind =
               tab === "pl" ? "profit_and_loss" : tab === "bs" ? "balance_sheet" : "cash_flow";

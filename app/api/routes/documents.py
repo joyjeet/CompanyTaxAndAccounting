@@ -20,13 +20,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.session import tenant_session
 from app.db.tenant import AccessScope, TenantContext
+from app.domain.audit import write_audit
 from app.domain.auto_promote import auto_promote_eligible_drafts
 from app.domain.ingest import VirusScanError, ingest_document
 from app.integrations.registry import get_queue, get_storage
@@ -36,9 +37,23 @@ from app.models.accounting import (
     JournalEntry,
     SourceDocument,
 )
+from app.models.enums import AuditAction
 from app.workers.inline import drain_in_process
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+
+ALLOWED_DOCUMENT_KINDS = {
+    "generic",
+    "bank_transaction",
+    "invoice",
+    "receipt",
+    "tax_form",
+    "tax_form_w2",
+    "tax_form_1099_nec",
+    "tax_form_1099_int",
+    "tax_form_1098",
+}
 
 
 class UploadOut(BaseModel):
@@ -64,6 +79,11 @@ class DocumentOut(BaseModel):
     ocr_completed_at: datetime | None
     ocr_error: str | None
     received_at: datetime
+    uploaded_by: str | None
+
+
+class DocumentKindUpdateIn(BaseModel):
+    kind: str
 
 
 @router.get("", response_model=list[DocumentOut])
@@ -95,9 +115,120 @@ def list_documents(
             ocr_completed_at=d.ocr_completed_at,
             ocr_error=d.ocr_error,
             received_at=d.created_at,
+            uploaded_by=d.uploaded_by,
         )
         for d in rows
     ]
+
+
+@router.post("/{document_id}/kind", response_model=DocumentOut)
+def update_document_kind(
+    document_id: UUID,
+    body: DocumentKindUpdateIn,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> DocumentOut:
+    """Manually correct a document kind.
+
+    The source document remains in the same tenant/client scope (RLS enforced).
+    """
+    kind = (body.kind or "").strip().lower()
+    if kind not in ALLOWED_DOCUMENT_KINDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid kind: {body.kind}",
+        )
+
+    doc = sess.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document not found",
+        )
+
+    previous_kind = doc.kind
+    doc.kind = kind
+    sess.flush()
+
+    if previous_kind != kind:
+        write_audit(
+            sess,
+            firm_id=identity.firm_id,
+            client_id=doc.client_id,
+            actor=identity.subject,
+            action=AuditAction.UPDATE,
+            entity_type="source_document",
+            entity_id=doc.id,
+            details={
+                "field": "kind",
+                "from": previous_kind,
+                "to": kind,
+            },
+        )
+
+    return DocumentOut(
+        id=doc.id,
+        client_id=doc.client_id,
+        kind=doc.kind,
+        filename=doc.original_filename,
+        content_type=doc.mime_type,
+        sha256=doc.sha256 or "",
+        ocr_status=doc.ocr_status.value,
+        ocr_completed_at=doc.ocr_completed_at,
+        ocr_error=doc.ocr_error,
+        received_at=doc.created_at,
+        uploaded_by=doc.uploaded_by,
+    )
+
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_document(
+    document_id: UUID,
+    identity: AuthIdentity = Depends(get_identity),
+    sess: Session = Depends(db_session),
+) -> Response:
+    """Remove a document uploaded by mistake.
+
+    Pending / rejected drafts derived from it are discarded automatically (the
+    `draft_classification` FK cascades on delete). Posted journal entries are
+    financial records, so if any journal entry was posted from this document we
+    refuse — otherwise the trial balance would change with no reversing entry.
+    The reviewer must reject or reverse those entries first, then delete.
+    """
+    doc = sess.get(SourceDocument, document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="document not found",
+        )
+
+    posted = sess.execute(
+        select(func.count())
+        .select_from(JournalEntry)
+        .where(JournalEntry.source_document_id == document_id)
+    ).scalar_one()
+    if posted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{posted} journal entr{'y' if posted == 1 else 'ies'} posted "
+                "from this document. Reject or reverse them first, then delete."
+            ),
+        )
+
+    write_audit(
+        sess,
+        firm_id=identity.firm_id,
+        client_id=doc.client_id,
+        actor=identity.subject,
+        action=AuditAction.DELETE,
+        entity_type="source_document",
+        entity_id=doc.id,
+        details={"filename": doc.original_filename, "sha256": doc.sha256},
+    )
+    sess.delete(doc)
+    sess.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

@@ -26,6 +26,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { useApi } from "../api/useApi";
+import { useFirmRole } from "../auth/useFirmRole";
 import InfoHint from "../components/InfoHint";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
@@ -47,6 +48,7 @@ const useStyles = makeStyles({
 export default function RulesEngine() {
   const styles = useStyles();
   const api = useApi();
+  const { capabilities, role } = useFirmRole();
   const qc = useQueryClient();
   const toasterId = useId("rules-toaster");
   const { dispatchToast } = useToastController(toasterId);
@@ -140,10 +142,15 @@ export default function RulesEngine() {
                 appearance="primary"
                 icon={<SaveRegular />}
                 onClick={() => save.mutate()}
-                disabled={save.isPending}
+                disabled={save.isPending || !capabilities.canEditRulesEngine}
               >
                 {save.isPending ? <Spinner size="tiny" /> : "Save and reload"}
               </Button>
+              {!capabilities.canEditRulesEngine && (
+                <Caption1 block style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+                  Your current role ({role ?? "unknown"}) is read-only for rules engine changes.
+                </Caption1>
+              )}
             </div>
           </div>
         )}

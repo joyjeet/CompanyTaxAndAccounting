@@ -7,7 +7,7 @@
 import { Text, makeStyles, tokens } from "@fluentui/react-components";
 
 import ClientProfileForm from "../components/ClientProfileForm";
-import { useAuth } from "../auth/AuthContext";
+import { useEffectiveIdentity } from "../auth/TenantContext";
 
 const useStyles = makeStyles({
   page: {
@@ -25,7 +25,7 @@ const useStyles = makeStyles({
 
 export default function PortalProfile() {
   const styles = useStyles();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
   const clientId = identity?.clientId ?? "";
 
   if (!clientId) {

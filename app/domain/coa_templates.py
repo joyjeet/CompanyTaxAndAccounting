@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.tenant import AccessScope
+from app.domain.account_classification import coerce_sub_type
 from app.domain.audit import write_audit
 from app.models.accounting import ChartOfAccounts
 from app.models.coa_template import CoaTemplate, CoaTemplateNode
@@ -40,7 +41,6 @@ from app.models.enums import (
     NORMAL_BALANCE_FOR,
     AuditAction,
     CoaNodeOrigin,
-    CoaTemplateKind,
     CoaTemplateStatus,
     Industry,
 )
@@ -210,13 +210,12 @@ def instantiate_for_client(
             "activate a 'general' template before any client can be onboarded."
         )
 
+    # An absent overlay is not an error. Most industries never ship one, and
+    # the general chart is a complete, usable chart on its own -- refusing to
+    # onboard a veterinary practice because nobody has written a veterinary
+    # overlay would be absurd. The caller learns what happened from
+    # InstantiationResult.overlay_template_id being None.
     overlay = get_active_overlay(sess, industry)
-    # GENERIC overlay is allowed to be absent — no extra rows is fine.
-    if overlay is None and industry is not Industry.GENERIC:
-        raise CoaTemplateError(
-            f"No ACTIVE overlay exists for industry={industry.value}. "
-            "Either activate the overlay or pick 'generic'."
-        )
 
     # Reject if the client already has template-derived rows.
     existing_templated = sess.execute(
@@ -290,6 +289,9 @@ def instantiate_for_client(
             name=n.name,
             account_type=n.account_type,
             normal_balance=NORMAL_BALANCE_FOR[n.account_type],
+            sub_type=coerce_sub_type(
+                n.sub_type, code=n.code, account_type=n.account_type
+            ).value,
             parent_account_id=parent_id,
             path=path,
             depth=depth,
@@ -347,6 +349,9 @@ def instantiate_for_client(
                 name=n.name,
                 account_type=n.account_type,
                 normal_balance=NORMAL_BALANCE_FOR[n.account_type],
+                sub_type=coerce_sub_type(
+                    n.sub_type, code=n.code, account_type=n.account_type
+                ).value,
                 parent_account_id=parent_id,
                 path=path,
                 depth=depth,

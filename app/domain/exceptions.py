@@ -19,3 +19,7 @@ class CrossTenantError(DomainError):
 
 class InvalidAccountError(DomainError):
     """COA row is missing, inactive, or of the wrong type for this operation."""
+
+
+class ClientArchivedError(DomainError):
+    """Raised when attempting to write new books for an archived client."""

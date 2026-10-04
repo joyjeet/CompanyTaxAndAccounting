@@ -26,17 +26,17 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.db.tenant import AccessScope
 from app.core.config import get_settings
+from app.db.tenant import AccessScope
 from app.domain.audit import write_audit
 from app.domain.exceptions import DomainError
+from app.domain.ledger import LedgerService, LineInput
 from app.integrations import registry
 from app.integrations.account_categorizer import (
     CategorizationRule,
     RuleCondition,
     load_rules_from_file,
 )
-from app.domain.ledger import LedgerService, LineInput
 from app.models.accounting import AccountingPeriod, ChartOfAccounts, DraftClassification
 from app.models.enums import AuditAction, DraftStatus
 
@@ -70,9 +70,9 @@ def promote_draft(
     actor: str,
     scope: AccessScope,
     draft_id: UUID,
-    period_id: UUID,
     entry_date: date,
     lines: list[PromoteLineInput],
+    period_id: UUID | None = None,
     memo: str | None = None,
 ) -> UUID:
     """Promote `draft_id` into a posted journal entry. Returns entry id.
@@ -195,6 +195,11 @@ def reject_draft(
 class StatementPromotionResult:
     journal_entry_ids: list[UUID]
     skipped: list[dict[str, str]]  # [{"index": "3", "reason": "..."}]
+    posted_indexes: list[int]
+    excluded_indexes: list[int]
+    pending_indexes: list[int]
+    review_complete: bool
+    learned_rule_count: int
 
 
 def _resolve_rules_file() -> Path:
@@ -396,6 +401,46 @@ def _learn_rule_from_single_promote(
     return _learn_rules_from_overrides(txns, {0: chosen_non_cash[0]})
 
 
+def learn_statement_rule(
+    sess: Session,
+    *,
+    firm_id: UUID,
+    client_id: UUID,
+    scope: AccessScope,
+    draft_id: UUID,
+    transaction_index: int,
+    target_account_code: str,
+) -> int:
+    """Learn one categorization rule from a reviewed statement transaction."""
+    if scope is not AccessScope.FIRM:
+        raise PromotionForbiddenError("Only firm-scope users can learn rules.")
+
+    draft = sess.get(DraftClassification, draft_id)
+    if draft is None:
+        raise AlreadyPromotedError("Draft not found in this tenant.")
+    if draft.firm_id != firm_id or draft.client_id != client_id:
+        raise AlreadyPromotedError("Draft belongs to another tenant.")
+
+    payload = draft.payload or {}
+    if not payload.get("is_statement"):
+        raise PromotionForbiddenError("Only bank-statement drafts support per-row rule learning.")
+
+    txns = payload.get("transactions") or []
+    if transaction_index < 0 or transaction_index >= len(txns):
+        raise PromotionForbiddenError("Transaction index is out of range for this draft.")
+
+    learned = _learn_rules_from_overrides(
+        txns,
+        {transaction_index: str(target_account_code or "").strip()},
+    )
+    if learned <= 0:
+        raise PromotionForbiddenError(
+            "No rule learned. Ensure the selected account differs from the proposed "
+            "account and that the row has a usable description and direction."
+        )
+    return learned
+
+
 def promote_statement_draft(
     sess: Session,
     *,
@@ -404,9 +449,11 @@ def promote_statement_draft(
     actor: str,
     scope: AccessScope,
     draft_id: UUID,
-    period_id: UUID,
+    period_id: UUID | None = None,
     cash_account_code: str = "1000",
     account_overrides: dict[int, str] | None = None,
+    accepted_indexes: set[int] | None = None,
+    rejected_indexes: set[int] | None = None,
 ) -> StatementPromotionResult:
     """Post one balanced JE per transaction in a bank-statement draft.
 
@@ -426,9 +473,15 @@ def promote_statement_draft(
     index without re-running OCR (e.g. transaction 0 -> code "4100").
 
     Transactions whose code can't be resolved (missing from the client's
-    chart of accounts) are skipped and surfaced in `skipped[]`. The
-    remaining transactions still post — partial success is preferred over
+    chart of accounts) are skipped and surfaced in `skipped[]`. The remaining
+    transactions still post — partial success is preferred over
     all-or-nothing for demo realism.
+
+    The selected `period_id` acts as the default for undated rows. Dated rows
+    keep their own transaction date and are posted into whichever open
+    accounting period contains that date. If no open period covers the date,
+    the row still posts into the selected period at that period boundary so
+    review flow is never blocked by period setup.
 
     The draft is marked PROMOTED iff at least one JE was posted, and
     `promoted_journal_entry_id` is set to the first posted entry. All JE
@@ -456,12 +509,14 @@ def promote_statement_draft(
     if not txns:
         raise AlreadyPromotedError("Statement draft has no transactions to post.")
 
-    # Load period + chart of accounts (keyed by code, then by id).
-    period = sess.get(AccountingPeriod, period_id)
-    if period is None or period.client_id != client_id:
-        raise PromotionForbiddenError("Period not found in this tenant.")
-    if period.is_locked:
-        raise PromotionForbiddenError("Period is locked; cannot post entries.")
+    # Load chart of accounts (keyed by code, then by id). `period_id` is
+    # optional and only supplies a fallback date for rows whose date the
+    # parser could not infer; it never gates or shifts a dated transaction.
+    period = None
+    if period_id is not None:
+        period = sess.get(AccountingPeriod, period_id)
+        if period is None or period.client_id != client_id:
+            raise PromotionForbiddenError("Period not found in this tenant.")
 
     from sqlalchemy import select as _select  # local import to avoid cycle
 
@@ -482,30 +537,108 @@ def promote_statement_draft(
             f"Cash account '{cash_account_code}' not found in this client's chart "
             "of accounts."
         )
+    if not cash_acct.is_leaf:
+        cash_prefix = f"{cash_acct.path or cash_acct.code}>"
+        cash_descendants = sorted(
+            (
+                account
+                for account in accounts_by_code.values()
+                if account.is_leaf
+                and (account.path or "").startswith(cash_prefix)
+            ),
+            key=lambda account: (account.depth, account.code),
+        )
+        if not cash_descendants:
+            raise PromotionForbiddenError(
+                f"Cash account '{cash_account_code}' is a parent/rollup with no "
+                "active posting accounts beneath it."
+            )
+        cash_acct = cash_descendants[0]
 
     overrides = account_overrides or {}
+    existing_payload = draft.payload or {}
+
+    def _to_int_set(value: object) -> set[int]:
+        out: set[int] = set()
+        if not isinstance(value, list):
+            return out
+        for raw in value:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if n >= 0:
+                out.add(n)
+        return out
+
+    existing_posted_indexes = _to_int_set(existing_payload.get("_posted_indexes"))
+    existing_excluded_indexes = _to_int_set(existing_payload.get("_excluded_indexes"))
+    decided_indexes = existing_posted_indexes | existing_excluded_indexes
+
+    accepted = {i for i in (accepted_indexes or set()) if i >= 0}
+    rejected = {i for i in (rejected_indexes or set()) if i >= 0}
+
+    if accepted & rejected:
+        overlap = sorted(accepted & rejected)
+        raise PromotionForbiddenError(
+            f"accepted_indexes and rejected_indexes overlap: {overlap}"
+        )
+
+    all_indexes = set(range(len(txns)))
+    if accepted or rejected:
+        target_accept = (accepted & all_indexes) - decided_indexes
+        target_reject = (rejected & all_indexes) - decided_indexes
+    else:
+        # Backward-compatible behavior for callers that don't pass decisions:
+        # post all still-pending transactions.
+        target_accept = all_indexes - decided_indexes
+        target_reject = set()
+
+    if not target_accept and not target_reject:
+        raise AlreadyPromotedError("No pending transactions left to process.")
+
     posted_ids: list[UUID] = []
     skipped: list[dict[str, str]] = []
+    posted_indexes_this_call: set[int] = set()
     ledger = LedgerService(sess, firm_id=firm_id, client_id=client_id, actor=actor)
 
-    def _clamp(d: date) -> date:
-        if d < period.start_date:
-            return period.start_date
-        if d > period.end_date:
-            return period.end_date
-        return d
+    def _resolve_entry_date(txn: dict) -> tuple[date | None, str]:
+        """Resolve a transaction's posting date.
+
+        Returns (entry_date, skip_reason). The books are continuous, so the
+        transaction's own date is always honoured — it is never clamped into,
+        or blocked by, an accounting period.
+        """
+        iso = (txn.get("date") or "").strip()
+        if not iso:
+            # The parser could not infer a year for this row — see
+            # `bank_statement._format_date`, which yields "" when the statement
+            # header carries no year. There is no date to honour, so fall back
+            # to the selected period's start, or today if none was given.
+            return (period.start_date if period is not None else date.today()), ""
+        try:
+            return date.fromisoformat(iso), ""
+        except ValueError:
+            return None, f"unparseable date '{iso}'"
 
     for idx, txn in enumerate(txns):
+        if idx in target_reject:
+            skipped.append({"index": str(idx), "reason": "rejected by reviewer"})
+            continue
+        if idx not in target_accept:
+            continue
+
         code = overrides.get(idx) or txn.get("proposed_account_code") or ""
         code = str(code).strip()
         if not code:
             skipped.append({"index": str(idx), "reason": "no account code"})
             continue
         # If the categorizer flagged this row as needs_review (low confidence)
-        # and the reviewer did NOT explicitly override the code, skip — the
-        # reviewer must address it before it can post.
+        # and the reviewer did NOT explicitly accept or override the code,
+        # skip — the reviewer must address it before it can post.
         if (
             idx not in overrides
+            and idx not in accepted
             and txn.get("_categorizer_needs_review") is True
         ):
             skipped.append(
@@ -525,6 +658,17 @@ def promote_statement_draft(
                 {
                     "index": str(idx),
                     "reason": f"account code '{code}' not in chart of accounts",
+                }
+            )
+            continue
+        if not other_acct.is_leaf:
+            skipped.append(
+                {
+                    "index": str(idx),
+                    "reason": (
+                        f"account code '{code}' is a parent/rollup; "
+                        "select a posting account"
+                    ),
                 }
             )
             continue
@@ -555,41 +699,61 @@ def promote_statement_draft(
             )
             continue
 
-        # Parse the txn's ISO date (set by the parser); fall back to period start.
-        entry_date = period.start_date
-        iso = (txn.get("date") or "").strip()
-        if iso:
-            try:
-                entry_date = _clamp(date.fromisoformat(iso))
-            except ValueError:
-                pass
+        entry_date, date_reason = _resolve_entry_date(txn)
+        if entry_date is None:
+            skipped.append({"index": str(idx), "reason": date_reason})
+            continue
 
         memo = (txn.get("description") or "")[:120] or "Bank statement transaction"
 
         entry = ledger.post(
-            period_id=period_id,
             entry_date=entry_date,
             lines=lines,
             memo=memo,
             source_document_id=draft.source_document_id,
         )
         posted_ids.append(entry.id)
+        posted_indexes_this_call.add(idx)
 
-    if not posted_ids:
+    if not posted_ids and not target_reject:
+        first_reason = skipped[0]["reason"] if skipped else "unknown reason"
         raise AlreadyPromotedError(
-            "No transactions could be posted; draft left in pending review."
+            "No transactions could be posted; draft left in pending review. "
+            f"First blocking reason: {first_reason}"
         )
 
     learned_rule_count = _learn_rules_from_overrides(txns, overrides)
 
-    draft.status = DraftStatus.PROMOTED
-    draft.promoted_journal_entry_id = posted_ids[0]
-    draft.reviewed_at = datetime.now(tz=UTC)
-    draft.reviewed_by = actor
+    persisted_posted_ids: list[str] = []
+    for raw in existing_payload.get("_posted_journal_entry_ids", []):
+        if isinstance(raw, str) and raw:
+            persisted_posted_ids.append(raw)
+    persisted_posted_ids.extend(str(j) for j in posted_ids)
+
+    next_posted_indexes = sorted(existing_posted_indexes | posted_indexes_this_call)
+    next_excluded_indexes = sorted(existing_excluded_indexes | target_reject)
+    next_pending_indexes = sorted(
+        all_indexes - set(next_posted_indexes) - set(next_excluded_indexes)
+    )
+    review_complete = len(next_pending_indexes) == 0
+
+    if review_complete:
+        if persisted_posted_ids:
+            draft.status = DraftStatus.PROMOTED
+            draft.promoted_journal_entry_id = UUID(persisted_posted_ids[0])
+        else:
+            draft.status = DraftStatus.REJECTED
+            draft.promoted_journal_entry_id = None
+        draft.reviewed_at = datetime.now(tz=UTC)
+        draft.reviewed_by = actor
+
     draft.payload = {
-        **(draft.payload or {}),
-        "_posted_journal_entry_ids": [str(j) for j in posted_ids],
-        "_posted_count": len(posted_ids),
+        **existing_payload,
+        "_posted_journal_entry_ids": persisted_posted_ids,
+        "_posted_count": len(persisted_posted_ids),
+        "_posted_indexes": next_posted_indexes,
+        "_excluded_indexes": next_excluded_indexes,
+        "_pending_indexes": next_pending_indexes,
         "_skipped": skipped,
         "_learned_rule_count": learned_rule_count,
     }
@@ -606,18 +770,28 @@ def promote_statement_draft(
         details={
             "journal_entry_ids": [str(j) for j in posted_ids],
             "skipped_count": len(skipped),
+            "accepted_count": len(target_accept),
+            "rejected_count": len(target_reject),
+            "pending_count": len(next_pending_indexes),
             "period_id": str(period_id),
             "kind": "bank_statement",
         },
     )
 
     return StatementPromotionResult(
-        journal_entry_ids=posted_ids, skipped=skipped
+        journal_entry_ids=posted_ids,
+        skipped=skipped,
+        posted_indexes=next_posted_indexes,
+        excluded_indexes=next_excluded_indexes,
+        pending_indexes=next_pending_indexes,
+        review_complete=review_complete,
+        learned_rule_count=learned_rule_count,
     )
 
 
 __all__ = [
     "AlreadyPromotedError",
+    "learn_statement_rule",
     "PromoteLineInput",
     "PromotionForbiddenError",
     "promote_draft",

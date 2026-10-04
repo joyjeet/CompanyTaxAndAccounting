@@ -60,13 +60,45 @@ class InvalidTokenError(Exception):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class AuthPrincipal:
+    """*Authentication* result: who the caller is, before any authorization.
+
+    Deliberately carries no firm/client/scope. When
+    `Settings.app_authz_source == 'membership'` those are resolved from our own
+    tables (`app.domain.identity_resolution`) rather than trusted from claims.
+    """
+
+    subject: str
+    email: str | None = None
+
+
 # --------------------------------------------------------------------------- #
 # Provider interface
 # --------------------------------------------------------------------------- #
 class IdentityProvider(ABC):
     @abstractmethod
+    def decode(self, *, token: str) -> dict[str, Any]:
+        """Return verified claims, or raise `InvalidTokenError`.
+
+        Implementations must fully verify signature, issuer, audience and
+        expiry before returning. Callers may trust the result.
+        """
+
     def validate(self, *, token: str) -> AuthIdentity:
-        """Return an `AuthIdentity` for the token, or raise `InvalidTokenError`."""
+        """Claims-derived identity. Used when authz comes from the token."""
+        return _claims_to_identity(self.decode(token=token), get_settings())
+
+    def validate_principal(self, *, token: str) -> AuthPrincipal:
+        """Identity only. Used when authz comes from membership rows."""
+        claims = self.decode(token=token)
+        sub = claims.get("sub")
+        if not sub:
+            raise InvalidTokenError("missing sub claim")
+        email = claims.get("email") or claims.get("preferred_username")
+        return AuthPrincipal(
+            subject=str(sub), email=str(email) if email else None
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -171,7 +203,7 @@ class JwtIdentityProvider(IdentityProvider):
             )
         return self._jwks.client
 
-    def validate(self, *, token: str) -> AuthIdentity:
+    def decode(self, *, token: str) -> dict[str, Any]:
         settings = self._settings
         try:
             signing_key = self._jwks_client().get_signing_key_from_jwt(token).key
@@ -194,7 +226,7 @@ class JwtIdentityProvider(IdentityProvider):
             raise InvalidTokenError(f"jwt validation failed: {type(e).__name__}") from e
         except Exception as e:  # JWKS fetch / network problems
             raise InvalidTokenError(f"jwt validation failed: {type(e).__name__}") from e
-        return _claims_to_identity(claims, settings)
+        return claims
 
 
 # --------------------------------------------------------------------------- #
@@ -218,7 +250,7 @@ class TestTokenIdentityProvider(IdentityProvider):
                 "(app_env='prod' with app_auth_mode='test' is forbidden)"
             )
 
-    def validate(self, *, token: str) -> AuthIdentity:
+    def decode(self, *, token: str) -> dict[str, Any]:
         settings = self._settings
         try:
             claims = jwt.decode(
@@ -238,7 +270,7 @@ class TestTokenIdentityProvider(IdentityProvider):
             )
         except jwt.PyJWTError as e:
             raise InvalidTokenError(f"jwt validation failed: {type(e).__name__}") from e
-        return _claims_to_identity(claims, settings)
+        return claims
 
 
 # --------------------------------------------------------------------------- #

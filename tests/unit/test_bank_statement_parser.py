@@ -6,7 +6,6 @@ from app.integrations.bank_statement import (
     parse_statement,
 )
 
-
 # Synthetic TD-style statement covering the headers and line shapes the
 # parser cares about. Includes deposits, electronic deposits, electronic
 # payments (single-line + multi-line continuation), plus a daily-balance
@@ -90,6 +89,41 @@ def test_iso_date_inferred_from_period_year() -> None:
     for t in r["transactions"]:
         assert t["date"].startswith("2025-")
         assert t["raw_date"].startswith("07/")
+
+
+def test_parse_resolves_cross_year_period_continuously() -> None:
+    stmt = """
+    STATEMENT OF ACCOUNT
+    Statement Period: Dec 20 2025-Jan 10 2026
+    Beginning Balance 1,000.00
+    Ending Balance 900.00
+
+    Electronic Payments
+    12/29 BILL PAYMENT 50.00
+    01/03 CARD PURCHASE 50.00
+    """
+    r = parse_statement(stmt)
+    txns = r["transactions"]
+    assert len(txns) == 2
+    assert txns[0]["date"] == "2025-12-29"
+    assert txns[1]["date"] == "2026-01-03"
+
+
+def test_parse_uses_sequence_continuity_when_year_missing() -> None:
+    stmt = """
+    STATEMENT OF ACCOUNT
+    Beginning Balance 1,000.00
+    Ending Balance 900.00
+
+    Electronic Payments
+    12/31/2025 YEAR END PAYMENT 10.00
+    01/01 NEW YEAR PAYMENT 15.00
+    """
+    r = parse_statement(stmt)
+    txns = r["transactions"]
+    assert len(txns) == 2
+    assert txns[0]["date"] == "2025-12-31"
+    assert txns[1]["date"] == "2026-01-01"
 
 
 def test_parse_returns_empty_for_non_statement_text() -> None:

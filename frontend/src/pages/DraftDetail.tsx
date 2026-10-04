@@ -3,10 +3,20 @@ import {
   Body1,
   Button,
   Caption1,
+  Combobox,
+  Dialog,
+  DialogActions,
+  DialogBody,
+  DialogContent,
+  DialogSurface,
+  DialogTitle,
   Dropdown,
   Field,
   Input,
   makeStyles,
+  MessageBar,
+  MessageBarBody,
+  MessageBarTitle,
   Option,
   OptionGroup,
   Spinner,
@@ -31,11 +41,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { useApi } from "../api/useApi";
-import { useAuth } from "../auth/AuthContext";
-import type { CoaOut } from "../auth/types";
+import { useEffectiveIdentity } from "../auth/TenantContext";
+import { useFirmRole } from "../auth/useFirmRole";
+import type { AccountType, CoaOut } from "../auth/types";
 import Section from "../components/Section";
 import { ErrorState, LoadingState } from "../components/States";
 import { fmtMoney, shortId, todayIso } from "../lib/format";
+import { statementRangeFromTxns } from "../lib/statementPeriod";
+import {
+  promoteDisabledReason,
+  rejectDisabledReason,
+} from "./draftActionGate";
 
 interface DraftLine {
   account_id: string;
@@ -53,6 +69,121 @@ const ACCOUNT_TYPE_LABELS: Record<string, string> = {
   revenue: "Income",
   expense: "Expenses",
 };
+
+/**
+ * Sentinel option value for the "create a new account" row that sits at the
+ * bottom of every account picker. Reviewers routinely hit a transaction that
+ * has no home in the client's chart yet; making them leave the draft, add the
+ * account, and come back loses their in-progress categorizations.
+ */
+const NEW_ACCOUNT_OPTION = "__ctaa_new_account__";
+
+interface AccountGroup {
+  type: string;
+  label: string;
+  accounts: CoaOut[];
+}
+
+/**
+ * Searchable account picker. A client's chart of accounts routinely runs to a
+ * hundred-plus rows, so a plain dropdown is unusable while triaging the queue.
+ * This filters the grouped options against what the reviewer types (matching
+ * both code and name) while keeping the grouping and the "+ New account" row.
+ */
+export function AccountPicker({
+  groups,
+  selectedId,
+  label,
+  allowCreate,
+  onPick,
+  onCreateNew,
+}: {
+  groups: AccountGroup[];
+  selectedId?: string;
+  label: string;
+  allowCreate: boolean;
+  onPick: (accountId: string) => void;
+  onCreateNew: () => void;
+}) {
+  // undefined => idle (show the selected account's label); string => filtering.
+  const [query, setQuery] = useState<string | undefined>(undefined);
+  const filter = (query ?? "").trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      groups
+        .map((g) => ({
+          ...g,
+          accounts:
+            filter === ""
+              ? g.accounts
+              : g.accounts.filter((a) =>
+                  `${a.code} ${a.name}`.toLowerCase().includes(filter),
+                ),
+        }))
+        .filter((g) => g.accounts.length > 0),
+    [groups, filter],
+  );
+
+  return (
+    <Combobox
+      aria-label="Account"
+      placeholder="Search accounts…"
+      style={{ width: "100%", minWidth: 200 }}
+      value={query ?? label}
+      selectedOptions={selectedId ? [selectedId] : []}
+      onChange={(e) => setQuery(e.target.value)}
+      onOptionSelect={(_, data) => {
+        // Fluent fires onOptionSelect with an undefined optionValue when it
+        // auto-clears the selection — which happens on every keystroke that
+        // doesn't prefix-match the current option (e.g. typing a name, since
+        // the option text starts with the code). Ignore it, or the search box
+        // would be wiped and only code (prefix) searches would ever filter.
+        if (!data.optionValue) return;
+        if (data.optionValue === NEW_ACCOUNT_OPTION) {
+          onCreateNew();
+        } else {
+          onPick(data.optionValue);
+        }
+        setQuery(undefined);
+      }}
+      onOpenChange={(_, data) => {
+        // Open with an empty box so the reviewer can just start typing to
+        // search; closing without a pick restores the selected account label.
+        setQuery(data.open ? "" : undefined);
+      }}
+    >
+      {filtered.map((group) => (
+        <OptionGroup key={group.type} label={group.label}>
+          {group.accounts.map((a) => (
+            <Option key={a.id} value={a.id} text={`${a.code} — ${a.name}`}>
+              {a.code} — {a.name}
+            </Option>
+          ))}
+        </OptionGroup>
+      ))}
+      {filtered.length === 0 && (
+        <Option value="__no_match__" disabled text="No matching accounts">
+          No matching accounts
+        </Option>
+      )}
+      {allowCreate && (
+        <OptionGroup label="Chart of accounts">
+          <Option value={NEW_ACCOUNT_OPTION} text="+ New account...">
+            + New account...
+          </Option>
+        </OptionGroup>
+      )}
+    </Combobox>
+  );
+}
+
+interface NewAccountDraft {
+  /** Applies the created account back to the picker that opened the dialog. */
+  apply: (account: CoaOut) => void;
+  code: string;
+  name: string;
+  accountType: AccountType;
+}
 
 const useStyles = makeStyles({
   payload: {
@@ -79,7 +210,8 @@ export default function DraftDetail() {
   const navigate = useNavigate();
   const api = useApi();
   const qc = useQueryClient();
-  const { identity } = useAuth();
+  const identity = useEffectiveIdentity();
+  const { capabilities, role } = useFirmRole();
   const toasterId = useId("draft-toaster");
   const { dispatchToast } = useToastController(toasterId);
 
@@ -100,11 +232,6 @@ export default function DraftDetail() {
   // firm's clients.
   const clients = useQuery({ queryKey: ["clients"], queryFn: () => api.listClients() });
   const [clientId, setClientId] = useState<string>(identity?.clientId ?? "");
-  const periods = useQuery({
-    queryKey: ["periods", clientId],
-    queryFn: () => api.listPeriods(clientId),
-    enabled: !!clientId,
-  });
   const accounts = useQuery({
     queryKey: ["accounts", clientId],
     queryFn: () => api.listAccounts(clientId),
@@ -118,6 +245,13 @@ export default function DraftDetail() {
     () => new Map((accounts.data ?? []).map((a) => [a.code, a])),
     [accounts.data],
   );
+  const suspenseAccount = useMemo(() => {
+    const rows = accounts.data ?? [];
+    return (
+      rows.find((a) => /suspense|uncategor/i.test(a.name)) ??
+      rows.find((a) => a.code === "9999")
+    );
+  }, [accounts.data]);
   const groupedAccounts = useMemo(() => {
     const buckets = new Map<string, CoaOut[]>();
     for (const type of ACCOUNT_TYPE_ORDER) buckets.set(type, []);
@@ -138,11 +272,45 @@ export default function DraftDetail() {
 
   const accountLabelByCode = (code: string): string => {
     const acct = accountCodeMap.get(code);
-    if (!acct) return code;
+    if (!acct) {
+      if (code === "9999") {
+        if (suspenseAccount) {
+          return `${suspenseAccount.code} - ${suspenseAccount.name}`;
+        }
+        return "9999 - Suspense account";
+      }
+      return code;
+    }
     return `${acct.code} - ${acct.name}`;
   };
 
-  const [periodId, setPeriodId] = useState("");
+  const [newAccount, setNewAccount] = useState<NewAccountDraft | null>(null);
+
+  const createAccount = useMutation({
+    mutationFn: (input: NewAccountDraft) =>
+      api.createAccount(clientId, {
+        code: input.code.trim(),
+        name: input.name.trim(),
+        account_type: input.accountType,
+        parent_account_id: null,
+      }),
+    onSuccess: async (created, input) => {
+      // Refetch before applying so the picker can resolve the new id.
+      await qc.invalidateQueries({ queryKey: ["accounts", clientId] });
+      input.apply(created);
+      setNewAccount(null);
+      dispatchToast(
+        <Toast>
+          <ToastTitle>Created {created.code} — {created.name}</ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
   const [entryDate, setEntryDate] = useState(todayIso());
   const [memo, setMemo] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([
@@ -195,7 +363,7 @@ export default function DraftDetail() {
       const amount = String(payload.amount ?? "");
       const date = String(payload.date ?? "");
       const memoVal = String(payload.memo ?? payload.merchant ?? "");
-      const debitAcct = byCode.get(code) ?? accts.find((a) => a.code === "9999");
+      const debitAcct = byCode.get(code) ?? suspenseAccount ?? accts.find((a) => a.code === "9999");
       if (memoVal) setMemo(memoVal);
       if (date) setEntryDate(date);
       setAmountLines(debitAcct, cash, amount, memoVal);
@@ -229,7 +397,6 @@ export default function DraftDetail() {
     mutationFn: () =>
       api.promoteDraft(id, {
         client_id: clientId || undefined,
-        period_id: periodId,
         entry_date: entryDate,
         memo: memo || undefined,
         lines: lines
@@ -274,35 +441,100 @@ export default function DraftDetail() {
     ? (payload.transactions as Array<Record<string, unknown>>)
     : [];
   const [txnOverrides, setTxnOverrides] = useState<Record<number, string>>({});
+  const [activeTxnTab, setActiveTxnTab] = useState<"pending" | "posted" | "excluded">("pending");
+  const [postedIndexes, setPostedIndexes] = useState<number[]>([]);
+  const [excludedIndexes, setExcludedIndexes] = useState<number[]>([]);
 
-  const promoteAll = useMutation({
-    mutationFn: () => {
+  const persistedPostedIndexes = useMemo(() => {
+    const raw = payload._posted_indexes;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n >= 0);
+  }, [payload._posted_indexes]);
+
+  const persistedExcludedIndexes = useMemo(() => {
+    const raw = payload._excluded_indexes;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((v) => Number(v))
+      .filter((n) => Number.isInteger(n) && n >= 0);
+  }, [payload._excluded_indexes]);
+
+  useEffect(() => {
+    setPostedIndexes(persistedPostedIndexes);
+    setExcludedIndexes(persistedExcludedIndexes);
+    setActiveTxnTab("pending");
+  }, [id, persistedPostedIndexes, persistedExcludedIndexes]);
+
+  // ----- Statement date span ---------------------------------------------
+  // Purely informational: the books are continuous, so every transaction is
+  // posted on its own date. We surface the span so a reviewer can sanity-check
+  // it, and warn when the parser could not infer dates at all.
+  const statementRange = useMemo(() => statementRangeFromTxns(rawTxns), [rawTxns]);
+
+  const applyTxnDecision = useMutation({
+    mutationFn: (input: { mode: "accept" | "reject"; indexes: number[] }) => {
       const overrides: Record<string, string> = {};
       for (const [idx, code] of Object.entries(txnOverrides)) {
         if (code) overrides[String(idx)] = code;
       }
+
+      const acceptedIndexes = input.mode === "accept" ? input.indexes : [];
+      const rejectedIndexes = input.mode === "reject" ? input.indexes : [];
+
       return api.promoteStatementDraft(id, {
         client_id: clientId || undefined,
-        period_id: periodId,
         cash_account_code: "1000",
         account_overrides: Object.keys(overrides).length ? overrides : undefined,
+        accepted_indexes: acceptedIndexes,
+        rejected_indexes: rejectedIndexes,
       });
     },
-    onSuccess: (res) => {
-      const skipped = res.skipped.length;
-      const posted = res.journal_entry_ids.length;
+    onSuccess: (res, vars) => {
+      setPostedIndexes(res.posted_indexes);
+      setExcludedIndexes(res.excluded_indexes);
+
+      const postedNow = res.journal_entry_ids.length;
+      const excludedNow = vars.mode === "reject" ? vars.indexes.length : 0;
+      const learnedNow = res.learned_rule_count;
+
       dispatchToast(
         <Toast>
           <ToastTitle>
-            Posted {posted} journal entr{posted === 1 ? "y" : "ies"}
-            {skipped > 0 ? ` (${skipped} skipped — see audit)` : ""}
+            {vars.mode === "accept"
+              ? `Posted ${postedNow} transaction${postedNow === 1 ? "" : "s"}`
+              : `Excluded ${excludedNow} transaction${excludedNow === 1 ? "" : "s"}`}
+            {learnedNow > 0 ? ` · Learned ${learnedNow} rule${learnedNow === 1 ? "" : "s"}` : ""}
           </ToastTitle>
         </Toast>,
-        { intent: skipped > 0 ? "warning" : "success" },
+        { intent: "success" },
       );
       qc.invalidateQueries({ queryKey: ["drafts"] });
       qc.invalidateQueries({ queryKey: ["entries"] });
-      navigate("/review", { replace: true });
+    },
+    onError: (err: Error) => {
+      dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
+    },
+  });
+
+  const learnTxnRule = useMutation({
+    mutationFn: (input: { index: number; code: string }) =>
+      api.learnStatementRule(id, {
+        client_id: clientId || undefined,
+        transaction_index: input.index,
+        target_account_code: input.code,
+      }),
+    onSuccess: (res) => {
+      dispatchToast(
+        <Toast>
+          <ToastTitle>
+            Learned {res.learned_rule_count} rule{res.learned_rule_count === 1 ? "" : "s"} for future categorization.
+          </ToastTitle>
+        </Toast>,
+        { intent: "success" },
+      );
+      qc.invalidateQueries({ queryKey: ["rules-engine"] });
     },
     onError: (err: Error) => {
       dispatchToast(<Toast><ToastTitle>{err.message}</ToastTitle></Toast>, { intent: "error" });
@@ -315,24 +547,118 @@ export default function DraftDetail() {
 
   const d = draft.data;
   const conf = Number.parseFloat(d.confidence);
+  const canPromoteDrafts = capabilities.canPromoteDrafts;
+  const blockedReason = rejectDisabledReason({ canPromoteDrafts, role });
+  const promoteReason = promoteDisabledReason({
+    canPromoteDrafts,
+    role,
+    clientId,
+    balanced: totals.balanced,
+  });
 
-  const renderAccountOptions = () => (
-    <>
-      {groupedAccounts.map((group) => (
-        <OptionGroup key={group.type} label={group.label}>
-          {group.accounts.map((a) => (
-            <Option key={a.id} value={a.id} text={`${a.code} — ${a.name}`}>
-              {a.code} — {a.name}
-            </Option>
-          ))}
-        </OptionGroup>
-      ))}
-    </>
-  );
+  /**
+   * Wraps a picker's selection handler so choosing the sentinel row opens the
+   * create-account dialog instead of selecting a non-existent account.
+   */
+  const openNewAccount = (apply: (account: CoaOut) => void) =>
+    setNewAccount({ apply, code: "", name: "", accountType: "expense" });
+
+  const postedSet = new Set(postedIndexes);
+  const excludedSet = new Set(excludedIndexes);
+  const pendingIndexes = rawTxns
+    .map((_, i) => i)
+    .filter((i) => !postedSet.has(i) && !excludedSet.has(i));
+  const displayedIndexes =
+    activeTxnTab === "pending"
+      ? pendingIndexes
+      : activeTxnTab === "posted"
+        ? rawTxns.map((_, i) => i).filter((i) => postedSet.has(i))
+        : rawTxns.map((_, i) => i).filter((i) => excludedSet.has(i));
 
   return (
     <div style={{ display: "grid", rowGap: 16 }}>
       <Toaster toasterId={toasterId} />
+
+      <Dialog
+        open={newAccount !== null}
+        onOpenChange={(_, data) => {
+          if (!data.open) setNewAccount(null);
+        }}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>New account</DialogTitle>
+            <DialogContent>
+              <div style={{ display: "grid", rowGap: 12, paddingTop: 4 }}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Adds the account to this client's chart of accounts and selects
+                  it here, so you keep your place in the review.
+                </Caption1>
+                <Field label="Code" required>
+                  <Input
+                    value={newAccount?.code ?? ""}
+                    placeholder="6150"
+                    onChange={(_, d) =>
+                      setNewAccount((prev) => (prev ? { ...prev, code: d.value } : prev))
+                    }
+                  />
+                </Field>
+                <Field label="Name" required>
+                  <Input
+                    value={newAccount?.name ?? ""}
+                    placeholder="Software subscriptions"
+                    onChange={(_, d) =>
+                      setNewAccount((prev) => (prev ? { ...prev, name: d.value } : prev))
+                    }
+                  />
+                </Field>
+                <Field
+                  label="Type"
+                  required
+                  hint="Decides where the account lands on the P&L and balance sheet."
+                >
+                  <Dropdown
+                    value={
+                      newAccount ? ACCOUNT_TYPE_LABELS[newAccount.accountType] : ""
+                    }
+                    selectedOptions={newAccount ? [newAccount.accountType] : []}
+                    onOptionSelect={(_, d) =>
+                      setNewAccount((prev) =>
+                        prev
+                          ? { ...prev, accountType: (d.optionValue as AccountType) ?? prev.accountType }
+                          : prev,
+                      )
+                    }
+                  >
+                    {ACCOUNT_TYPE_ORDER.map((type) => (
+                      <Option key={type} value={type} text={ACCOUNT_TYPE_LABELS[type]}>
+                        {ACCOUNT_TYPE_LABELS[type]}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setNewAccount(null)}>
+                Cancel
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={
+                  !newAccount ||
+                  !newAccount.code.trim() ||
+                  !newAccount.name.trim() ||
+                  createAccount.isPending
+                }
+                onClick={() => newAccount && createAccount.mutate(newAccount)}
+              >
+                {createAccount.isPending ? "Creating..." : "Create and select"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
       <div>
         <Text
           size={200}
@@ -472,22 +798,19 @@ export default function DraftDetail() {
 
       {isStatement && (
         <Section
-          title={`Bank statement transactions (${rawTxns.length})`}
+          title={`Bank transactions (${rawTxns.length})`}
           help={{
-            title: "Posting a multi-transaction statement",
+            title: "Pending, posted, and excluded workflow",
             body: (
               <>
-                The classifier parsed each line of the statement into a
-                proposed transaction. Clicking <b>Post all transactions</b>
-                creates <b>one balanced journal entry per row</b> against
-                the selected period — deposits get DR Cash / CR &lt;income
-                or other&gt;, payments get DR &lt;expense&gt; / CR Cash.
+                Each row starts in <b>Pending</b>. Clicking <b>Accept</b>
+                posts it immediately (one journal entry per row) and moves it
+                to <b>Posted</b>. Clicking <b>Reject</b> excludes it
+                immediately and moves it to <b>Excluded</b>.
                 <br /><br />
-                You can <b>override the account code</b> on any row before
-                posting (e.g. move a Suspense 9999 row to the right
-                expense account). Rows whose code does not exist in this
-                client's chart of accounts will be reported as
-                &ldquo;skipped&rdquo; in the result toast.
+                Use <b>Accept all pending</b> or <b>Reject all pending</b> to
+                process all remaining rows in one click. The tabs let you
+                switch between pending work and historical posted/excluded rows.
               </>
             ),
           }}
@@ -537,6 +860,27 @@ export default function DraftDetail() {
                     </strong>
                   </span>
                 </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                  <Button
+                    appearance={activeTxnTab === "pending" ? "primary" : "secondary"}
+                    onClick={() => setActiveTxnTab("pending")}
+                  >
+                    Pending ({pendingIndexes.length})
+                  </Button>
+                  <Button
+                    appearance={activeTxnTab === "posted" ? "primary" : "secondary"}
+                    onClick={() => setActiveTxnTab("posted")}
+                  >
+                    Posted ({postedIndexes.length})
+                  </Button>
+                  <Button
+                    appearance={activeTxnTab === "excluded" ? "primary" : "secondary"}
+                    onClick={() => setActiveTxnTab("excluded")}
+                  >
+                    Excluded ({excludedIndexes.length})
+                  </Button>
+                </div>
+
                 <Table size="extra-small" style={{ marginTop: 8 }}>
                   <TableHeader>
                     <TableRow>
@@ -545,14 +889,25 @@ export default function DraftDetail() {
                       <TableHeaderCell>Direction</TableHeaderCell>
                       <TableHeaderCell>Amount</TableHeaderCell>
                       <TableHeaderCell>Account</TableHeaderCell>
+                      <TableHeaderCell>Status / Action</TableHeaderCell>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {rawTxns.map((t, i) => {
+                    {displayedIndexes.map((i) => {
+                      const t = rawTxns[i] ?? {};
                       const proposed = String(t.proposed_account_code ?? "");
-                      const current = txnOverrides[i] ?? proposed;
+                      const normalizedProposed =
+                        accountCodeMap.has(proposed)
+                          ? proposed
+                          : (suspenseAccount?.code ?? proposed);
+                      const current = txnOverrides[i] ?? normalizedProposed;
                       const acct = accountCodeMap.get(current);
                       const dir = String(t.direction ?? "");
+                      const status = postedSet.has(i)
+                        ? "posted"
+                        : excludedSet.has(i)
+                          ? "excluded"
+                          : "pending";
                       return (
                         <TableRow key={i}>
                           <TableCell>
@@ -571,77 +926,133 @@ export default function DraftDetail() {
                             <code>{String(t.amount ?? "")}</code>
                           </TableCell>
                           <TableCell>
-                            <Dropdown
-                              placeholder="Account"
-                              selectedOptions={acct ? [acct.id] : []}
-                              value={accountLabelByCode(current)}
-                              onOptionSelect={(_, dd) => {
-                                const next = { ...txnOverrides };
-                                const newAcct = (accounts.data ?? []).find(
-                                  (a) => a.id === dd.optionValue,
-                                );
-                                if (newAcct) next[i] = newAcct.code;
-                                setTxnOverrides(next);
-                              }}
-                            >
-                              {renderAccountOptions()}
-                            </Dropdown>
+                            {status === "pending" ? (
+                              <AccountPicker
+                                groups={groupedAccounts}
+                                selectedId={acct?.id}
+                                label={accountLabelByCode(current)}
+                                allowCreate={!!canPromoteDrafts && !!clientId}
+                                onCreateNew={() =>
+                                  openNewAccount((created) =>
+                                    setTxnOverrides((prev) => ({ ...prev, [i]: created.code })),
+                                  )
+                                }
+                                onPick={(accountId) => {
+                                  const newAcct = (accounts.data ?? []).find(
+                                    (a) => a.id === accountId,
+                                  );
+                                  if (newAcct) {
+                                    setTxnOverrides((prev) => ({ ...prev, [i]: newAcct.code }));
+                                  }
+                                }}
+                              />
+                            ) : (
+                              <Body1>{accountLabelByCode(current) || "—"}</Body1>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {status === "pending" ? (
+                              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                                <Button
+                                  size="small"
+                                  appearance="primary"
+                                  disabled={!canPromoteDrafts || !clientId || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  onClick={() => applyTxnDecision.mutate({ mode: "accept", indexes: [i] })}
+                                >
+                                  Accept
+                                </Button>
+                                <Button
+                                  size="small"
+                                  appearance="secondary"
+                                  disabled={!canPromoteDrafts || !clientId || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  onClick={() => applyTxnDecision.mutate({ mode: "reject", indexes: [i] })}
+                                >
+                                  Reject
+                                </Button>
+                                <Button
+                                  size="small"
+                                  appearance="subtle"
+                                  disabled={!canPromoteDrafts || !current || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  onClick={() => learnTxnRule.mutate({ index: i, code: current })}
+                                >
+                                  Learn rule
+                                </Button>
+                              </div>
+                            ) : (
+                              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center" }}>
+                                <Badge appearance="filled" color={status === "posted" ? "success" : "danger"}>
+                                  {status === "posted" ? "Posted" : "Excluded"}
+                                </Badge>
+                                <Button
+                                  size="small"
+                                  appearance="subtle"
+                                  disabled={!canPromoteDrafts || !current || applyTxnDecision.isPending || learnTxnRule.isPending}
+                                  onClick={() => learnTxnRule.mutate({ index: i, code: current })}
+                                >
+                                  Learn rule
+                                </Button>
+                              </div>
+                            )}
                           </TableCell>
                         </TableRow>
                       );
                     })}
                   </TableBody>
                 </Table>
-                <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
-                  {!identity?.clientId && (
-                    <Field label="Client" required>
-                      <Dropdown
-                        placeholder="Select client"
-                        value={
-                          clients.data?.find((c) => c.id === clientId)?.name ?? ""
-                        }
-                        selectedOptions={clientId ? [clientId] : []}
-                        onOptionSelect={(_, dd) => setClientId(dd.optionValue ?? "")}
-                      >
-                        {(clients.data ?? []).map((c) => (
-                          <Option key={c.id} value={c.id}>{c.name}</Option>
-                        ))}
-                      </Dropdown>
-                    </Field>
-                  )}
-                  <Field label="Period" required>
-                    <Dropdown
-                      placeholder="Select period"
-                      value={
-                        periods.data?.find((p) => p.id === periodId)?.name ?? ""
-                      }
-                      selectedOptions={periodId ? [periodId] : []}
-                      onOptionSelect={(_, dd) => setPeriodId(dd.optionValue ?? "")}
-                    >
-                      {(periods.data ?? []).map((p) => (
-                        <Option
-                          key={p.id}
-                          value={p.id}
-                          text={p.is_locked ? `${p.name} (locked)` : p.name}
-                          disabled={p.is_locked}
-                        >
-                          {p.is_locked ? `${p.name} (locked)` : p.name}
-                        </Option>
-                      ))}
-                    </Dropdown>
-                  </Field>
+                <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <Button
-                    appearance="primary"
-                    disabled={!clientId || !periodId || promoteAll.isPending}
-                    onClick={() => promoteAll.mutate()}
+                    appearance="secondary"
+                    disabled={
+                      !canPromoteDrafts ||
+                      !clientId ||
+                      applyTxnDecision.isPending ||
+                      pendingIndexes.length === 0
+                    }
+                    onClick={() => applyTxnDecision.mutate({ mode: "accept", indexes: pendingIndexes })}
                   >
-                    {promoteAll.isPending ? (
-                      <Spinner size="tiny" />
-                    ) : (
-                      `Post all ${rawTxns.length} transactions`
-                    )}
+                    Accept all pending
                   </Button>
+                  <Button
+                    appearance="secondary"
+                    disabled={
+                      !canPromoteDrafts ||
+                      !clientId ||
+                      applyTxnDecision.isPending ||
+                      pendingIndexes.length === 0
+                    }
+                    onClick={() => applyTxnDecision.mutate({ mode: "reject", indexes: pendingIndexes })}
+                  >
+                    Reject all pending
+                  </Button>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {pendingIndexes.length} pending, {postedIndexes.length} posted, {excludedIndexes.length} excluded.
+                  </Caption1>
                 </div>
+                {!statementRange && (
+                  <MessageBar intent="info" style={{ marginTop: 12 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>No transaction dates detected.</MessageBarTitle>
+                      <Body1 block>
+                        The parser could not infer full calendar dates for these
+                        rows, so they will be posted using today's date. Check
+                        the dates on the resulting entries before finalising.
+                      </Body1>
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {applyTxnDecision.isPending && (
+                  <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
+                    <Spinner size="tiny" />
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Processing transactions...
+                    </Caption1>
+                  </div>
+                )}
+                {!canPromoteDrafts && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {blockedReason}
+                  </Caption1>
+                )}
               </>
             );
           })()}
@@ -656,16 +1067,15 @@ export default function DraftDetail() {
           body: (
             <>
               Promoting writes a <b>real, posted, balanced journal
-              entry</b> against the selected period. The entry is
+              entry</b> dated on the entry date you choose. The entry is
               immutable after posting (correction = reversing entry, not
               edit) and immediately affects the trial balance, P&amp;L,
               balance sheet, and downstream tax worksheets.
               <br /><br />
               <b>Required:</b>
               <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
-                <li>The period must be open (locked periods are disabled).</li>
                 <li>Every line needs an account, a debit OR a credit (not both), and the total debits must equal total credits.</li>
-                <li>Entry date must fall inside the selected period.</li>
+                <li>An entry date — the books are continuous, so any date is accepted and the entry is filed under it.</li>
               </ul>
               The draft is marked <i>promoted</i> and the source document
               gets a permanent link to the resulting journal entry for
@@ -689,30 +1099,13 @@ export default function DraftDetail() {
               </Dropdown>
             </Field>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Period" required>
-              <Dropdown
-                placeholder="Select period"
-                value={periods.data?.find((p) => p.id === periodId)?.name ?? ""}
-                selectedOptions={periodId ? [periodId] : []}
-                onOptionSelect={(_, dd) => setPeriodId(dd.optionValue ?? "")}
-              >
-                {(periods.data ?? []).map((p) => (
-                  <Option
-                    key={p.id}
-                    value={p.id}
-                    text={p.is_locked ? `${p.name} (locked)` : p.name}
-                    disabled={p.is_locked}
-                  >
-                    {p.is_locked ? `${p.name} (locked)` : p.name}
-                  </Option>
-                ))}
-              </Dropdown>
-            </Field>
-            <Field label="Entry date" required>
-              <Input type="date" value={entryDate} onChange={(_, dd) => setEntryDate(dd.value)} />
-            </Field>
-          </div>
+          <Field
+            label="Entry date"
+            required
+            hint="The books are continuous — the entry is recorded on this exact date."
+          >
+            <Input type="date" value={entryDate} onChange={(_, dd) => setEntryDate(dd.value)} />
+          </Field>
           <Field label="Memo">
             <Input value={memo} onChange={(_, dd) => setMemo(dd.value)} />
           </Field>
@@ -732,22 +1125,30 @@ export default function DraftDetail() {
               {lines.map((ln, i) => (
                 <TableRow key={i}>
                   <TableCell>
-                    <Dropdown
-                      placeholder="Account"
-                      selectedOptions={ln.account_id ? [ln.account_id] : []}
-                      value={
+                    <AccountPicker
+                      groups={groupedAccounts}
+                      selectedId={ln.account_id || undefined}
+                      label={
                         accountMap.get(ln.account_id)
                           ? `${accountMap.get(ln.account_id)!.code} - ${accountMap.get(ln.account_id)!.name}`
                           : ""
                       }
-                      onOptionSelect={(_, dd) => {
+                      allowCreate={!!canPromoteDrafts && !!clientId}
+                      onCreateNew={() =>
+                        openNewAccount((created) =>
+                          setLines((prev) => {
+                            const next = [...prev];
+                            next[i] = { ...next[i], account_id: created.id };
+                            return next;
+                          }),
+                        )
+                      }
+                      onPick={(accountId) => {
                         const next = [...lines];
-                        next[i] = { ...next[i], account_id: dd.optionValue ?? "" };
+                        next[i] = { ...next[i], account_id: accountId };
                         setLines(next);
                       }}
-                    >
-                      {renderAccountOptions()}
-                    </Dropdown>
+                    />
                   </TableCell>
                   <TableCell>
                     <Input
@@ -813,11 +1214,17 @@ export default function DraftDetail() {
           <div>
             <Button
               appearance="primary"
-              disabled={!clientId || !periodId || !totals.balanced || promote.isPending}
+              disabled={!canPromoteDrafts || !clientId || !totals.balanced || promote.isPending}
+              title={promoteReason}
               onClick={() => promote.mutate()}
             >
               {promote.isPending ? <Spinner size="tiny" /> : "Promote to journal entry"}
             </Button>
+            {!canPromoteDrafts && (
+              <Caption1 block style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+                {blockedReason}
+              </Caption1>
+            )}
           </div>
         </div>
       </Section>
@@ -846,11 +1253,17 @@ export default function DraftDetail() {
         <div style={{ marginTop: 12 }}>
           <Button
             appearance="secondary"
-            disabled={reject.isPending}
+            disabled={!canPromoteDrafts || reject.isPending}
+            title={blockedReason}
             onClick={() => reject.mutate()}
           >
             Reject draft
           </Button>
+          {!canPromoteDrafts && (
+            <Caption1 block style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+              {blockedReason}
+            </Caption1>
+          )}
         </div>
       </Section>
     </div>
