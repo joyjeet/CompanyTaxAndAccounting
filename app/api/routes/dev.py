@@ -351,8 +351,11 @@ def _post_sample_entries(
     """
     ledger = LedgerService(sess, firm_id=firm_id, client_id=client_id, actor=actor)
 
-    required = ("1000", "3000", "4000", "5000")
-    if any(c not in accounts for c in required):
+    cash = _posting_account(accounts, preferred_code="1011", fallback_code="1000")
+    equity = _posting_account(accounts, preferred_code="3060", fallback_code="3000")
+    revenue = _posting_account(accounts, preferred_code="4020", fallback_code="4000")
+    expense = _posting_account(accounts, preferred_code="7510", fallback_code="5000")
+    if cash is None or equity is None or revenue is None or expense is None:
         return 0
 
     posted = 0
@@ -362,8 +365,8 @@ def _post_sample_entries(
         entry_date=entry_date,
         memo="Owner contribution (seed)",
         lines=[
-            LineInput(account_id=accounts["1000"].id, debit=Decimal("10000.00")),
-            LineInput(account_id=accounts["3000"].id, credit=Decimal("10000.00")),
+            LineInput(account_id=cash.id, debit=Decimal("10000.00")),
+            LineInput(account_id=equity.id, credit=Decimal("10000.00")),
         ],
     )
     posted += 1
@@ -374,8 +377,8 @@ def _post_sample_entries(
         entry_date=entry_date,
         memo="Sample cash sale (seed)",
         lines=[
-            LineInput(account_id=accounts["1000"].id, debit=Decimal("1500.00")),
-            LineInput(account_id=accounts["4000"].id, credit=Decimal("1500.00")),
+            LineInput(account_id=cash.id, debit=Decimal("1500.00")),
+            LineInput(account_id=revenue.id, credit=Decimal("1500.00")),
         ],
     )
     posted += 1
@@ -386,13 +389,43 @@ def _post_sample_entries(
         entry_date=entry_date,
         memo="Sample office supplies (seed)",
         lines=[
-            LineInput(account_id=accounts["5000"].id, debit=Decimal("250.00")),
-            LineInput(account_id=accounts["1000"].id, credit=Decimal("250.00")),
+            LineInput(account_id=expense.id, debit=Decimal("250.00")),
+            LineInput(account_id=cash.id, credit=Decimal("250.00")),
         ],
     )
     posted += 1
 
     return posted
+
+
+def _posting_account(
+    accounts: dict[str, ChartOfAccounts],
+    *,
+    preferred_code: str,
+    fallback_code: str,
+) -> ChartOfAccounts | None:
+    preferred = accounts.get(preferred_code)
+    if preferred is not None and preferred.is_active and preferred.is_leaf:
+        return preferred
+
+    fallback = accounts.get(fallback_code)
+    if fallback is None or not fallback.is_active:
+        return None
+    if fallback.is_leaf:
+        return fallback
+
+    prefix = f"{fallback.path or fallback.code}>"
+    descendants = sorted(
+        (
+            account
+            for account in accounts.values()
+            if account.is_active
+            and account.is_leaf
+            and (account.path or "").startswith(prefix)
+        ),
+        key=lambda account: (account.depth, account.code),
+    )
+    return descendants[0] if descendants else None
 
 
 # --------------------------------------------------------------------------- #

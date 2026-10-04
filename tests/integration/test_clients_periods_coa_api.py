@@ -109,6 +109,31 @@ def test_create_client_seeds_a_default_chart_of_accounts(
     assert by_type["revenue"] == {"4"}
 
 
+def test_seed_defaults_posts_samples_to_template_leaf_accounts(
+    client: TestClient, world
+) -> None:
+    headers = _auth(client, "firm_staff", world.firm_a)
+    created = client.post(
+        "/clients",
+        headers=headers,
+        json={"name": "Demo Seed Co", "industry": "generic"},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["coa_seeded"] is True
+
+    seeded = client.post(
+        "/dev/seed-defaults",
+        params={
+            "client_id": created.json()["id"],
+            "seed_reports": False,
+        },
+        headers=headers,
+    )
+
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json()["sample_entries_posted"] == 3
+
+
 def test_create_client_can_opt_out_of_coa_seeding(client: TestClient, world) -> None:
     headers = _auth(client, "firm_staff", world.firm_a)
     r = client.post(
