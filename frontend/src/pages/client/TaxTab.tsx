@@ -184,9 +184,9 @@ export default function TaxTab({
         hasPeriod: Boolean(periodId),
         formCode,
         accounts: accounts.data ?? [],
-        mappings: mappings.data ?? [],
+        mappings: formCode ? (mappings.data ?? []) : [],
         documents: clientDocuments,
-        worksheets: worksheets.data ?? [],
+        worksheets: periodId && formCode ? (worksheets.data ?? []) : [],
       }),
     [
       accounts.data,
