@@ -198,6 +198,15 @@ export default function TaxTab({
       worksheets.data,
     ],
   );
+  const readinessQueriesSucceeded = [
+    profile,
+    periods,
+    forms,
+    mappings,
+    worksheets,
+    accounts,
+    documents,
+  ].every((query) => query.isSuccess);
 
   const openReadinessTarget = (target: "profile" | "documents" | "mappings" | "worksheets") => {
     if (target === "profile" || target === "documents") {
@@ -464,46 +473,51 @@ export default function TaxTab({
               />
             )}
 
-            <div className={styles.readinessGrid}>
-              <DashboardCard overline="Return readiness" subtitle={`${readiness.completeCount} of 5 gates complete`}>
-                <div className={styles.score}>{readiness.score}%</div>
-                <ProgressBar
-                  value={readiness.score / 100}
-                  color={readiness.score === 100 ? "success" : "brand"}
-                  thickness="large"
-                />
-              </DashboardCard>
-              <DashboardCard overline="Account coverage" subtitle={`${formCode || "Select a form"}`}>
-                <Text size={600} weight="semibold" block>
-                  {readiness.approvedMappingCount} / {readiness.eligibleAccountCount}
-                </Text>
-                <Caption1>
-                  approved mappings · {readiness.pendingMappingCount} awaiting review ·{" "}
-                  {readiness.unmappedAccounts.length} unmapped
-                </Caption1>
-              </DashboardCard>
-              <DashboardCard overline="Source documents" subtitle="Extraction status">
-                <Text size={600} weight="semibold" block>
-                  {readiness.documentCounts.complete} complete
-                </Text>
-                <Caption1>
-                  {readiness.documentCounts.processing} processing ·{" "}
-                  {readiness.documentCounts.failed} failed
-                </Caption1>
-              </DashboardCard>
-              <DashboardCard overline="Worksheet" subtitle={formCode || "No form selected"}>
-                <Text size={600} weight="semibold" block>
-                  {readiness.worksheetStatus ?? "Not generated"}
-                </Text>
-                <Caption1>
-                  {readiness.worksheetStatus === "approved"
-                    ? "Ready to render and deliver"
-                    : "Generate, review, and approve"}
-                </Caption1>
-              </DashboardCard>
-            </div>
+            {readinessQueriesSucceeded && (
+              <div className={styles.readinessGrid}>
+                <DashboardCard
+                  overline="Return readiness"
+                  subtitle={`${readiness.completeCount} of 5 gates complete`}
+                >
+                  <div className={styles.score}>{readiness.score}%</div>
+                  <ProgressBar
+                    value={readiness.score / 100}
+                    color={readiness.score === 100 ? "success" : "brand"}
+                    thickness="large"
+                  />
+                </DashboardCard>
+                <DashboardCard overline="Account coverage" subtitle={`${formCode || "Select a form"}`}>
+                  <Text size={600} weight="semibold" block>
+                    {readiness.approvedMappingCount} / {readiness.eligibleAccountCount}
+                  </Text>
+                  <Caption1>
+                    approved mappings · {readiness.pendingMappingCount} awaiting review ·{" "}
+                    {readiness.unmappedAccounts.length} unmapped
+                  </Caption1>
+                </DashboardCard>
+                <DashboardCard overline="Source documents" subtitle="Extraction status">
+                  <Text size={600} weight="semibold" block>
+                    {readiness.documentCounts.complete} complete
+                  </Text>
+                  <Caption1>
+                    {readiness.documentCounts.processing} processing ·{" "}
+                    {readiness.documentCounts.failed} failed
+                  </Caption1>
+                </DashboardCard>
+                <DashboardCard overline="Worksheet" subtitle={formCode || "No form selected"}>
+                  <Text size={600} weight="semibold" block>
+                    {readiness.worksheetStatus ?? "Not generated"}
+                  </Text>
+                  <Caption1>
+                    {readiness.worksheetStatus === "approved"
+                      ? "Ready to render and deliver"
+                      : "Generate, review, and approve"}
+                  </Caption1>
+                </DashboardCard>
+              </div>
+            )}
 
-            {readiness.score === 100 ? (
+            {readinessQueriesSucceeded && (readiness.score === 100 ? (
               <MessageBar intent="success" style={{ marginBottom: 16 }}>
                 <MessageBarBody>
                   <MessageBarTitle>This return is ready for delivery.</MessageBarTitle>
@@ -517,47 +531,49 @@ export default function TaxTab({
                   Resolve the items below before treating this return as complete.
                 </MessageBarBody>
               </MessageBar>
+            ))}
+
+            {readinessQueriesSucceeded && (
+              <Section
+                title="Readiness checklist"
+                subtitle="Each gate is derived from current client data; there are no manually checked boxes."
+              >
+                {readiness.checks.map((check) => (
+                  <div className={styles.checkRow} key={check.id}>
+                    <Badge
+                      appearance="tint"
+                      color={
+                        check.status === "complete"
+                          ? "success"
+                          : check.status === "attention"
+                            ? "warning"
+                            : "informative"
+                      }
+                    >
+                      {check.status === "complete"
+                        ? "Complete"
+                        : check.status === "attention"
+                          ? "Needs attention"
+                          : "Not started"}
+                    </Badge>
+                    <div className={styles.checkCopy}>
+                      <Text weight="semibold" block>{check.label}</Text>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        {check.detail}
+                      </Caption1>
+                    </div>
+                    <Button
+                      appearance={check.status === "complete" ? "subtle" : "secondary"}
+                      onClick={() => openReadinessTarget(check.target)}
+                    >
+                      {check.status === "complete" ? "Review" : "Resolve"}
+                    </Button>
+                  </div>
+                ))}
+              </Section>
             )}
 
-            <Section
-              title="Readiness checklist"
-              subtitle="Each gate is derived from current client data; there are no manually checked boxes."
-            >
-              {readiness.checks.map((check) => (
-                <div className={styles.checkRow} key={check.id}>
-                  <Badge
-                    appearance="tint"
-                    color={
-                      check.status === "complete"
-                        ? "success"
-                        : check.status === "attention"
-                          ? "warning"
-                          : "informative"
-                    }
-                  >
-                    {check.status === "complete"
-                      ? "Complete"
-                      : check.status === "attention"
-                        ? "Needs attention"
-                        : "Not started"}
-                  </Badge>
-                  <div className={styles.checkCopy}>
-                    <Text weight="semibold" block>{check.label}</Text>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      {check.detail}
-                    </Caption1>
-                  </div>
-                  <Button
-                    appearance={check.status === "complete" ? "subtle" : "secondary"}
-                    onClick={() => openReadinessTarget(check.target)}
-                  >
-                    {check.status === "complete" ? "Review" : "Resolve"}
-                  </Button>
-                </div>
-              ))}
-            </Section>
-
-            {readiness.unmappedAccounts.length > 0 && (
+            {readinessQueriesSucceeded && readiness.unmappedAccounts.length > 0 && (
               <Section
                 title="Unmapped posting accounts"
                 subtitle={`These active revenue and expense accounts are not covered by an approved ${formCode} mapping.`}
