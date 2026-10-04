@@ -425,6 +425,7 @@ export default function TaxTab({
                 ))}
               </Dropdown>
               <Dropdown
+                aria-label="Tax form"
                 placeholder="Tax form"
                 value={formCode}
                 selectedOptions={formCode ? [formCode] : []}
