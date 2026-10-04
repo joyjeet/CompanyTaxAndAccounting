@@ -414,6 +414,7 @@ export default function TaxTab({
           <div>
             <div className={styles.readinessToolbar}>
               <Dropdown
+                aria-label="Filing period"
                 placeholder="Filing period"
                 value={periods.data?.find((period) => period.id === periodId)?.name ?? ""}
                 selectedOptions={periodId ? [periodId] : []}
