@@ -2,9 +2,14 @@ import {
   Badge,
   Body1,
   Button,
+  Caption1,
   Dropdown,
   makeStyles,
+  MessageBar,
+  MessageBarBody,
+  MessageBarTitle,
   Option,
+  ProgressBar,
   Tab,
   TabList,
   Table,
@@ -23,44 +28,87 @@ import {
 } from "@fluentui/react-components";
 import { ArrowExportRegular, CheckmarkCircleRegular, SparkleRegular } from "@fluentui/react-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ApiError } from "../../api/ApiClient";
 import { useApi } from "../../api/useApi";
 import InfoHint from "../../components/InfoHint";
+import DashboardCard from "../../components/DashboardCard";
 import Section from "../../components/Section";
 import { EmptyState, ErrorState, LoadingState } from "../../components/States";
 import { fmtMoney, shortId } from "../../lib/format";
 import { explainerFor } from "../../lib/taxFormExplainers";
+import { deriveTaxReadiness, recommendedFormCode } from "../../lib/taxReadiness";
 
-type TaxView = "forms" | "mappings" | "worksheets";
+type TaxView = "readiness" | "forms" | "mappings" | "worksheets";
 
 const useStyles = makeStyles({
   toolbar: { display: "flex", gap: "12px", alignItems: "center", marginBottom: "12px" },
   num: { textAlign: "right", fontFamily: tokens.fontFamilyMonospace },
+  readinessToolbar: {
+    display: "flex",
+    gap: "12px",
+    alignItems: "flex-end",
+    flexWrap: "wrap",
+    marginBottom: "16px",
+  },
+  readinessGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
+    gap: "12px",
+    marginBottom: "16px",
+  },
+  score: {
+    fontSize: "36px",
+    lineHeight: "44px",
+    fontWeight: tokens.fontWeightBold,
+  },
+  checkRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "16px",
+    alignItems: "center",
+    padding: "12px 0",
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  checkCopy: { minWidth: 0, flex: 1 },
 });
 
-export default function TaxTab({ clientId }: { clientId: string }) {
+export default function TaxTab({
+  clientId,
+  onNavigate,
+}: {
+  clientId: string;
+  onNavigate?: (target: "profile" | "documents") => void;
+}) {
   const styles = useStyles();
   const api = useApi();
   const qc = useQueryClient();
   const toasterId = useId("tax-toaster");
   const { dispatchToast } = useToastController(toasterId);
 
-  const [view, setView] = useState<TaxView>("forms");
+  const [view, setView] = useState<TaxView>("readiness");
   const [formCode, setFormCode] = useState<string>("");
   const [periodId, setPeriodId] = useState<string>("");
   const [rulesetMessage, setRulesetMessage] = useState<string>("");
 
   const forms = useQuery({ queryKey: ["tax-forms"], queryFn: () => api.listTaxForms() });
+  const profile = useQuery({
+    queryKey: ["client-profile", clientId],
+    queryFn: () => api.getClientProfile(clientId),
+  });
+  const documents = useQuery({
+    queryKey: ["documents"],
+    queryFn: () => api.listDocuments(),
+  });
   const formDetail = useQuery({
     queryKey: ["tax-form", formCode],
     queryFn: () => api.getTaxForm(formCode),
     enabled: !!formCode,
   });
   const mappings = useQuery({
-    queryKey: ["tax-mappings", formCode || "all"],
-    queryFn: () => api.listMappings(formCode || undefined),
+    queryKey: ["tax-mappings", clientId, formCode || "all"],
+    queryFn: () => api.listMappings(formCode || undefined, clientId),
   });
   const periods = useQuery({
     queryKey: ["periods", clientId],
@@ -75,6 +123,23 @@ export default function TaxTab({ clientId }: { clientId: string }) {
     queryKey: ["accounts", clientId],
     queryFn: () => api.listAccounts(clientId),
   });
+  const clientDocuments = useMemo(
+    () => (documents.data ?? []).filter((document) => document.client_id === clientId),
+    [clientId, documents.data],
+  );
+
+  useEffect(() => {
+    if (periodId || !periods.data?.length) return;
+    const latest = [...periods.data].sort((a, b) => b.end_date.localeCompare(a.end_date))[0];
+    setPeriodId(latest.id);
+  }, [periodId, periods.data]);
+
+  useEffect(() => {
+    if (formCode || profile.isLoading || !forms.data?.length) return;
+    const recommended = recommendedFormCode(profile.data);
+    const available = forms.data.find((form) => form.code === recommended);
+    setFormCode(available?.code ?? forms.data[0].code);
+  }, [formCode, forms.data, profile.data, profile.isLoading]);
   const accountMap = useMemo(
     () => new Map((accounts.data ?? []).map((a) => [a.id, a])),
     [accounts.data],
@@ -111,6 +176,45 @@ export default function TaxTab({ clientId }: { clientId: string }) {
     }
     return map;
   }, [mappingFormDetails.data]);
+
+  const readiness = useMemo(
+    () =>
+      deriveTaxReadiness({
+        profile: profile.data,
+        hasPeriod: Boolean(periodId),
+        formCode,
+        accounts: accounts.data ?? [],
+        mappings: formCode ? (mappings.data ?? []) : [],
+        documents: clientDocuments,
+        worksheets: periodId && formCode ? (worksheets.data ?? []) : [],
+      }),
+    [
+      accounts.data,
+      clientDocuments,
+      formCode,
+      mappings.data,
+      periodId,
+      profile.data,
+      worksheets.data,
+    ],
+  );
+  const readinessQueriesSucceeded = [
+    profile,
+    periods,
+    forms,
+    mappings,
+    worksheets,
+    accounts,
+    documents,
+  ].every((query) => query.isSuccess);
+
+  const openReadinessTarget = (target: "profile" | "documents" | "mappings" | "worksheets") => {
+    if (target === "profile" || target === "documents") {
+      onNavigate?.(target);
+      return;
+    }
+    setView(target);
+  };
 
   const generate = useMutation({
     mutationFn: () =>
@@ -271,6 +375,7 @@ export default function TaxTab({ clientId }: { clientId: string }) {
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as TaxView)}>
+          <Tab value="readiness">Readiness</Tab>
           <Tab value="forms">Forms</Tab>
           <Tab value="mappings">Account mappings</Tab>
           <Tab value="worksheets">Worksheets</Tab>
@@ -305,6 +410,204 @@ export default function TaxTab({ clientId }: { clientId: string }) {
       </div>
 
       <div style={{ marginTop: 16 }}>
+        {view === "readiness" && (
+          <div>
+            <div className={styles.readinessToolbar}>
+              <Dropdown
+                aria-label="Filing period"
+                placeholder="Filing period"
+                value={periods.data?.find((period) => period.id === periodId)?.name ?? ""}
+                selectedOptions={periodId ? [periodId] : []}
+                onOptionSelect={(_, data) => setPeriodId(data.optionValue ?? "")}
+              >
+                {(periods.data ?? []).map((period) => (
+                  <Option key={period.id} value={period.id}>{period.name}</Option>
+                ))}
+              </Dropdown>
+              <Dropdown
+                aria-label="Tax form"
+                placeholder="Tax form"
+                value={formCode}
+                selectedOptions={formCode ? [formCode] : []}
+                onOptionSelect={(_, data) => setFormCode(data.optionValue ?? "")}
+              >
+                {(forms.data ?? []).map((form) => (
+                  <Option
+                    key={form.code}
+                    value={form.code}
+                    text={`${form.code} — ${form.label}`}
+                  >
+                    {form.code} — {form.label}
+                  </Option>
+                ))}
+              </Dropdown>
+              {recommendedFormCode(profile.data) && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Recommended for this entity: <code>{recommendedFormCode(profile.data)}</code>
+                </Caption1>
+              )}
+            </div>
+
+            {(profile.isLoading ||
+              periods.isLoading ||
+              forms.isLoading ||
+              mappings.isLoading ||
+              worksheets.isLoading ||
+              accounts.isLoading ||
+              documents.isLoading) && <LoadingState />}
+            {(profile.error ||
+              periods.error ||
+              forms.error ||
+              mappings.error ||
+              worksheets.error ||
+              accounts.error ||
+              documents.error) && (
+              <ErrorState
+                error={
+                  profile.error ??
+                  periods.error ??
+                  forms.error ??
+                  mappings.error ??
+                  worksheets.error ??
+                  accounts.error ??
+                  documents.error
+                }
+              />
+            )}
+
+            {readinessQueriesSucceeded && (
+              <div className={styles.readinessGrid}>
+                <DashboardCard
+                  overline="Return readiness"
+                  subtitle={`${readiness.completeCount} of 5 gates complete`}
+                >
+                  <div className={styles.score}>{readiness.score}%</div>
+                  <ProgressBar
+                    value={readiness.score / 100}
+                    color={readiness.score === 100 ? "success" : "brand"}
+                    thickness="large"
+                  />
+                </DashboardCard>
+                <DashboardCard overline="Account coverage" subtitle={`${formCode || "Select a form"}`}>
+                  <Text size={600} weight="semibold" block>
+                    {readiness.approvedMappingCount} / {readiness.eligibleAccountCount}
+                  </Text>
+                  <Caption1>
+                    approved mappings · {readiness.pendingMappingCount} awaiting review ·{" "}
+                    {readiness.unmappedAccounts.length} unmapped
+                  </Caption1>
+                </DashboardCard>
+                <DashboardCard overline="Source documents" subtitle="Extraction status">
+                  <Text size={600} weight="semibold" block>
+                    {readiness.documentCounts.complete} complete
+                  </Text>
+                  <Caption1>
+                    {readiness.documentCounts.processing} processing ·{" "}
+                    {readiness.documentCounts.failed} failed
+                  </Caption1>
+                </DashboardCard>
+                <DashboardCard overline="Worksheet" subtitle={formCode || "No form selected"}>
+                  <Text size={600} weight="semibold" block>
+                    {readiness.worksheetStatus ?? "Not generated"}
+                  </Text>
+                  <Caption1>
+                    {readiness.worksheetStatus === "approved"
+                      ? "Ready to render and deliver"
+                      : "Generate, review, and approve"}
+                  </Caption1>
+                </DashboardCard>
+              </div>
+            )}
+
+            {readinessQueriesSucceeded && (readiness.score === 100 ? (
+              <MessageBar intent="success" style={{ marginBottom: 16 }}>
+                <MessageBarBody>
+                  <MessageBarTitle>This return is ready for delivery.</MessageBarTitle>
+                  Profile, documents, mappings, and worksheet approval checks are complete.
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+                <MessageBarBody>
+                  <MessageBarTitle>{readiness.blockers.length} readiness blockers remain</MessageBarTitle>
+                  Resolve the items below before treating this return as complete.
+                </MessageBarBody>
+              </MessageBar>
+            ))}
+
+            {readinessQueriesSucceeded && (
+              <Section
+                title="Readiness checklist"
+                subtitle="Each gate is derived from current client data; there are no manually checked boxes."
+              >
+                {readiness.checks.map((check) => (
+                  <div className={styles.checkRow} key={check.id}>
+                    <Badge
+                      appearance="tint"
+                      color={
+                        check.status === "complete"
+                          ? "success"
+                          : check.status === "attention"
+                            ? "warning"
+                            : "informative"
+                      }
+                    >
+                      {check.status === "complete"
+                        ? "Complete"
+                        : check.status === "attention"
+                          ? "Needs attention"
+                          : "Not started"}
+                    </Badge>
+                    <div className={styles.checkCopy}>
+                      <Text weight="semibold" block>{check.label}</Text>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        {check.detail}
+                      </Caption1>
+                    </div>
+                    <Button
+                      appearance={check.status === "complete" ? "subtle" : "secondary"}
+                      onClick={() => openReadinessTarget(check.target)}
+                    >
+                      {check.status === "complete" ? "Review" : "Resolve"}
+                    </Button>
+                  </div>
+                ))}
+              </Section>
+            )}
+
+            {readinessQueriesSucceeded && readiness.unmappedAccounts.length > 0 && (
+              <Section
+                title="Unmapped posting accounts"
+                subtitle={`These active revenue and expense accounts are not covered by an approved ${formCode} mapping.`}
+                toolbar={
+                  <Button appearance="primary" onClick={() => setView("mappings")}>
+                    Review mappings
+                  </Button>
+                }
+              >
+                <Table size="small">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Code</TableHeaderCell>
+                      <TableHeaderCell>Account</TableHeaderCell>
+                      <TableHeaderCell>Type</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {readiness.unmappedAccounts.slice(0, 8).map((account) => (
+                      <TableRow key={account.id}>
+                        <TableCell><code>{account.code}</code></TableCell>
+                        <TableCell>{account.name}</TableCell>
+                        <TableCell>{account.account_type}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Section>
+            )}
+          </div>
+        )}
+
         {view === "forms" && (
           <Section
             title="Available tax forms"

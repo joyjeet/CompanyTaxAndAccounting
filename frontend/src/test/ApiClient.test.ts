@@ -66,6 +66,21 @@ describe("ApiClient", () => {
     await expect(api.listDocuments()).rejects.toBeInstanceOf(ApiError);
   });
 
+  it("scopes tax mappings to the selected client and form", async () => {
+    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const api = new ApiClient(fakeAuth("tok-123"), "/api");
+
+    await api.listMappings("F1120S", "client-123");
+
+    const [url] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe("/api/tax/mappings?form_code=F1120S&client_id=client-123");
+  });
+
   it("posts create team invite payload to /team/invites", async () => {
     (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
       new Response(

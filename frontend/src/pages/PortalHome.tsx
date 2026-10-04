@@ -65,7 +65,6 @@ function pickPeriod(periods: PeriodOut[] | undefined): PeriodOut | null {
   const sorted = [...periods].sort((a, b) => b.end_date.localeCompare(a.end_date));
   return sorted.find((p) => p.is_locked) ?? sorted[0];
 }
-
 function greetingFor(d: Date): string {
   const h = d.getHours();
   if (h < 12) return "Good morning";
@@ -358,7 +357,6 @@ export default function PortalHome() {
     </div>
   );
 }
-
 // =========================================================================== //
 // Action rail                                                                 //
 // =========================================================================== //
@@ -1119,4 +1117,3 @@ function EmptyHint({ message }: { message: string }) {
     </div>
   );
 }
-

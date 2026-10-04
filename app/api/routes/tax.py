@@ -312,6 +312,7 @@ def _require_firm_with_client(identity: AuthIdentity) -> None:
 @router.get("/mappings", response_model=list[MappingOut])
 def list_mappings(
     form_code: TaxFormCode | None = None,
+    client_id: UUID | None = None,
     status_filter: TaxMappingStatus | None = None,
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
@@ -324,6 +325,8 @@ def list_mappings(
         if form is None:
             return []
         q = q.where(TaxAccountMapping.form_id == form.id)
+    if client_id is not None:
+        q = q.where(TaxAccountMapping.client_id == client_id)
     if status_filter is not None:
         q = q.where(TaxAccountMapping.status == status_filter)
     # Portal users see only APPROVED rows for their own client (RLS already

@@ -386,7 +386,7 @@ export default function DocumentsTab({ clientId }: { clientId: string }) {
         >
           Upload file
         </Button>
-        <Button appearance="secondary" onClick={() => navigate("/review")}> 
+        <Button appearance="secondary" onClick={() => navigate("/review")}>
           Review queue <Badge appearance="filled" color={pendingDraftCount > 0 ? "danger" : "informative"}>{pendingDraftCount}</Badge>
         </Button>
         {lastUpload && (

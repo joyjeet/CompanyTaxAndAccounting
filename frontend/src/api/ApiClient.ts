@@ -624,9 +624,12 @@ export class ApiClient {
     return this.request<TaxFormDetailOut>(`/tax/forms/${code}`);
   }
 
-  listMappings(formCode?: string): Promise<MappingOut[]> {
-    const q = formCode ? `?form_code=${formCode}` : "";
-    return this.request<MappingOut[]>(`/tax/mappings${q}`);
+  listMappings(formCode?: string, clientId?: string): Promise<MappingOut[]> {
+    const q = new URLSearchParams();
+    if (formCode) q.set("form_code", formCode);
+    if (clientId) q.set("client_id", clientId);
+    const tail = q.toString() ? `?${q}` : "";
+    return this.request<MappingOut[]>(`/tax/mappings${tail}`);
   }
 
   proposeMapping(body: {
