@@ -104,7 +104,12 @@ export default function ClientDetail() {
       {tab === "journal" && <JournalEntriesTab clientId={id} />}
       {tab === "statements" && <StatementsTab clientId={id} />}
       {tab === "reports" && <ReportsTab clientId={id} />}
-      {tab === "tax" && <TaxTab clientId={id} />}
+      {tab === "tax" && (
+        <TaxTab
+          clientId={id}
+          onNavigate={(target) => setTab(target)}
+        />
+      )}
       {tab === "artifacts" && <ArtifactsTab clientId={id} />}
     </div>
   );

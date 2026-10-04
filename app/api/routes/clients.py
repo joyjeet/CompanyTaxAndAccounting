@@ -74,6 +74,7 @@ class CoaOut(BaseModel):
     account_type: str
     normal_balance: str
     is_active: bool
+    is_leaf: bool
     parent_account_id: UUID | None = None
 
 
@@ -400,6 +401,7 @@ def list_chart_of_accounts(
             account_type=a.account_type.value,
             normal_balance=a.normal_balance.value,
             is_active=a.is_active,
+            is_leaf=a.is_leaf,
             parent_account_id=a.parent_account_id,
         )
         for a in rows
@@ -439,6 +441,7 @@ def create_account(
         account_type=a.account_type.value,
         normal_balance=a.normal_balance.value,
         is_active=a.is_active,
+        is_leaf=a.is_leaf,
         parent_account_id=a.parent_account_id,
     )
 

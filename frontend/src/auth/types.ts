@@ -146,6 +146,7 @@ export interface CoaOut {
   account_type: AccountType;
   normal_balance: NormalBalance;
   is_active: boolean;
+  is_leaf: boolean;
   parent_account_id: string | null;
 }
 

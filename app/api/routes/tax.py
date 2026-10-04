@@ -30,6 +30,11 @@ from sqlalchemy.orm import Session
 from app.api.auth import AuthIdentity, get_identity
 from app.api.deps import db_session
 from app.db.tenant import AccessScope
+from app.domain.entity_form_ruleset import (
+    EntityFormRulesetForbiddenError,
+    NeedsRulesetError,
+    ensure_active_ruleset_for_client,
+)
 from app.domain.tax_service import (
     AutoFillResult,
     AutoProposeSummary,
@@ -46,11 +51,6 @@ from app.domain.tax_service import (
     generate_worksheet,
     propose_mapping,
     reject_mapping,
-)
-from app.domain.entity_form_ruleset import (
-    EntityFormRulesetForbiddenError,
-    NeedsRulesetError,
-    ensure_active_ruleset_for_client,
 )
 from app.models.accounting import (
     TaxAccountMapping,
@@ -312,6 +312,7 @@ def _require_firm_with_client(identity: AuthIdentity) -> None:
 @router.get("/mappings", response_model=list[MappingOut])
 def list_mappings(
     form_code: TaxFormCode | None = None,
+    client_id: UUID | None = None,
     status_filter: TaxMappingStatus | None = None,
     identity: AuthIdentity = Depends(get_identity),
     sess: Session = Depends(db_session),
@@ -324,6 +325,8 @@ def list_mappings(
         if form is None:
             return []
         q = q.where(TaxAccountMapping.form_id == form.id)
+    if client_id is not None:
+        q = q.where(TaxAccountMapping.client_id == client_id)
     if status_filter is not None:
         q = q.where(TaxAccountMapping.status == status_filter)
     # Portal users see only APPROVED rows for their own client (RLS already
