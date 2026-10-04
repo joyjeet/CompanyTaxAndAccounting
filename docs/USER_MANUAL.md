@@ -189,7 +189,7 @@ Table of every client in your firm. Click **+ New client** to create one
 (only firm-scope users can; portal users get 403). Click any client name to
 open its detail page.
 
-### 8.3 Client Detail (`/clients/{id}`) — eight tabs
+### 8.3 Client Detail (`/clients/{id}`) — ten tabs
 
 | Tab | What to test |
 |---|---|
@@ -199,7 +199,7 @@ open its detail page.
 | **Documents** | Drag/drop or pick a source document. Backend currently uses a mock OCR/classifier, so uploads complete instantly. Document kind badges show classifier output. |
 | **Journal entries** | Filter by period. **+ Post entry** opens a line editor that totals debits/credits live. **The Post button stays disabled until books balance.** Try an unbalanced entry → button disabled; force one in Swagger → 400. Posting to a locked period → 409. |
 | **Statements** | Pick a period, then tab between **Profit & loss**, **Balance sheet**, and **Cash flow**. Numbers are computed live by `StatementsService`. **Generate PDF artifact** creates a finalizable encrypted artifact in the Artifacts tab. |
-| **Tax** | Sub-tabs: **Forms** (read-only catalog), **Mappings** (account → tax line proposals; approve/reject), **Worksheets** (generate from approved mappings, then approve). |
+| **Tax** | Opens on **Readiness**, an evidence-based five-gate status for profile, period, documents, mappings, and worksheet approval. **Resolve** links open the relevant workflow. Other sub-tabs are **Forms**, **Mappings**, and **Worksheets**. See [Tax Readiness Workspace](TAX_READINESS_WORKSPACE.md). |
 | **Artifacts** | Per-client list of generated artifacts (statements, worksheets, audit packages). **Finalize** locks the artifact; **Download** streams the encrypted bytes. |
 
 ### 8.4 Review queue (`/review`)
