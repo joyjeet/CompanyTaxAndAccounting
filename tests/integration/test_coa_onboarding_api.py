@@ -18,7 +18,7 @@ from app.db.tenant import AccessScope
 from app.domain.coa_templates import activate_template
 from app.main import create_app
 from app.models.coa_template import CoaTemplate
-from app.models.enums import CoaTemplateStatus, Industry
+from app.models.enums import Industry
 from app.security.auth import reset_identity_provider
 from tests.conftest import ctx_firm
 

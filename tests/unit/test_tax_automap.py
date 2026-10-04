@@ -84,11 +84,6 @@ def test_revenue_falls_back_to_line_1a_on_f1120() -> None:
     assert len(r.proposals) == 1
     p = r.proposals[0]
     assert p.sign is TaxLineSign.POSITIVE
-    # Resolve line code by id back through the lines list.
-    line_map = {ln.id: ln.code for ln in _lines_for_f1120()}
-    # The line in the proposal came from a DIFFERENT _line() instance than
-    # the lookup map above, so resolve via the actual line list we passed in.
-    # Easier: re-run with a single explicit line.
 
 
 def test_revenue_falls_back_to_1a() -> None:

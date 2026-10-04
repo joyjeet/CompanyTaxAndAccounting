@@ -1,8 +1,9 @@
 """Unit tests for the FormTemplate registry service (Phase 8b)."""
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
-from sqlalchemy import select
 
 from app.db.session import tenant_session, unscoped_session
 from app.db.tenant import AccessScope, TenantContext
@@ -16,7 +17,6 @@ from app.domain.form_template import (
     verify_template,
 )
 from app.models.enums import FormTemplateStatus, TaxFormCode
-from app.models.form_template import FormTemplate
 
 
 def _scoped_firm() -> TenantContext:
@@ -27,7 +27,7 @@ def _scoped_firm() -> TenantContext:
     return TenantContext(firm_id=uuid4(), scope=AccessScope.FIRM)
 
 
-def _make_firm() -> "UUID":  # type: ignore[name-defined]
+def _make_firm() -> UUID:
     """Create a Firm row + return its id so audit FK is satisfied."""
     from uuid import uuid4
 

@@ -28,7 +28,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import EntityType, Industry
+from app.models.enums import Industry
 
 
 class ClientProfile(Base):

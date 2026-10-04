@@ -3,9 +3,6 @@ GET/POST /clients, /clients/{id}/periods, /clients/{id}/chart-of-accounts.
 """
 from __future__ import annotations
 
-from datetime import date
-from uuid import uuid4
-
 import pytest
 from fastapi.testclient import TestClient
 

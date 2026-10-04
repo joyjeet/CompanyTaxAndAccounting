@@ -26,7 +26,7 @@ from app.domain.exceptions import (
     UnbalancedJournalEntryError,
 )
 from app.domain.ledger import LedgerService, LineInput
-from app.models.accounting import Client, JournalEntry, JournalLine
+from app.models.accounting import Client, JournalEntry
 
 router = APIRouter(prefix="/journal-entries", tags=["journal-entries"])
 

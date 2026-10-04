@@ -15,9 +15,7 @@ from sqlalchemy import select
 from app.db.session import tenant_session
 from app.db.tenant import AccessScope
 from app.domain.client_profile import (
-    ClientProfileForbiddenError,
     ClientProfileValidationError,
-    get_profile_for_client,
     upsert_profile,
 )
 from app.domain.entity_form_ruleset import (

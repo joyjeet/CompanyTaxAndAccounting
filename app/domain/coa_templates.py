@@ -40,7 +40,6 @@ from app.models.enums import (
     NORMAL_BALANCE_FOR,
     AuditAction,
     CoaNodeOrigin,
-    CoaTemplateKind,
     CoaTemplateStatus,
     Industry,
 )

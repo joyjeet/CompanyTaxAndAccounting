@@ -23,14 +23,14 @@ from app.domain.coa_templates import (
     instantiate_for_client,
 )
 from app.models.accounting import ChartOfAccounts
-from app.models.coa_template import CoaTemplate, CoaTemplateNode
+from app.models.coa_template import CoaTemplate
 from app.models.enums import (
     CoaNodeOrigin,
     CoaTemplateKind,
     CoaTemplateStatus,
     Industry,
 )
-from tests.conftest import ctx_firm, SeededWorld
+from tests.conftest import SeededWorld, ctx_firm
 
 
 # --------------------------------------------------------------------------- #
